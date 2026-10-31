@@ -39,9 +39,10 @@ import type {
   SessionBlockProps,
 } from "@/components/run/run-turns-display";
 
-// Re-export：RunTurnsTab 直接从 RunTurnsNodes 取显示层符号（与纯函数层 run-turns-display 同源）
-export { STATUS_DOT };
-export type { TurnsNode, TurnsNodeSession, MemberTurnsState };
+// Re-export：下游（RunTurnsTab 及 run-turns-* 测试）直接从 RunTurnsNodes 取显示层符号，
+// 与纯函数层 run-turns-display 同源（gitcode 终态已将 run-turns-display 合并进本文件并直接导出）
+export { STATUS_DOT, toLaneDisplayTurn, sessionBlockPropsEqual };
+export type { TurnsNode, TurnsNodeSession, MemberTurnsState, TurnsBridge, TurnsBlockTurn };
 
 function fmtTokens(n: number): string {
   if (n === 0) return "";
