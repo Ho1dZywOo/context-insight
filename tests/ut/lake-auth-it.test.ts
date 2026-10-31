@@ -49,7 +49,7 @@ afterAll(() => {
 
 const authRoute = await import('../../src/app/api/settings/lake-auth/route');
 const lakeRoute = await import('../../src/app/api/ingest/lake/route');
-const { classifyLakeError, MissingPushCredentialsError, authFilePath, getStoredCredentials, listStoredRemotes } = await import('../../src/lib/lake/auth');
+const { classifyLakeError, MissingPushCredentialsError, authFilePath, getStoredCredentials } = await import('../../src/lib/lake/auth');
 
 function putRequest(body: unknown): NextRequest {
   return new NextRequest('http://localhost/api/settings/lake-auth', {
@@ -134,17 +134,13 @@ describe('③ classifyLakeError 六分类（与 cpx 同链）', () => {
     expect(classifyLakeError(new Error("fatal: Authentication failed for 'https://example.com/x'"))).toBe('auth-failed');
     expect(classifyLakeError(new Error('unrelated'))).toBe('unknown');
   });
-  it('平台码分诊（真机实测文本）：00905401=凭据无效→auth-failed；00905403=无写权限→forbidden', () => {
-    expect(classifyLakeError(Object.assign(new Error('git push'), { stderr: Buffer.from('remote: <CH.00905401> HTTP Basic: Access denied.\nfatal: Authentication failed for \'https://example.com/lake.git/\'') }))).toBe('auth-failed');
-    expect(classifyLakeError(Object.assign(new Error('git push'), { stderr: Buffer.from('remote: <CH.00905403> not allowed to push code to this project') }))).toBe('forbidden');
-  });
   it('LFS 未启用分诊在 forbidden 之前（真机事故回归锁：GitCode batch 拒绝文本含 "forbidden" 字样，令牌确有权限却被误报「令牌无推送权限」）', () => {
     // 用户真机报错原文（gitcode.com TTELab/Bundle-lake）：git-lfs batch API 的
     // 项目级 LFS 未启用拒绝——与令牌无关，换凭据解决不了
     const stderr = Buffer.from(
       'Locking support detected on remote "origin". Consider enabling it with: $ git config lfs.https://gitcode.com/TTELab/Bundle-lake.git/info/lfs.locksverify true\n' +
       'batch response: {"message": "Access forbidden. project lfs not enabled.", "documentation_url": ""}\n' +
-      'error: failed to push some refs to \'https://gitcode.com/TTELab/Bundle-lake.git\'',
+      "error: failed to push some refs to 'https://gitcode.com/TTELab/Bundle-lake.git'",
     );
     expect(classifyLakeError(Object.assign(new Error('Command failed: git push'), { stderr }))).toBe('lfs-not-enabled');
     // 平台变体与白话文案锚点
@@ -152,6 +148,10 @@ describe('③ classifyLakeError 六分类（与 cpx 同链）', () => {
     expect(classifyLakeError(new Error('batch response: LFS is disabled'))).toBe('lfs-not-enabled');
     // 反例：自举钩子的本机安装提示不是平台设置问题（不落 lfs-not-enabled）
     expect(classifyLakeError(new Error('git-lfs not installed'))).toBe('unknown');
+  });
+  it('平台码分诊（真机实测文本）：00905401=凭据无效→auth-failed；00905403=无写权限→forbidden', () => {
+    expect(classifyLakeError(Object.assign(new Error('git push'), { stderr: Buffer.from('remote: <CH.00905401> HTTP Basic: Access denied.\nfatal: Authentication failed for \'https://example.com/lake.git/\'') }))).toBe('auth-failed');
+    expect(classifyLakeError(Object.assign(new Error('git push'), { stderr: Buffer.from('remote: <CH.00905403> not allowed to push code to this project') }))).toBe('forbidden');
   });
 });
 
@@ -189,30 +189,5 @@ describe('④ PUT 探测零 shell + 元字符前置校验（CWE-78：请求体 U
     expect(body.reachable).toBe(true);
     expect(typeof body.verifiedAt).toBe('string');
     expect(getStoredCredentials(parenBare)).toEqual({ username: 'u4', password: 't4-444555666777' });
-  });
-});
-
-describe('⑤ 旧名凭据文件读兜底（cannbay-auth.json → lake-auth.json 存量无感迁移）', () => {
-  it('新名缺失读旧名兜底；新名存在即权威（清空不复活旧凭据）', () => {
-    const dir = path.dirname(authFilePath());
-    const legacy = path.join(dir, 'cannbay-auth.json');
-    const current = authFilePath();
-    // 清场：从「两文件均无」起步，避免前序用例残留
-    fs.rmSync(current, { force: true });
-    fs.rmSync(legacy, { force: true });
-
-    // 旧名文件存在、新名缺失 → 读旧名兜底（存量凭据不丢）
-    fs.writeFileSync(legacy, JSON.stringify({
-      remotes: { 'https://legacy.example.com/repo.git': { username: 'old-user', token: 'old-token-112233' } },
-    }, null, 2));
-    expect(getStoredCredentials('https://legacy.example.com/repo.git')).toEqual({ username: 'old-user', password: 'old-token-112233' });
-    expect(listStoredRemotes().some((r) => r.url === 'https://legacy.example.com/repo.git')).toBe(true);
-
-    // 新名文件存在（即使空 remotes）即权威 → 不再读旧名（用户清空不复活旧凭据）
-    fs.writeFileSync(current, JSON.stringify({ remotes: {} }, null, 2));
-    expect(getStoredCredentials('https://legacy.example.com/repo.git')).toBeNull();
-
-    fs.rmSync(current, { force: true });
-    fs.rmSync(legacy, { force: true });
   });
 });

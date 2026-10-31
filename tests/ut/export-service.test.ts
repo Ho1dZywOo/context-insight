@@ -78,11 +78,11 @@ describe('export-service INSERT column/placeholder parity', () => {
     const db = new Database(':memory:');
     db.exec(ddl);
 
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(r => (r as any).name);
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(r => (r as { name: string }).name);
     const expectedTables = ['Execution', 'ExecutionSkill', 'ExportMeta', 'InteractionBridge', 'Session', 'SessionSkill', 'SkillEvent', 'ToolCall', 'Turn'];
     expect(tables).toEqual(expectedTables);
 
-    const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r => (r as any).name);
+    const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r => (r as { name: string }).name);
     expect(indexes.length).toBeGreaterThan(0);
 
     db.close();

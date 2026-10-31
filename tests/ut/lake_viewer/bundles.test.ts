@@ -7,9 +7,10 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // lake_viewer bundle 视图 IT（路由级，真 bare 数据湖 + 真测试库）：
-// 上传 bundle → bundles 列表路由（含 imported 标记）→ 范式侧栏可见专区 →
-// 导入路由发起 job → 轮询完成 → 会话入库 → imported 翻转。env 必须在
-// lake 模块加载前设置（mirror.ts 模块顶层读取 env）。
+// 上传 bundle（统一布局：落 <范式>/<runId>/）→ bundles 列表路由（含
+// imported 标记 + 范式=所在目录）→ 目录即注册表侧栏 → 导入路由发起 job →
+// 轮询完成 → 会话入库 → imported 翻转。env 必须在 lake 模块加载前设置
+// （mirror.ts 模块顶层读取 env）。
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -60,13 +61,19 @@ fs.writeFileSync(path.join(FIXTURE, 'workflow.json'), JSON.stringify({
       { id: SID, kind: 'session', name: `${SID} 执行`, startedAt: null, finishedAt: null, sessionId: SID, location: `sessions/${SID}` },
       { id: 'M1', kind: 'process', name: '打包', startedAt: null, finishedAt: null, output: { text: 'done' } },
     ],
-    relations: [{ from: SID, to: 'M1', annotation: { type: 'depends_on' } }],
+    relations: [{ from: SID, to: 'M1', type: 'depends_on' }],
   },
 }));
+// 随包 schema（结构权威，哈希信任源 = data/run/workflow-bundle.v1.schema.json）
 fs.writeFileSync(
   path.join(FIXTURE, 'workflow.schema.json'),
   fs.readFileSync(path.resolve(__dirname, '../data/run/workflow-bundle.v1.schema.json'), 'utf-8'),
 );
+fs.writeFileSync(path.join(FIXTURE, 'report.json'), JSON.stringify({
+  graph_id: RUN_ID, status: 'passed', exportDataComplete: true,
+  totals: { members: 2, relations: 1, session_files: 1 },
+  missing_source_sessions: [], orphan_sessions: [], undetermined_relations: [], problems: [],
+}));
 fs.writeFileSync(path.join(FIXTURE, 'sessions', SID, `${SID}.jsonl`), [
   JSON.stringify({ type: 'user', message: { role: 'user', content: 'viewer bundle 导入' }, timestamp: '2026-10-10T03:00:00.000Z' }),
   JSON.stringify({ type: 'assistant', message: { id: `msg_${SID}`, role: 'assistant', content: [{ type: 'text', text: '完成' }], model: 'test-model', usage: { input_tokens: 10, output_tokens: 2 } }, timestamp: '2026-10-10T03:00:05.000Z' }),
@@ -77,16 +84,12 @@ fs.writeFileSync(path.join(FIXTURE, 'sessions', SID, `${SID}.meta.json`), JSON.s
 
 const prisma = new PrismaClient();
 
-// env 已设，动态加载模块与路由
+// env 已设，动态加载模块与路由（lake action 集单点：旧 viewer bundles/
+// paradigms 路由已收敛到 /api/ingest/lake）
 const bundle = await import('../../../src/lib/lake/bundle');
-const bundlesRoute = await import('../../../src/app/lake_viewer/api/bundles/route');
-const bundlesImportRoute = await import('../../../src/app/lake_viewer/api/bundles/import/route');
-const paradigmsRoute = await import('../../../src/app/lake_viewer/api/paradigms/route');
+const lakeRoute = await import('../../../src/app/api/ingest/lake/route');
 const importService = await import('../../../src/lib/run/import-service');
 
-function makeGet(url: string): NextRequest {
-  return new NextRequest(url);
-}
 function makePost(url: string, body: unknown): NextRequest {
   return new NextRequest(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }
@@ -104,13 +107,14 @@ async function waitForJob(jobId: string, timeoutMs = 30_000) {
 beforeAll(async () => {
   // 直接 vitest（绕过 pretest 重建库）重跑时清掉上次导入的夹具行
   await prisma.session.deleteMany({ where: { taskId: SID } });
-  // run 级上传链路：先本地导入（数据源 = insight）再上传
+  // run 级上传链路：先本地导入（数据源 = insight）再上传——统一布局落
+  // <范式>/<runId>/（位置即身份）
   const validation = importService.validateBundleDir(FIXTURE);
   expect(validation.ok).toBe(true);
   const jobId = importService.createImportJob(FIXTURE, validation.manifest!, { prisma, root: path.join(HOME, 'runs') });
   const state = await waitForJob(jobId);
   expect(state.step).toBe('done');
-  await bundle.uploadLakeBundle(prisma, RUN_ID, '提交人: 张三\n内容描述: viewer bundle IT');
+  await bundle.uploadLakeBundle(prisma, RUN_ID, '提交人: 张三\n内容描述: viewer bundle IT', undefined, 'elementwise');
 });
 
 afterAll(async () => {
@@ -120,39 +124,41 @@ afterAll(async () => {
 });
 
 describe('lake_viewer bundle 视图：列表路由 + 侧栏可见性', () => {
-  it('GET /api/bundles：条目字段齐全（meta/manifest 汇总）+ imported=true（本地导入后）', async () => {
-    const res = await bundlesRoute.GET(makeGet('http://localhost/lake_viewer/api/bundles'));
+  it('action bundle-list：条目字段齐全（meta/report/manifest 汇总 + 范式=所在目录）+ imported=true（本地导入后）', async () => {
+    const res = await lakeRoute.POST(makePost('http://localhost/api/ingest/lake', { action: 'bundle-list' }));
     expect(res.status).toBe(200);
     const body = await res.json() as { items: Array<Record<string, unknown>> };
     const entry = body.items.find(e => e.runId === RUN_ID);
     expect(entry).toBeTruthy();
     expect(entry!.name).toBe('viewer bundle IT');
+    expect(entry!.status).toBe('passed');
     expect(entry!.memberCount).toBe(2);
     expect(entry!.sessionCount).toBe(1);
     expect(entry!.submitter).toBe('张三');
+    // 统一布局：范式 = 所在顶层目录（位置即身份，非 meta 归属标注）
+    expect(entry!.paradigm).toBe('elementwise');
     expect(entry!.imported).toBe(true);
   });
 
-  it('GET /api/paradigms：opsbot-bundle 出现在侧栏目录清单（普通范式并存）', async () => {
-    const res = await paradigmsRoute.GET(makeGet('http://localhost/lake_viewer/api/paradigms'));
+  it('action paradigm-summary：目录即注册表（bundle 所在目录与普通范式并存于侧栏清单）', async () => {
+    const res = await lakeRoute.POST(makePost('http://localhost/api/ingest/lake', { action: 'paradigm-summary' }));
     expect(res.status).toBe(200);
     const body = await res.json() as { items: Array<{ name: string }> };
     const names = body.items.map(p => p.name);
-    expect(names).toContain('opsbot-bundle');
     expect(names).toContain('elementwise');
   });
 });
 
 describe('lake_viewer bundle 导入路由', () => {
-  it('缺 runId → 400；不存在的 bundle → 502', async () => {
-    const bad = await bundlesImportRoute.POST(makePost('http://localhost/lake_viewer/api/bundles/import', {}));
+  it('缺 runId → 400；不存在的 bundle → 500（lake action 统一错误出界）', async () => {
+    const bad = await lakeRoute.POST(makePost('http://localhost/api/ingest/lake', { action: 'bundle-import' }));
     expect(bad.status).toBe(400);
-    const missing = await bundlesImportRoute.POST(makePost('http://localhost/lake_viewer/api/bundles/import', { runId: 'nosuchbundle' }));
-    expect(missing.status).toBe(502);
+    const missing = await lakeRoute.POST(makePost('http://localhost/api/ingest/lake', { action: 'bundle-import', runId: 'nosuchbundle' }));
+    expect(missing.status).toBe(500);
   });
 
-  it('POST 导入：job 完成、会话入库、列表 imported 翻转', async () => {
-    const res = await bundlesImportRoute.POST(makePost('http://localhost/lake_viewer/api/bundles/import', { runId: RUN_ID }));
+  it('action bundle-import：paradigm 透传精确物化，job 完成、会话入库、列表 imported 翻转', async () => {
+    const res = await lakeRoute.POST(makePost('http://localhost/api/ingest/lake', { action: 'bundle-import', runId: RUN_ID, paradigm: 'elementwise' }));
     expect(res.status).toBe(200);
     const handle = await res.json() as { jobId: string; state: { runId: string } };
     expect(handle.state.runId).toBe(RUN_ID);
@@ -167,7 +173,7 @@ describe('lake_viewer bundle 导入路由', () => {
     expect(row).toBeTruthy();
     expect(row!.framework).toBe('opencode');
 
-    const listRes = await bundlesRoute.GET(makeGet('http://localhost/lake_viewer/api/bundles'));
+    const listRes = await lakeRoute.POST(makePost('http://localhost/api/ingest/lake', { action: 'bundle-list' }));
     const body = await listRes.json() as { items: Array<{ runId: string; imported: boolean }> };
     expect(body.items.find(e => e.runId === RUN_ID)!.imported).toBe(true);
   });

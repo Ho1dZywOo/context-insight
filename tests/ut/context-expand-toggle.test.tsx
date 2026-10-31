@@ -162,6 +162,8 @@ describe('LlmContextView 展开收起交互', () => {
       systemOverheadTokens: 0,
       systemPrompt: null,
       fullContext: { tools: [], memoryFiles: '', skills: '' },
+      // 阅读优先默认折叠（正文/工具调用是阅读主体）——交互契约测试显式展开
+      defaultExpanded: true,
     } as never));
   }
 

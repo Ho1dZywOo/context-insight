@@ -119,4 +119,89 @@ describe('recoverAgentMdFromSystem（system 注入恢复——正常会话主路
   it('无子代理目录 / 文件缺失 → null 不抛错', () => {
     expect(recoverAgentMdFromSystem('/tmp/definitely-missing.jsonl', 'whatever', 'x')).toBeNull();
   });
+
+  // ===== opencode 派发形态（ses_f391f2af 实测回归锁：94 子代理 0 精确标题）=====
+  // 事故：旧守卫要求正文首行标题 === agentName，对带饰标题/自然语言标题/无标题
+  // 三形态全军覆没 → 恢复 0/15。身份模型改为 meta 权威 + H1 小写 id 词元强证据。
+
+  /** 搭一个子代理捕获 fixture，返回 (sourcePath, sessionId)。 */
+  const buildOpencodeFixture = (
+    subs: Array<{ meta: string | null; system: string }>
+  ): { src: string; sid: string } => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sys-recover-oc-'));
+    const sid = 'ses_oc_form';
+    const subDir = path.join(tmp, sid, 'subagents');
+    fs.mkdirSync(subDir, { recursive: true });
+    subs.forEach((s, i) => {
+      fs.writeFileSync(
+        path.join(subDir, `sub-${i}.jsonl`),
+        JSON.stringify({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+          x_lake: { schema: 'cc-wire-round', version: 1, data: { system: s.system } },
+        }) + '\n'
+      );
+      if (s.meta != null) {
+        fs.writeFileSync(path.join(subDir, `sub-${i}.meta.json`), JSON.stringify({ agentType: s.meta }));
+      }
+    });
+    fs.writeFileSync(path.join(tmp, `${sid}.jsonl`), '');
+    return { src: path.join(tmp, `${sid}.jsonl`), sid };
+  };
+
+  it('带饰标题 `# slug（角色）`（design-step-reviewer 实测形态）→ meta 命中即恢复', () => {
+    const { src, sid } = buildOpencodeFixture([
+      { meta: 'design-step-reviewer', system: '# design-step-reviewer（R 对抗审核 / 门控）\n\n## 职责\n\n正文。' },
+    ]);
+    const r = recoverAgentMdFromSystem(src, sid, 'design-step-reviewer');
+    expect(r?.content.startsWith('# design-step-reviewer（R 对抗审核 / 门控）')).toBe(true);
+    fs.rmSync(path.dirname(src), { recursive: true, force: true });
+  });
+
+  it('自然语言 H1 标题 `# Operator Architect Agent`（acme-ops-architect 实测形态）→ 恢复', () => {
+    const { src, sid } = buildOpencodeFixture([
+      { meta: 'acme-ops-architect', system: '# Operator Architect Agent\n\n大写开头的自然语言标题不构成 id 证据。' },
+    ]);
+    const r = recoverAgentMdFromSystem(src, sid, 'acme-ops-architect');
+    expect(r?.content).toContain('# Operator Architect Agent');
+    fs.rmSync(path.dirname(src), { recursive: true, force: true });
+  });
+
+  it('正文无 H1（首行 `## 约束`，design-scheduler 实测形态）→ meta 命中即恢复', () => {
+    const { src, sid } = buildOpencodeFixture([
+      { meta: 'design-scheduler', system: '## 约束\n\n章节标题不是文档标题。' },
+    ]);
+    const r = recoverAgentMdFromSystem(src, sid, 'design-scheduler');
+    expect(r?.content).toContain('## 约束');
+    fs.rmSync(path.dirname(src), { recursive: true, force: true });
+  });
+
+  it('正文直起无标题（64/94 实测形态）→ meta 命中即恢复', () => {
+    const { src, sid } = buildOpencodeFixture([
+      { meta: 'design-merger', system: '在所有 kernel 泳道完成后执行合并。' },
+    ]);
+    const r = recoverAgentMdFromSystem(src, sid, 'design-merger');
+    expect(r?.content).toContain('合并');
+    fs.rmSync(path.dirname(src), { recursive: true, force: true });
+  });
+
+  it('H1 小写 id 词元异名（meta 命中但标题是别的 agent）→ null（防捕获错位）', () => {
+    const { src, sid } = buildOpencodeFixture([
+      { meta: 'agent-a', system: '# agent-b\n\n标题 id 证据与 meta 冲突，视为错位。' },
+    ]);
+    expect(recoverAgentMdFromSystem(src, sid, 'agent-a')).toBeNull();
+    fs.rmSync(path.dirname(src), { recursive: true, force: true });
+  });
+
+  it('无 meta 兜底：H1 id 词元命中 → 恢复；无标题正文 → 不误收', () => {
+    const { src, sid } = buildOpencodeFixture([
+      { meta: null, system: '# orphan-agent\n\n无 meta，靠标题 id 证据兜底。' },
+      { meta: null, system: '无标题正文，不应被张冠李戴。' },
+    ]);
+    const hit = recoverAgentMdFromSystem(src, sid, 'orphan-agent');
+    expect(hit?.content).toContain('兜底');
+    // 请求一个不存在于任何标题/ meta 的名字：无 meta + 无标题正文不得被误收
+    expect(recoverAgentMdFromSystem(src, sid, 'whoever')).toBeNull();
+    fs.rmSync(path.dirname(src), { recursive: true, force: true });
+  });
 });

@@ -10,6 +10,7 @@
 // meta 消费（含 workflow 预留字段前向兼容）。env 在模块导入前设置
 //（remote.ts 的 env 常量在 import 时求值）。
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { NextRequest } from 'next/server';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,7 +41,6 @@ beforeAll(() => {
         { sid: 'con-bbbb2222', paradigm: 'contraction', framework: 'codex', ccVersion: '2.0.0', workflow: 'wf-v3', opGen: 'failure', startTime: '2026-09-01T14:00:00+08:00', endTime: '2026-09-01T14:10:00+08:00', totalTokens: 99_000 },
         // 原生会话双记录位（<sid>.native/ 目录，目录内文件用真实 sid 命名）
         { sid: 'nat-eeee4444', paradigm: 'contraction', recording: 'native', framework: 'opencode', ccVersion: '1.18.30', startTime: '2026-09-02T09:00:00+08:00', endTime: '2026-09-02T09:30:00+08:00', totalTokens: 5_000, model: 'glm-5.3-flash' },
-        { sid: 'old-aaaa3333', paradigm: 'elementwise', legacyEnvelope: true, framework: 'opencode', ccVersion: '1.1.2', producer: 'insight-export', opGen: 'success' },
       ],
     },
   ]);
@@ -106,18 +106,6 @@ describe('lake mirror（本地 bare 仓）', () => {
     expect(nat?.totalTokens).toBe(5_000);
   });
 
-  it('旧键 meta（x_cannbay，改名前上传的存量仓数据）：Type/opGen 等 meta 字段仍全量可读（cannbay 视图回归锁）', async () => {
-    const { listSessionsDetailed } = await import('../../../src/lib/lake/mirror');
-    const sessions = await listSessionsDetailed();
-    const old = sessions.find(s => s.sid === 'old-aaaa3333');
-    expect(old).toBeDefined();
-    expect(old?.framework).toBe('opencode');
-    expect(old?.ccVersion).toBe('1.1.2');
-    expect(old?.producer).toBe('insight-export');
-    expect(old?.opGen).toBe('success');
-    expect(old?.paradigm).toBe('elementwise');
-  });
-
   it('parseSessionFolder / sessionFolderOf：目录名 ↔ 记录类互推', async () => {
     const m = await import('../../../src/lib/lake/mirror');
     expect(m.parseSessionFolder('ses_abc123')).toEqual({ sid: 'ses_abc123', recording: 'capture' });
@@ -151,9 +139,14 @@ describe('lake mirror（本地 bare 仓）', () => {
     }
   });
 
-  it('GET lake-status：返回进度快照', async () => {
-    const { GET } = await import('../../../src/app/lake_viewer/api/lake-status/route');
-    const res = await GET();
+  it('action lake-status：返回进度快照', async () => {
+    const { POST } = await import('../../../src/app/api/ingest/lake/route');
+    const req = new NextRequest('http://localhost/api/ingest/lake', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'lake-status' }),
+    });
+    const res = await POST(req);
     expect(res.status).toBe(200);
     const j = await res.json() as Record<string, unknown>;
     expect(j).toHaveProperty('phase');

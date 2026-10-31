@@ -55,12 +55,12 @@ describe('exportMdCommand', () => {
       return Promise.resolve({ ok: true, text: () => Promise.resolve(MARKDOWN) });
     });
 
-    const tmp = path.join(os.tmpdir(), `cbi-export-md-${Date.now()}.md`);
+    const tmp = path.join(os.tmpdir(), `ctxi-export-md-${Date.now()}.md`);
     const client = new InsightClient('http://localhost:21025', { retries: 0 });
     const result = await client.exportSessionMarkdown('f3bb027a-xyz', tmp, 'claude-code');
 
-    // URL hits the same endpoint the web UI uses, with taskId + framework params
-    expect(fetchedUrl).toContain('/api/observe/session/export-md');
+    // URL hits the solo run member-view export endpoint, with taskId + framework params
+    expect(fetchedUrl).toContain('/api/observe/run/solo%3Af3bb027a-xyz/export-md');
     expect(fetchedUrl).toContain('taskId=f3bb027a-xyz');
     expect(fetchedUrl).toContain('framework=claude-code');
 
@@ -79,7 +79,7 @@ describe('exportMdCommand', () => {
       return Promise.resolve({ ok: true, text: () => Promise.resolve(MARKDOWN) });
     });
 
-    const tmp = path.join(os.tmpdir(), `cbi-export-md-nofw-${Date.now()}.md`);
+    const tmp = path.join(os.tmpdir(), `ctxi-export-md-nofw-${Date.now()}.md`);
     const client = new InsightClient('http://localhost:21025', { retries: 0 });
     await client.exportSessionMarkdown('sess-1', tmp);
 

@@ -529,7 +529,7 @@ describe('会话首条 skill 注入不重分类（opencode ≥1.17 形态）', (
   // 用户请求同条。若按标记重分类成 system，同内容会话的 turn0 角色会随 opencode
   // 版本漂移（≤1.4.7 无标记 → user）。首条（此前无任何记录）保持 user；
   // user prompt 之后的注入（claude-code 展开形态）仍 system + 合并。
-  const S3_TURN0 = '# 基于 ACLIB 的算子开发工作流\n\n你是纯编排者（Orchestrator），读取 STATE.md 按顺序派发 SubAgent。' +
+  const S3_TURN0 = '# 基于 ACLNN 的算子开发工作流\n\n你是纯编排者（Orchestrator），读取 STATE.md 按顺序派发 SubAgent。' +
     '\n\nBase directory for this skill: /home/hwd/x/.opencode/skills/ops-registry-invoke-glacier\nRelative paths in this skill (e.g., scripts/) are relative to this base directory.\n\nsoftplus_v2_grad';
 
   it('首条 user 行带 Base directory 标记 → 保持 role=user，内容 verbatim', () => {

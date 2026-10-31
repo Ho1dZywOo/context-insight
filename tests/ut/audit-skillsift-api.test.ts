@@ -9,33 +9,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import fs from "node:fs"
 import path from "node:path"
-import type { CoverageSummary } from "@/lib/sift-audit-types"
 
 const FAKE_REPORT = {
   skill_name: "acme-crash-debug",
   transcript_sources: ["opencode"],
   summary: { total: 2, pass: 1, fail: 1, na: 0 },
-  coverage: {
-    total: 3,
-    covered: 1,
-    uncovered: 2,
-    unknown: 0,
-    coverage_rate: 0.33,
-    sections: [
-      {
-        section: "Workflow 声明（主 agent）",
-        total: 3,
-        covered: 1,
-        uncovered: 2,
-        unknown: 0,
-        coverage_rate: 0.33,
-        instructions: [
-          { instruction_text: "do x", source: "STEP", category: "step", section: "Workflow 声明（主 agent）", status: "covered", pass_count: 1, fail_count: 0, total: 1, seqs: [0] },
-          { instruction_text: "verify y", source: "STEP", category: "output", section: "Workflow 声明（主 agent）", status: "uncovered", na_count: 1, total: 1, seqs: [] },
-        ],
-      },
-    ],
-  },
   findings: [
     { instruction_text: "do x", source: "STEP", verdict: "PASS", method: "LLM", category: "step", evidence: "ok", seq: 0 },
   ],
@@ -161,15 +139,11 @@ describe("audit-skillsift route", () => {
     const res = await POST(makeRequest({ taskId: "ses_1", skillName: "acme-crash-debug" }))
     expect(res.status).toBe(200)
     const events = await readNdjson(res)
-    const last = events.at(-1) as { stage: string; report: { skill_name: string; summary: { fail: number }; coverage?: CoverageSummary }; _html: string }
+    const last = events.at(-1) as { stage: string; report: { skill_name: string; summary: { fail: number } }; _html: string }
     expect(last.stage).toBe("result")
     expect(last.report.skill_name).toBe("acme-crash-debug")
     expect(last.report.summary.fail).toBe(1)
     expect(last._html).toContain("STUB AUDIT HTML")
-    expect(last.report.coverage?.total).toBe(3)
-    expect(last.report.coverage?.covered).toBe(1)
-    expect(last.report.coverage?.coverage_rate).toBeCloseTo(0.33)
-    expect(last.report.coverage?.sections?.[0]?.instructions?.[1]?.status).toBe("uncovered")
 
     const [, args] = spawnMock.mock.calls[0]
     expect(args[0]).toBe("audit")
@@ -340,15 +314,15 @@ describe("audit-skillsift route", () => {
     expect(last.msg).toMatch(/exit 2/)
   })
 
-  it("framework=context-insight → --transcript 结构化 JSON(不走 --db)", async () => {
-    fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.jsonl", framework: "context-insight" })
+  it("framework=cannbot-insight → --transcript 结构化 JSON(不走 --db)", async () => {
+    fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.jsonl", framework: "cannbot-insight" })
     seedSkillBody()
     fakePrisma.turn.findMany.mockResolvedValue([
       { id: "t1", turnIndex: 0, role: "assistant", content: "调用 skill", agentName: "kernel-developer" },
     ])
     spawnMock.mockImplementation(happySpawn())
     const res = await POST(
-      makeRequest({ taskId: "ses_1", skillName: "acme-crash-debug", framework: "context-insight" }),
+      makeRequest({ taskId: "ses_1", skillName: "acme-crash-debug", framework: "cannbot-insight" }),
     )
     expect(res.status).toBe(200)
     const [, args] = spawnMock.mock.calls[0]

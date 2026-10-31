@@ -20,7 +20,7 @@ const fakePrisma = {
 };
 vi.mock('@/lib/db', () => ({ prisma: fakePrisma }));
 
-const { GET } = await import('@/app/api/observe/session/agent-content/route');
+const { GET } = await import('@/lib/observe/session-handlers/agent-content');
 
 const FIXTURE_DIR = path.resolve(__dirname, './data/agent-md-system-recover');
 

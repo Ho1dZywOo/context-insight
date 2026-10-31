@@ -40,7 +40,7 @@ describe('POST /api/ingest/import-file — failure reasons', () => {
     const res = await POST(req({
       source: 'claude-jsonl',
       sessionId: 'no-such-file-sid',
-      filePath: path.join(os.homedir(), '.context-insight/proxy/definitely-missing-capture.jsonl'),
+      filePath: path.join(os.homedir(), '.cannbot-insight/proxy/definitely-missing-capture.jsonl'),
     }));
     expect(res.status).toBe(404);
     const data = await res.json();
@@ -141,7 +141,7 @@ describe('GET /api/observe/session/wire-rounds — direct-from-file round view',
       const s = await prisma.session.findFirst({ where: { taskId: sid } });
       if (s) createdSessionIds.push(s.id);
     }
-    const { GET } = await import('@/app/api/observe/session/wire-rounds/route');
+    const { GET } = await import('@/lib/observe/session-handlers/wire-rounds');
     const res = await GET(new NextRequest(`http://localhost/api/observe/session/wire-rounds?taskId=${sid}`));
     expect(res.status).toBe(200);
     const data = await res.json();
@@ -169,7 +169,7 @@ describe('GET /api/observe/session/wire-rounds — direct-from-file round view',
       const sid = 'wire-usage-map-it';
       await prisma.session.deleteMany({ where: { taskId: sid } });
       await POST(req({ source: 'claude-jsonl', sessionId: sid, filePath: file }));
-      const { GET } = await import('@/app/api/observe/session/wire-rounds/route');
+      const { GET } = await import('@/lib/observe/session-handlers/wire-rounds');
       const res = await GET(new NextRequest(`http://localhost/api/observe/session/wire-rounds?taskId=${sid}`));
       expect(res.status).toBe(200);
       const data = await res.json();
@@ -183,7 +183,7 @@ describe('GET /api/observe/session/wire-rounds — direct-from-file round view',
   });
 
   it('404 when the session is unknown', async () => {
-    const { GET } = await import('@/app/api/observe/session/wire-rounds/route');
+    const { GET } = await import('@/lib/observe/session-handlers/wire-rounds');
     const res = await GET(new NextRequest(`http://localhost/api/observe/session/wire-rounds?taskId=no-such-sid`));
     expect(res.status).toBe(404);
   });
