@@ -2,13 +2,23 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
 // This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// You may refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { useState } from "react"
-import { Badge } from "@/components/ui/badge"
+// Perf 观测域共享层（run 视角）：数据类型（执行切片 / 轮次 / 桥 / 泳道）、
+// 口径格式化、耗时活动分解、分段控制与效率分布图。执行切片即泳道图的
+// agent 单元（ExecItem = AgentItem 超集，同源 /executions 端点），基础单元
+// ——成员会话（agent）与子代理（subagent）同构呈现，定位统一收敛到
+// turnId（Turns 深链管线）。
+
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
+import { MaximizeIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
+import type { AgentItem, BridgeItem } from "./AgentCallGraph"
+
+export type BridgePerf = BridgeItem
 
 export interface TurnPerf {
   turnId: string
@@ -18,8 +28,13 @@ export interface TurnPerf {
   isSubagent: boolean
   subagentName: string | null
   subagentSessionId: string | null
-  subagentType: string | null
-  dispatchStep: string | null
+  /** 子代理类型（resolveSubagentIdentity 唯一入口；原生形态 subagentName
+   *  泛化（全体 "design"），真类型走桥 join 回填） */
+  subagentType?: string | null
+  /** 派发步骤（proxy 形态 = cpx meta.name；原生形态取桥 dispatchContent） */
+  dispatchStep?: string | null
+  /** 成员归因（run 合并视图） */
+  member?: { taskId: string; label: string | null } | null
   contentSummary: string | null
   createdAt: string | null
   totalTokens: number
@@ -38,19 +53,36 @@ export interface TurnPerf {
   }>
 }
 
-export interface BridgePerf {
-  bridgeId: string
-  dispatchTurnId: string | null
-  dispatchContent: string | null
-  subagentSessionId: string | null
+/** 执行切片 = 泳道图的 agent 单元（同源 /executions 端点）：AgentItem
+ *  （时间跨度/活跃区间供时间线）+ Perf 消费的 token 细分与工具错误计数 */
+export interface ExecItem extends AgentItem {
   subagentName: string | null
-  subagentLatencyMs: number
-  subagentTokens: number
+  depth: number
+  tokens: number
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  toolCallCount: number
+  toolCallErrorCount: number
+  llmCallCount: number
+  cost: number
+  latencyMs: number
+  model: string | null
+  createdAt: string
 }
 
-export interface SubagentStat {
-  sessionId: string
+/** 泳道 = run 观测基础单元：成员会话（agent）或子代理（subagent）。
+ *  子代理泳道经 owner 标注父成员；firstTurnId 是该泳道首个轮次
+ *  （Turns 深链管线入态）。 */
+export interface PerfLaneStat {
+  laneId: string
+  kind: "agent" | "subagent"
   name: string
+  owner: string | null
+  /** 子代理类型（桥 join，resolveSubagentIdentity 唯一入口）：行首橙色胶囊
+   *  徽章；无类型（codex spawn 系）回落 taskDescription 小字 */
   subagentType: string | null
   taskDescription: string | null
   turns: TurnPerf[]
@@ -61,24 +93,55 @@ export interface SubagentStat {
   cacheRead: number
   inputTokens: number
   cacheHitRate: number
+  firstTurnId: string | null
 }
 
-function fmtMs(ms: number): string {
+/** 泳道内执行切片：按全局切片序号（createdAt 升序）编 #N，切片值与画像
+ *  墙钟同口径（start→next），不按泳道重算 */
+export interface LaneExec {
+  ord: number
+  sliceMs: number
+  exec: ExecItem
+}
+
+// ── 固定配色：token 种类 / 单元种类恒定，不随排序变化 ──────────────────────
+export const TOKEN_COLORS = {
+  input: "#4E79A7",
+  cacheRead: "#A0CBE8",
+  cacheWrite: "#F1CE63",
+  output: "#59A14F",
+  reasoning: "#8b5cf6",
+}
+export const LANE_COLORS = { agent: "#2563eb", subagent: "#16a34a" }
+export const PERF_COLORS = { axis: "#94a3b8", grid: "#e2e8f0", danger: "#dc2626" }
+
+// ── 口径格式化 ────────────────────────────────────────────────────────────────
+export function fmtMs(ms: number): string {
   if (ms <= 0) return "0s"
   const s = ms / 1000
   if (s < 60) return `${s.toFixed(1)}s`
   const m = Math.floor(s / 60)
   const rem = Math.round(s % 60)
-  if (m < 60) return `${m}m${rem}s`
+  if (m < 60) return `${m}m${rem.toString().padStart(2, "0")}s`
   const h = Math.floor(m / 60)
-  return `${h}h${m % 60}m`
+  return `${h}h${(m % 60).toString().padStart(2, "0")}m`
 }
 
-function fmtTok(n: number): string {
+export function fmtTok(n: number): string {
   if (n === 0) return "0"
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return `${n}`
+}
+
+export function fmtOffset(base: number, ts: string): string {
+  const t = new Date(ts).getTime()
+  if (!base || !t) return "—"
+  const d = Math.max(0, Math.floor((t - base) / 1000))
+  const h = Math.floor(d / 3600)
+  const m = Math.floor((d % 3600) / 60)
+  const s = d % 60
+  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`
 }
 
 /** 「顺序/SEQUENCE」排序的序值：取泳道最早一轮的 turnIndex（Math.min，不依赖
@@ -91,6 +154,7 @@ export function laneOrderValue(turns: Array<{ turnIndex: number }>): number {
   return Math.min(...turns.map(t => t.turnIndex))
 }
 
+// ── 耗时活动分解：LLM 思考 vs 工具调用（无时长工具按占比估计） ───────────────
 function categorizeTool(name: string): string {
   const n = name.toLowerCase()
   if (["read", "glob", "grep", "webfetch", "search", "list"].some(t => n.includes(t))) return "分析"
@@ -107,7 +171,7 @@ const ACTIVITY_COLOR: Record<string, string> = {
   "其他": "#6b7280",
 }
 
-function computeTurnSegments(t: TurnPerf): { label: string; ms: number; color: string }[] {
+export function computeTurnSegments(t: TurnPerf): { label: string; ms: number; color: string }[] {
   const tools = t.toolCalls ?? []
   const toolMs = tools.reduce((sum, tc) => sum + Math.max(0, tc.durationMs), 0)
 
@@ -138,364 +202,517 @@ function computeTurnSegments(t: TurnPerf): { label: string; ms: number; color: s
   ].filter(s => s.ms > 0)
 }
 
-const COLORS = {
-  root: "#2563eb",
-  sub: "#16a34a",
-  input: "#2563eb",
-  output: "#16a34a",
-  reasoning: "#8b5cf6",
-  cacheRead: "#f59e0b",
-  cacheWrite: "#6b7280",
-  danger: "#dc2626",
-  axis: "#94a3b8",
-  grid: "#e2e8f0",
+// ── 卡片入场：阶梯节奏（0/75/150/225ms），纯 transform/opacity。
+// extra 用于合并卡片外观类——展开后再写 className 会整体覆盖入场类，
+// 一律经此合并，调用点不得再单独传 className ──────────────────────
+const PERF_ENTRANCE_CLS = "animate-in fade-in slide-in-from-bottom-4 duration-500 fill-mode-backwards"
+
+export function perfEntrance(ms: number, extra?: string): { className: string; style: { animationDelay: string } } {
+  return { className: cn(PERF_ENTRANCE_CLS, extra), style: { animationDelay: `${ms}ms` } }
 }
 
-export function PerfBenchmarkChart({ points, onJumpToTurn }: {
-  points: { turnIndex: number; createdAt: string | null; tpot: number; tps: number }[]
-  onJumpToTurn?: (turn: number) => void
+/** 头卡外观（与 Overview 总览头同款：圆角环线 + 双层投影） */
+export const PERF_CARD_CLS = "rounded-2xl ring-foreground/[0.06] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)]"
+/** 次级卡外观（与 Overview 次级卡同款：环线、无投影，配 size="sm"） */
+export const PERF_CARD_SM = "rounded-2xl ring-foreground/[0.06]"
+
+// ── 分段控制（iOS 胶囊分段：卡片头内联，选项互斥） ───────────────────────────
+export function PerfSegmented<T extends string>({ value, options, onChange, ariaLabel }: {
+  value: T
+  options: { value: T; label: string }[]
+  onChange: (v: T) => void
+  ariaLabel: string
 }) {
-  if (points.length === 0) {
-    return <div className="flex items-center justify-center h-32 text-xs text-muted-foreground">暂无性能数据</div>
-  }
-
-  const tsPoints = points.map(p => ({ ...p, ts: p.createdAt ? new Date(p.createdAt).getTime() : 0 }))
-
-  const fmtTime = (ts: number) => {
-    const d = new Date(ts)
-    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`
-  }
-
-  const metrics = [
-    { key: "tps" as const, label: "TPS", desc: "Tokens per Second", color: "#16a34a", unit: "tok/s" },
-    { key: "tpot" as const, label: "TPOT", desc: "Time per Output Token", color: "#8b5cf6", unit: "ms" },
-  ]
-
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-      {metrics.map(m => {
-        const W = 480, H = 200
-        const padL = 40, padR = 14, padT = 20, padB = 32
-        const chartW = W - padL - padR
-        const chartH = H - padT - padB
-        const n = tsPoints.length
-        const vals = tsPoints.map(p => p[m.key])
-        const maxVal = Math.max(...vals, 1)
-        const minVal = Math.min(...vals)
-        const avgVal = vals.reduce((s, v) => s + v, 0) / vals.length
-        // Cap the y-axis at the 95th percentile so a single outlier doesn't
-        // squash every other bar to near-zero. Bars above the cap are clamped
-        // to the top; true min/avg/max are still shown in the header.
-        const sortedVals = [...vals].sort((a, b) => a - b)
-        const p95 = sortedVals[Math.floor(sortedVals.length * 0.95)] ?? maxVal
-        const yMaxRaw = Math.min(maxVal, Math.max(p95, minVal))
-        const yMax = (m.unit === "ms" ? Math.ceil(yMaxRaw / 100) * 100 : Math.ceil(yMaxRaw / 50) * 50) || 1
-        const slot = chartW / n
-        const barW = Math.min(slot * 0.7, 14)
-        const xOf = (i: number) => padL + slot * i + slot / 2
-        const toY = (v: number) => padT + chartH - (Math.min(v, yMax) / yMax) * chartH
-        const avgY = toY(avgVal)
-        const yTicks = Array.from({ length: 4 }, (_, i) => Math.round(yMax * i / 3))
-        const fmtVal = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(0)
-
-        return (
-          <div key={m.key} className="rounded border bg-muted/5 overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-1.5 border-b bg-muted/10">
-              <div className="flex items-center gap-2">
-                <span className="inline-block w-2 h-2" style={{ background: m.color }} />
-                <span className="text-xs font-mono font-semibold">{m.label}</span>
-                <span className="text-[10px] text-muted-foreground font-mono">{m.desc}</span>
-              </div>
-              <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground">
-                <span>min <span className="text-foreground">{fmtVal(minVal)}</span></span>
-                <span>avg <span className="text-foreground">{fmtVal(avgVal)}</span></span>
-                <span>max <span className="text-foreground">{fmtVal(maxVal)}</span></span>
-              </div>
-            </div>
-            <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} className="block">
-              {yTicks.map((v, i) => {
-                const y = padT + chartH - (v / yMax) * chartH
-                return (
-                  <g key={i}>
-                    <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={COLORS.grid} strokeWidth={0.5} strokeDasharray="2 3" />
-                    <text x={padL - 5} y={y + 3} textAnchor="end" fontSize="8" className="fill-muted-foreground" fontFamily="monospace">{fmtVal(v)}</text>
-                  </g>
-                )
-              })}
-              <line x1={padL} y1={avgY} x2={W - padR} y2={avgY} stroke={m.color} strokeWidth={0.8} strokeDasharray="4 2" opacity={0.6} />
-              <text x={W - padR} y={avgY - 2} textAnchor="end" fontSize="8" className="fill-muted-foreground" fontFamily="monospace">avg {fmtVal(avgVal)}</text>
-              <line x1={padL} y1={padT} x2={padL} y2={padT + chartH} stroke={COLORS.axis} strokeWidth={0.8} />
-              <line x1={padL} y1={padT + chartH} x2={W - padR} y2={padT + chartH} stroke={COLORS.axis} strokeWidth={0.8} />
-              {tsPoints.map((p, i) => {
-                const y = toY(p[m.key])
-                const h = (padT + chartH) - y
-                return (
-                  <rect key={i} x={xOf(i) - barW / 2} y={y} width={barW} height={Math.max(h, 0.5)}
-                    fill={m.color} opacity={0.85} rx={1}
-                    className="cursor-pointer" onClick={() => onJumpToTurn?.(p.turnIndex)}>
-                    <title>{`${m.label} turn #${p.turnIndex} (${fmtTime(p.ts)}): ${fmtVal(p[m.key])} ${m.unit}`}</title>
-                  </rect>
-                )
-              })}
-              {tsPoints.length > 0 && (
-                <text key="first" x={xOf(0)} y={H - 6} textAnchor="middle" fontSize="8" className="fill-muted-foreground" fontFamily="monospace">
-                  turn {tsPoints[0].turnIndex}
-                </text>
-              )}
-              {tsPoints.length > 1 && (
-                <text key="last" x={xOf(n - 1)} y={H - 6} textAnchor="middle" fontSize="8" className="fill-muted-foreground" fontFamily="monospace">
-                  turn {tsPoints[n - 1].turnIndex}
-                </text>
-              )}
-              <text x={padL + chartW / 2} y={H - 0} textAnchor="middle" fontSize="8" className="fill-muted-foreground" fontFamily="monospace">turn</text>
-              <text x={12} y={padT + chartH / 2} textAnchor="middle" fontSize="8" className="fill-muted-foreground" fontFamily="monospace"
-                transform={`rotate(-90 12 ${padT + chartH / 2})`}>{m.unit}</text>
-            </svg>
-          </div>
-        )
-      })}
+    <div role="group" aria-label={ariaLabel} className="inline-flex items-center gap-0.5 rounded-full bg-muted p-0.5">
+      {options.map(o => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-medium transition-[color,background-color,box-shadow,transform] duration-200 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)] active:scale-95",
+            value === o.value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
     </div>
   )
 }
 
-type SortKey = "ms" | "tokens" | "order"
+// 效率分布样本点：主 agent 轮的效率双镜头值 + 时刻
+type BenchPoint = { turnIndex: number; turnId?: string; createdAt: string | null; tpot: number; tps: number }
 
-const COLS: { key: SortKey; label: string }[] = [
-  { key: "ms", label: "TIME" },
-  { key: "tokens", label: "TOKENS" },
-  { key: "order", label: "SEQUENCE" },
-]
+// 效率分布图几何常量（viewBox 尺寸与内边距，geo memo 与 JSX 共用）
+const W = 720, H = 190
+const padL = 36, padR = 12, padT = 20, padB = 22
+const chartW = W - padL - padR
+const chartH = H - padT - padB
 
-export function PerfTopTable({ subagents, onJumpToTurn, includeRoot }: {
-  subagents: SubagentStat[]
-  onJumpToTurn?: (turn: number) => void
-  /** 勾选「含 root」：列表含主 agent 聚合行，表头/空态文案随之切换 */
-  includeRoot?: boolean
+// svg 按默认 preserveAspectRatio=meet 均匀缩放：宽卡片下元素远宽于
+// viewBox，绘图居中、两侧留白——像素 → viewBox 的 x 映射必须走缩放
+// 与居中偏移（无布局环境退化为恒等：viewBox 坐标 = 像素坐标）。
+// 通用版（任意 viewBox 尺寸，跨图复用）；viewXOf 是本图 720×190 特化
+export const svgViewX = (rect: DOMRect, clientX: number, w: number, h: number) => {
+  if (rect.width <= 0) return clientX
+  const scale = Math.min(rect.width / w, rect.height / h) || 1
+  return (clientX - rect.left - (rect.width - w * scale) / 2) / scale
+}
+const viewXOf = (rect: DOMRect, clientX: number) => svgViewX(rect, clientX, W, H)
+const viewScaleOf = (rect: DOMRect) => (rect.width > 0 ? Math.min(rect.width / W, rect.height / H) || 1 : 1)
+
+// 单图样本容量：超出即按时间桶聚合（均值成线 + min-max 包络带保峰），
+// 与观测工具的高密度时序呈现一致
+const SAMPLE_MAX = 160
+
+// 单调三次平滑（调和均值切线）：曲线严格过采样点且不过冲——平滑观感
+// 与数值诚实兼得；lead 控制首指令（包络下缘以 L 续接上缘）
+function smoothPath(pts: { x: number; y: number }[], lead: "M" | "L" = "M"): string {
+  if (pts.length === 0) return ""
+  if (pts.length === 1) return `${lead}${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`
+  const d: number[] = []
+  for (let i = 0; i < pts.length - 1; i++) {
+    const dx = pts[i + 1].x - pts[i].x
+    d.push(dx !== 0 ? (pts[i + 1].y - pts[i].y) / dx : 0)
+  }
+  const tg = [d[0]]
+  for (let i = 1; i < pts.length - 1; i++) {
+    tg.push(d[i - 1] * d[i] <= 0 ? 0 : 2 / (1 / d[i - 1] + 1 / d[i]))
+  }
+  tg.push(d[d.length - 1])
+  let s = `${lead}${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`
+  for (let i = 0; i < pts.length - 1; i++) {
+    const h = pts[i + 1].x - pts[i].x
+    const c1y = pts[i].y + (tg[i] * h) / 3
+    const c2y = pts[i + 1].y - (tg[i + 1] * h) / 3
+    s += ` C${(pts[i].x + h / 3).toFixed(1)} ${c1y.toFixed(1)} ${(pts[i + 1].x - h / 3).toFixed(1)} ${c2y.toFixed(1)} ${pts[i + 1].x.toFixed(1)} ${pts[i + 1].y.toFixed(1)}`
+  }
+  return s
+}
+
+// ── 效率分布：主 agent 轮 TPS / TPOT 序列，x 轴 = 真实时间轴（轮次时刻
+//    定位——run 合并视角的统一时间轴；turnIndex 是会话内局部序号，多成
+//    员混排不可作轴）。TPS 与 TPOT 互为倒数（同信息双镜头），分段控制单
+//    图切换。折线 + 线下渐变面积呈现；样本数超出容量时按时间桶聚合——
+//    均值成线、min-max 成包络带（峰值不因平滑而抹平）；y 轴 = 峰值整步
+//    上取（轴覆盖全部数值，不做分位钳制）。时间窗缩放：Ctrl/⌘+滚轮锚定
+//    放大、拖拽平移、工具条适配——窗口内重新采样分桶，放大即细节；统计
+//    口径随窗口（可见范围即分析范围）。路径在 memo 内构建——悬停十字
+//    线/气泡只重渲染轻量子树；纯观测无跳转（归因下钻归热点排行）──────
+export function PerfBenchmarkChart({ points }: {
+  points: BenchPoint[]
 }) {
-  const [sortKey, setSortKey] = useState<SortKey>("ms")
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const [showAllTurns, setShowAllTurns] = useState<Set<string>>(new Set())
-  const [showBreakdown, setShowBreakdown] = useState<Set<string>>(new Set())
-  const [showAllSubagents, setShowAllSubagents] = useState(false)
+  const [metric, setMetric] = useState<"tps" | "tpot">("tps")
+  // 光标 x（viewBox 坐标；null = 图外）——十字线随光标，焦点点骑线内插
+  const [cursor, setCursor] = useState<number | null>(null)
+  // 时间窗（null = 全程）：Ctrl/⌘+滚轮锚定缩放、拖拽平移——窗口内重新
+  // 采样分桶，放大即细节（稠密包络 → 逐轮真值）；统计口径随窗口（可
+  // 见范围即分析范围）。窗口状态携带数据源身份：失配即视为全程（切
+  // run 自动复位，无需副作用链）
+  const [winState, setWinState] = useState<{ pts: BenchPoint[]; range: [number, number] | null }>({ pts: points, range: null })
+  const win = winState.pts === points ? winState.range : null
+  const setWin = (range: [number, number] | null) => setWinState({ pts: points, range })
+  const [dragging, setDragging] = useState(false)
 
-  const getVal = (s: SubagentStat, key: SortKey): number =>
-    key === "ms" ? s.totalMs : key === "tokens" ? s.totalTokens : laneOrderValue(s.turns)
+  const m = useMemo(() => metric === "tps"
+    ? { key: "tps" as const, unit: "tok/s", color: TOKEN_COLORS.output }
+    : { key: "tpot" as const, unit: "ms/tok", color: TOKEN_COLORS.reasoning }, [metric])
 
-  const sorted = [...subagents].sort((a, b) => {
-    if (sortKey === "order") return getVal(a, sortKey) - getVal(b, sortKey)
-    return getVal(b, sortKey) - getVal(a, sortKey)
-  })
-  const totalVal = sorted.reduce((s, sub) => s + getVal(sub, sortKey), 0)
-  const barColor = sortKey === "ms" ? COLORS.reasoning : sortKey === "tokens" ? COLORS.input : COLORS.output
+  // 预排序（时间单调）与全程边界：缩放/平移的钳制基准，窗口切换零重排
+  const sorted = useMemo(
+    () => points
+      .map(p => ({ ...p, ts: p.createdAt ? new Date(p.createdAt).getTime() : 0 }))
+      .sort((a, b) => a.ts - b.ts),
+    [points],
+  )
+  const full = useMemo(
+    () => (sorted.length > 0 ? { tMin: sorted[0].ts, tMax: sorted[sorted.length - 1].ts } : null),
+    [sorted],
+  )
+  const dragRef = useRef<{ x: number; v0: number; v1: number } | null>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  // 缩放回调经 ref 透传给一次性挂载的原生滚轮监听（恒取最新渲染闭包，
+  // 免重挂监听）
+  const zoomAtRef = useRef<(factor: number, vx: number) => void>(() => {})
 
-  const sortTurns = (turns: TurnPerf[]): TurnPerf[] => {
-    if (sortKey === "order") return [...turns].sort((a, b) => a.turnIndex - b.turnIndex)
-    const val = (t: TurnPerf): number =>
-      sortKey === "tokens" ? t.totalTokens : t.latencyMs
-    return [...turns].sort((a, b) => val(b) - val(a))
+  // 时间窗缩放：光标时刻锚定（缩放后该时刻的屏幕位置不动），窗口钳制
+  // 在全程内；窗宽下限防退化，放大到全程即复位
+  const zoomAt = (factor: number, vx: number) => {
+    const f = full
+    if (!f || f.tMax - f.tMin <= 0) return
+    const w = win
+    const v0 = w ? w[0] : f.tMin
+    const v1 = w ? w[1] : f.tMax
+    const span = v1 - v0
+    const fullSpan = f.tMax - f.tMin
+    const next = Math.min(fullSpan, Math.max(Math.max(1000, fullSpan / 240), span / factor))
+    if (next >= fullSpan - 1) { setWin(null); return }
+    if (Math.abs(next - span) < 1) return
+    const ta = v0 + ((vx - padL) / chartW) * span
+    let n0 = ta - ((ta - v0) / span) * next
+    let n1 = n0 + next
+    if (n0 < f.tMin) { n0 = f.tMin; n1 = n0 + next }
+    if (n1 > f.tMax) { n1 = f.tMax; n0 = n1 - next }
+    setWin([n0, n1])
+  }
+  useEffect(() => { zoomAtRef.current = zoomAt })
+
+  // Ctrl/⌘+滚轮锚定缩放：原生 non-passive 监听（React onWheel 走 passive
+  // 通道，preventDefault 无效，手势会被浏览器页面缩放劫持）；挂在稳定包
+  // 装层上，指标切换重挂 svg 无需重挂监听
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const vx = viewXOf(rect, e.clientX)
+      zoomAtRef.current(e.deltaY < 0 ? 1.12 : 1 / 1.12, Math.min(W - padR, Math.max(padL, vx)))
+    }
+    el.addEventListener("wheel", onWheel, { passive: false })
+    return () => el.removeEventListener("wheel", onWheel)
+  }, [])
+
+  // 拖拽释放兜底：鼠标在图外松开也能结束平移
+  useEffect(() => {
+    const up = () => {
+      dragRef.current = null
+      setDragging(false)
+    }
+    window.addEventListener("mouseup", up)
+    return () => window.removeEventListener("mouseup", up)
+  }, [])
+
+  const geo = useMemo(() => {
+    if (sorted.length === 0) return null
+    const tMin = sorted[0].ts
+    const tMax = sorted[sorted.length - 1].ts
+    const v0 = win ? Math.max(win[0], tMin) : tMin
+    const v1 = win ? Math.min(win[1], tMax) : tMax
+    const tSpan = Math.max(v1 - v0, 0)
+    const tsPoints = win ? sorted.filter(p => p.ts >= v0 && p.ts <= v1) : sorted
+    const fmtTime = (ts: number) => {
+      const d = new Date(ts)
+      return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`
+    }
+    const n = tsPoints.length
+    const vals = tsPoints.map(p => p[m.key])
+    const maxVal = n > 0 ? Math.max(...vals, 1) : 0
+    const minVal = n > 0 ? Math.min(...vals) : 0
+    const avgVal = n > 0 ? vals.reduce((s, v) => s + v, 0) / n : 0
+    // y 轴 = 峰值整步上取（1/2/5×10^k）：轴刻度永远覆盖全部数值——分位
+    // 钳制会让轴与实际数值自相矛盾；空窗给占位量程（网格结构不塌）
+    const yMax = n > 0
+      ? (() => {
+          const base = maxVal > 0 ? maxVal : 1
+          const mag = Math.pow(10, Math.floor(Math.log10(base)))
+          const norm = base / mag
+          return (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag
+        })()
+      : 2
+    const xOf = (ts: number) => (tSpan > 0 ? padL + ((ts - v0) / tSpan) * chartW : padL + chartW / 2)
+    const tOf = (x: number) => (tSpan > 0 ? v0 + ((x - padL) / chartW) * tSpan : v0)
+    const toY = (v: number) => padT + chartH - (Math.min(v, yMax) / yMax) * chartH
+    const avgY = toY(avgVal)
+    const fmtVal = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(0)
+    // 时间刻度格式：按窗口跨度进位（秒/分/日）
+    const two = (x: number) => x.toString().padStart(2, "0")
+    const fmtTick = (ts: number) => {
+      const d = new Date(ts)
+      if (tSpan >= 24 * 3600_000) return `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`
+      if (tSpan < 10 * 60_000) return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+      return `${two(d.getHours())}:${two(d.getMinutes())}`
+    }
+    const xTicks = Array.from({ length: 5 }, (_, i) => v0 + (tSpan * i) / 4)
+    // 气泡宽度按视觉列宽估算（CJK 双宽）
+    const textW = (s: string) => [...s].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e80 ? 10.8 : 5.4), 0)
+    // 采样：稀疏序列逐点成线；超出容量按窗口时间桶聚合——均值成线，
+    // min-max 成包络带（峰值不因聚合而抹平，轴与包络顶处处一致）
+    const samples: { ts: number; v: number; lo: number; hi: number; cnt: number }[] = []
+    if (n <= SAMPLE_MAX) {
+      for (const p of tsPoints) {
+        const v = p[m.key]
+        samples.push({ ts: p.ts, v, lo: v, hi: v, cnt: 1 })
+      }
+    } else {
+      const acc: ({ sum: number; cnt: number; lo: number; hi: number; tSum: number } | null)[] = new Array(SAMPLE_MAX).fill(null)
+      for (const p of tsPoints) {
+        const v = p[m.key]
+        const bi = tSpan > 0 ? Math.min(SAMPLE_MAX - 1, Math.floor(((p.ts - v0) / tSpan) * SAMPLE_MAX)) : 0
+        const b = acc[bi] ??= { sum: 0, cnt: 0, lo: Infinity, hi: -Infinity, tSum: 0 }
+        b.sum += v
+        b.cnt += 1
+        b.lo = Math.min(b.lo, v)
+        b.hi = Math.max(b.hi, v)
+        b.tSum += p.ts
+      }
+      for (const b of acc) {
+        if (b) samples.push({ ts: b.tSum / b.cnt, v: b.sum / b.cnt, lo: b.lo, hi: b.hi, cnt: b.cnt })
+      }
+    }
+    // 路径：均值线（平滑）+ 线下渐变面积 + 聚合时的 min-max 包络带
+    const yBase = padT + chartH
+    const linePts = samples.map(s => ({ x: xOf(s.ts), y: toY(s.v) }))
+    const lineD = smoothPath(linePts)
+    const single = samples.length <= 1
+    const areaD = single ? "" : `${lineD} L${linePts[linePts.length - 1].x.toFixed(1)} ${yBase} L${linePts[0].x.toFixed(1)} ${yBase} Z`
+    const bandD = samples.length > 1 && samples.length < n
+      ? `${smoothPath(samples.map(s => ({ x: xOf(s.ts), y: toY(s.hi) })))} ${smoothPath([...samples].reverse().map(s => ({ x: xOf(s.ts), y: toY(s.lo) })), "L")} Z`
+      : null
+    // 峰值样本（含全局峰值的桶/点）
+    let iPeakS = 0
+    samples.forEach((s, i) => { if (s.hi > samples[iPeakS].hi) iPeakS = i })
+    // 统计口径随窗口（可见范围即分析范围）；空窗不给假数值
+    const stats = n === 0
+      ? [
+          { label: "均值", v: "—" },
+          { label: "峰值", v: "—" },
+          { label: "谷值", v: "—" },
+          { label: "轮次", v: "0" },
+        ]
+      : [
+          { label: "均值", v: fmtVal(avgVal) },
+          { label: "峰值", v: fmtVal(maxVal) },
+          { label: "谷值", v: fmtVal(minVal) },
+          { label: "轮次", v: String(n) },
+        ]
+    return { samples, lineD, areaD, bandD, single, empty: n === 0, iPeakS, maxVal, avgVal, yMax, xOf, tOf, toY, avgY, fmtVal, fmtTick, xTicks, textW, fmtTime, stats }
+  }, [sorted, m, win])
+
+  if (!geo) {
+    return <div className="flex items-center justify-center h-32 text-xs text-muted-foreground">暂无性能数据</div>
   }
 
+  const { samples, lineD, areaD, bandD, single, empty, iPeakS, maxVal, avgVal, yMax, xOf, tOf, toY, avgY, fmtVal, fmtTick, xTicks, textW, fmtTime, stats } = geo
+
+  // 光标读数：相邻样本线性内插——焦点点骑线随鼠标（端点外钳到首尾样
+  // 本，线不存在处不悬空）；稠密桶的 lo~hi 取最近桶作上下文
+  const readAt = (x: number) => {
+    if (samples.length === 0) return null
+    let prev = samples[0]
+    for (let i = 1; i < samples.length; i++) {
+      const cur = samples[i]
+      const x1 = xOf(cur.ts)
+      if (x <= x1) {
+        const x0 = xOf(prev.ts)
+        const f = x1 > x0 ? Math.min(1, Math.max(0, (x - x0) / (x1 - x0))) : 0
+        return { v: prev.v + (cur.v - prev.v) * f, near: f < 0.5 ? prev : cur }
+      }
+      prev = cur
+    }
+    return { v: prev.v, near: prev }
+  }
+
+  // 拖拽平移：按下即以像素→时间比例移动窗口（钳制在全程内），内容跟手；
+  // 未按下时走悬停定位——viewBox 坐标反演 + 最近样本。重活路径在 memo
+  // 内，重渲染只触十字线/气泡/窗口轻量子树
+  const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    if (dragRef.current && full && full.tMax - full.tMin > 0) {
+      const { x, v0, v1 } = dragRef.current
+      const span = v1 - v0
+      const dxv = (e.clientX - x) / viewScaleOf(rect)
+      const n0 = Math.min(Math.max(v0 - (dxv / chartW) * span, full.tMin), full.tMax - span)
+      dragRef.current = { x: e.clientX, v0: n0, v1: n0 + span }
+      setWin([n0, n0 + span])
+      return
+    }
+    const vx = viewXOf(rect, e.clientX)
+    if (vx < padL - 2 || vx > W - padR + 2) {
+      setCursor(null)
+      return
+    }
+    setCursor(Math.round(Math.min(W - padR, Math.max(padL, vx))))
+  }
+
+  const onDown = (e: ReactMouseEvent<SVGSVGElement>) => {
+    if (!win || !full || full.tMax - full.tMin <= 0) return
+    dragRef.current = { x: e.clientX, v0: win[0], v1: win[1] }
+    setDragging(true)
+  }
+  const endDrag = () => {
+    if (!dragRef.current) return
+    dragRef.current = null
+    setDragging(false)
+  }
+
+  // 当前窗宽相对全程的倍率（工具条读数；全程恒 100%）
+  const ratio = full && win ? Math.round(((full.tMax - full.tMin) / Math.max(win[1] - win[0], 1)) * 100) : 100
+
   return (
-    <div className="rounded-lg border overflow-x-auto">
-      <div className="min-w-[560px]">
-        {/* Header */}
-        <div className="grid grid-cols-[1fr_52px_80px_80px_80px_56px] bg-muted/30 px-3 py-2 text-xs font-semibold text-muted-foreground border-b">
-          <span>{includeRoot ? "AGENT" : "SUBAGENT"}</span>
-          <span></span>
-          {COLS.map(col => (
-            <span
-              key={col.key}
-              className="flex justify-center items-center gap-0.5 cursor-pointer hover:text-foreground select-none transition-colors whitespace-nowrap"
-              onClick={() => setSortKey(col.key)}
-            >
-              {col.label}
-              <span className={sortKey === col.key ? "opacity-100" : "opacity-0"}>{col.key === "order" ? "↑" : "↓"}</span>
-            </span>
-          ))}
-          <span className="flex justify-center">TPS</span>
-        </div>
-
-        {/* Rows */}
-        {(showAllSubagents ? sorted : sorted.slice(0, 10)).map(s => {
-          const isOpen = expanded === s.sessionId
-          const pct = totalVal > 0 ? (getVal(s, sortKey) / totalVal) * 100 : 0
-          return (
-            <div key={s.sessionId} className="border-b last:border-0">
-              <div className="grid grid-cols-[1fr_52px_80px_80px_80px_56px] px-3 py-2 text-xs tabular-nums items-center">
-                <span className="flex flex-col gap-1 pr-2">
-                  <span className="flex items-center gap-1.5 truncate">
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      className="shrink-0 -ml-1 px-1 py-1 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent/50 cursor-pointer select-none inline-block transition-transform duration-200"
-                      style={{ transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}
-                      onClick={() => setExpanded(isOpen ? null : s.sessionId)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setExpanded(isOpen ? null : s.sessionId) }}
-                    >▶</span>
-                    {/* 与 turns 时间线同款（subagent 橙色胶囊徽章）：类型在行首、
-                        步骤同行跟上；无类型（codex spawn 系）回落第二行描述小字 */}
-                    {s.subagentType && (
-                      <Badge variant="orange" className="shrink-0 text-[10px] font-mono max-w-[220px] truncate" title={s.taskDescription ?? s.subagentType}>🔗 {s.subagentType}</Badge>
-                    )}
-                    <span className="truncate" title={s.taskDescription ?? undefined}>{s.name}</span>
-                  </span>
-                  {!s.subagentType && s.taskDescription && (
-                    <span className="text-[10px] text-muted-foreground truncate ml-4" title={s.taskDescription}>{s.taskDescription}</span>
-                  )}
-                  {sortKey !== "order" && (
-                    <div className="h-2.5 bg-muted/30 rounded overflow-hidden ml-4">
-                      <div className="h-full rounded transition-all" style={{ width: `${Math.max(pct, 1)}%`, background: barColor }} />
-                    </div>
-                  )}
-                </span>
-                <span className="text-center text-muted-foreground">{sortKey === "order" ? "—" : `${pct.toFixed(1)}%`}</span>
-                <span className="text-center font-semibold" style={{ color: COLORS.reasoning }}>{fmtMs(s.totalMs)}</span>
-                <span className="text-center font-semibold" style={{ color: COLORS.input }}>{fmtTok(s.totalTokens)}</span>
-                <span className="text-center text-muted-foreground">#{s.turns[0]?.turnIndex ?? '?'}</span>
-                <span className="text-center" style={{ color: COLORS.reasoning }}>{s.tps.toFixed(1)}</span>
-              </div>
-
-              {/* Drill-down: turns of this subagent */}
-              {isOpen && (() => {
-                const allTurns = sortTurns(s.turns)
-                const isShowAll = showAllTurns.has(s.sessionId)
-                const visibleTurns = isShowAll ? allTurns : allTurns.slice(0, 10)
-                const hasMore = allTurns.length > 10
-                return (
-                  <div className="bg-muted/5 border-l-2" style={{ borderColor: COLORS.grid }}>
-                    {visibleTurns.map(t => {
-                      const segments = computeTurnSegments(t)
-                      const segTotal = segments.reduce((sum, seg) => sum + seg.ms, 0)
-                      return (
-                        <div
-                          key={t.turnId}
-                          className="flex flex-col gap-1 px-3 py-1.5 cursor-pointer hover:bg-muted/30 text-[11px] tabular-nums border-b last:border-0 border-muted/20"
-                          onClick={() => onJumpToTurn?.(t.turnIndex)}
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className="font-mono text-muted-foreground w-10 text-center">#{t.turnIndex}</span>
-                            <span className="font-semibold w-20 text-center" style={{ color: COLORS.reasoning }}>
-                              {fmtMs(t.latencyMs)} <span className="text-[10px] text-muted-foreground font-normal">({s.totalMs > 0 ? `${(t.latencyMs / s.totalMs * 100).toFixed(0)}%` : "—"})</span>
-                            </span>
-                            <span className="w-16 text-center" style={{ color: COLORS.input }}>{fmtTok(t.totalTokens)}</span>
-                            <span className="w-24 text-center whitespace-nowrap" style={{
-                              color: t.cacheReadTokens + t.inputTokens > 0 && (t.cacheReadTokens / (t.cacheReadTokens + t.inputTokens)) * 100 < 50
-                                ? COLORS.danger : COLORS.output
-                            }}
-                              title={`Cache read: ${fmtTok(t.cacheReadTokens)} / Non-cached input (miss): ${fmtTok(t.inputTokens)}`}
-                            >
-                              {t.cacheReadTokens + t.inputTokens > 0
-                                ? `Cache ${(t.cacheReadTokens / (t.cacheReadTokens + t.inputTokens) * 100).toFixed(2)}%`
-                                : "—"}
-                            </span>
-                            <span className="w-20 text-center whitespace-nowrap" style={{ color: COLORS.reasoning }}>
-                              {t.latencyMs > 0 ? `TPS ${(((t.outputTokens ?? 0) + (t.reasoningTokens ?? 0)) / (t.latencyMs / 1000)).toFixed(1)}` : "—"}
-                            </span>
-                            <span className="text-muted-foreground truncate flex-1">
-                              {(t.toolCalls?.length ?? 0)} tools · {t.model ?? "?"}
-                            </span>
-                            {segTotal > 0 && (
-                              <span
-                                className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setShowBreakdown(prev => {
-                                    const next = new Set(prev)
-                                    if (next.has(t.turnId)) next.delete(t.turnId)
-                                    else next.add(t.turnId)
-                                    return next
-                                  })
-                                }}
-                              >
-                                {showBreakdown.has(t.turnId) ? "▼" : "▶"} 活动
-                              </span>
-                            )}
-                          </div>
-                          {segTotal > 0 && showBreakdown.has(t.turnId) && (
-                            <div className="flex items-center gap-4 pl-10 py-1">
-                              <svg viewBox="0 0 80 80" width="80" height="80" className="flex-shrink-0">
-                                <g transform="rotate(-90 40 40)">
-                                  {(() => {
-                                    const radius = 30
-                                    const strokeWidth = 10
-                                    const circumference = 2 * Math.PI * radius
-                                    let offset = 0
-                                    return segments.map((seg, i) => {
-                                      const frac = seg.ms / segTotal
-                                      const length = frac * circumference
-                                      const circle = (
-                                        <circle key={i} cx="40" cy="40" r={radius} fill="none"
-                                          stroke={seg.color} strokeWidth={strokeWidth}
-                                          strokeDasharray={`${length} ${circumference - length}`}
-                                          strokeDashoffset={-offset} />
-                                      )
-                                      offset += length
-                                      return circle
-                                    })
-                                  })()}
-                                </g>
-                                <text x="40" y="44" textAnchor="middle" fontSize="12" fontWeight="700" className="fill-foreground">
-                                  {fmtMs(segTotal)}
-                                </text>
-                              </svg>
-                              <div className="flex flex-col gap-1.5">
-                                {segments.map(seg => {
-                                  const desc = seg.label === "分析" ? "read/grep/glob 读取搜索"
-                                    : seg.label === "编写" ? "write/edit 文件修改"
-                                    : seg.label === "执行" ? "bash/test 命令执行"
-                                    : seg.label === "LLM思考" ? "无工具纯推理"
-                                    : ""
-                                  return (
-                                    <span key={seg.label} className="flex items-center gap-1.5 text-[10px]">
-                                      <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: seg.color }} />
-                                      <span className="text-muted-foreground w-14">{seg.label}</span>
-                                      <span className="font-semibold tabular-nums w-12">{fmtMs(seg.ms)}</span>
-                                      <span className="text-muted-foreground tabular-nums w-10">({(seg.ms / segTotal * 100).toFixed(0)}%)</span>
-                                      <span className="text-muted-foreground/60 text-[9px]">{desc}</span>
-                                    </span>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                    {hasMore && (
-                      <div
-                        className="px-4 py-1.5 text-[11px] text-blue-600 cursor-pointer hover:underline select-none"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setShowAllTurns(prev => {
-                            const next = new Set(prev)
-                            if (next.has(s.sessionId)) next.delete(s.sessionId)
-                            else next.add(s.sessionId)
-                            return next
-                          })
-                        }}
-                      >
-                        {isShowAll ? "收起" : `展开全部 (${allTurns.length} turns)`}
-                      </div>
-                    )}
-                  </div>
-                )
-              })()}
+    <div>
+      {/* 统计条 + 指标切换：标签上/值下，互为倒数的双镜头单图呈现 */}
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 pb-3">
+        <div className="flex items-end gap-x-6">
+          {stats.map(s => (
+            <div key={s.label}>
+              <div className="text-[10px] text-muted-foreground">{s.label}</div>
+              <div className="text-sm font-semibold tabular-nums">{s.v}</div>
             </div>
+          ))}
+          <div className="pb-0.5 text-[10px] text-muted-foreground/70">{m.unit}</div>
+        </div>
+        <PerfSegmented
+          ariaLabel="效率指标切换"
+          value={metric}
+          options={[{ value: "tps" as const, label: "TPS" }, { value: "tpot" as const, label: "TPOT" }]}
+          onChange={setMetric}
+        />
+      </div>
+
+      <div ref={wrapRef} className="relative">
+        <svg
+          key={m.key}
+          data-bench=""
+          viewBox={`0 0 ${W} ${H}`}
+          width="100%"
+          height={H}
+          className={cn(
+            "block select-none animate-in fade-in slide-in-from-bottom-1 duration-300",
+            dragging ? "cursor-grabbing" : win ? "cursor-grab" : "",
+          )}
+          onMouseMove={onMove}
+          onMouseDown={onDown}
+          onMouseUp={endDrag}
+          onMouseLeave={() => { endDrag(); setCursor(null) }}
+        >
+        <defs>
+          <linearGradient id={`perf-bench-${m.key}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={m.color} stopOpacity={0.16} />
+            <stop offset="1" stopColor={m.color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+
+        {/* 发丝网格（顶/中虚线 + 基线实线）与刻度 */}
+        {[yMax, yMax / 2, 0].map((v, i) => {
+          const y = toY(v)
+          return (
+            <g key={i}>
+              {v > 0
+                ? <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={PERF_COLORS.grid} strokeWidth={0.5} strokeDasharray="2 3" />
+                : <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={PERF_COLORS.axis} strokeWidth={0.8} />}
+              <text x={padL - 5} y={y + 3} textAnchor="end" fontSize="8.5" className="fill-muted-foreground tabular-nums">{fmtVal(v)}</text>
+            </g>
           )
         })}
 
-        {sorted.length > 10 && (
-          <div
-            className="px-3 py-1.5 text-xs text-blue-600 cursor-pointer hover:underline select-none text-center"
-            onClick={() => setShowAllSubagents(!showAllSubagents)}
-          >
-            {showAllSubagents ? "收起" : `展开全部 (${sorted.length} ${includeRoot ? "agents" : "subagents"})`}
-          </div>
+        {/* 均值参考线（空窗不给假数值） */}
+        {!empty && (
+          <>
+            <line x1={padL} y1={avgY} x2={W - padR} y2={avgY} stroke={m.color} strokeWidth={0.8} strokeDasharray="4 3" opacity={0.5} />
+            <text x={W - padR} y={avgY - 3} textAnchor="end" fontSize="8.5" fill={m.color} className="tabular-nums">均值 {fmtVal(avgVal)}</text>
+          </>
         )}
 
-        {sorted.length === 0 && (
-          <div className="px-3 py-6 text-center text-xs text-muted-foreground">{includeRoot ? "暂无 agent 数据" : "暂无子代理数据"}</div>
+        {/* min-max 包络带（样本聚合时）：离群峰不因平滑而抹平 */}
+        {bandD && <path d={bandD} fill={m.color} opacity={0.1} />}
+
+        {/* 平滑折线 + 线下渐变面积；单点退化为圆点 */}
+        {empty ? null : single
+          ? <circle cx={xOf(samples[0].ts)} cy={toY(samples[0].v)} r={3} fill={m.color} />
+          : <>
+              <path d={areaD} fill={`url(#perf-bench-${m.key})`} />
+              <path d={lineD} fill="none" stroke={m.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+            </>}
+
+        {/* 峰值点标值（峰值样本所在时刻） */}
+        {!empty && (() => {
+          const s = samples[iPeakS]
+          const px = xOf(s.ts)
+          return (
+            <g>
+              <circle cx={px} cy={toY(maxVal)} r={2.5} fill={m.color} />
+              <text
+                x={px}
+                y={toY(maxVal) - 6}
+                textAnchor={px > W - padR - 40 ? "end" : px < padL + 40 ? "start" : "middle"}
+                fontSize="8.5"
+                fontWeight={600}
+                fill={m.color}
+                className="tabular-nums"
+              >
+                {fmtVal(maxVal)}
+              </text>
+            </g>
+          )
+        })()}
+
+        {/* x 轴时间刻度（首尾贴边对齐，中间居中） */}
+        {xTicks.map((ts, i) => (
+          <text
+            key={i}
+            x={xOf(ts)}
+            y={H - 6}
+            textAnchor={i === 0 ? "start" : i === xTicks.length - 1 ? "end" : "middle"}
+            fontSize="8.5"
+            className="fill-muted-foreground tabular-nums"
+          >
+            {fmtTick(ts)}
+          </text>
+        ))}
+
+        {/* 空窗提示（缩放/平移到无轮次的时间段） */}
+        {empty && (
+          <text x={padL + chartW / 2} y={padT + chartH / 2 + 3} textAnchor="middle" fontSize="9" className="fill-muted-foreground">
+            该时间窗内无轮次
+          </text>
         )}
+
+        {/* 悬停：十字线随光标 + 骑线焦点（内插跟手）+ 数值气泡（SVG 内定位，不随容器缩放错位） */}
+        {cursor != null && (() => {
+          const r = readAt(cursor)
+          if (!r) return null
+          // 焦点钳在线的横向范围内（线外区域十字线仍随光标，点不悬空）
+          const dx = Math.min(Math.max(cursor, xOf(samples[0].ts)), xOf(samples[samples.length - 1].ts))
+          const hy = toY(r.v)
+          const tAt = tOf(dx)
+          const l1 = tAt ? fmtTime(tAt) : "—"
+          const l2 = r.near.cnt > 1 ? `均值 ${fmtVal(r.v)} · ${fmtVal(r.near.lo)}~${fmtVal(r.near.hi)} ${m.unit}` : `${fmtVal(r.v)} ${m.unit}`
+          const w = Math.max(textW(l1), textW(l2)) + 16
+          const bx = Math.max(padL, Math.min(W - padR - w, cursor - w / 2))
+          const by = Math.max(2, hy - 42)
+          return (
+            <g pointerEvents="none" className="animate-in fade-in duration-150">
+              <line x1={cursor} y1={padT} x2={cursor} y2={padT + chartH} stroke={PERF_COLORS.axis} strokeWidth={0.75} strokeDasharray="3 3" opacity={0.55} />
+              <circle cx={dx} cy={hy} r={6} fill={m.color} opacity={0.16} />
+              <circle cx={dx} cy={hy} r={2.5} fill={m.color} />
+              <rect x={bx} y={by} width={w} height={30} rx={8} className="fill-card" stroke={PERF_COLORS.axis} strokeOpacity={0.4} strokeWidth={1} />
+              <text x={bx + w / 2} y={by + 12} textAnchor="middle" fontSize="8.5" className="fill-muted-foreground tabular-nums">{l1}</text>
+              <text x={bx + w / 2} y={by + 24} textAnchor="middle" fontSize="10" fontWeight={700} fill={m.color} className="tabular-nums">{l2}</text>
+            </g>
+          )
+        })()}
+        </svg>
+
+        {/* 玻璃工具条（Context 趋势图同款浮层 chrome）：时间窗缩放/平移/适配 */}
+        <div className="run-glass absolute right-2 bottom-2 flex items-center rounded-xl">
+          <button
+            type="button" title="缩小（Ctrl + 滚轮）" aria-label="缩小"
+            onClick={() => zoomAt(1 / 1.15, padL + chartW / 2)}
+            className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
+          >
+            <ZoomOutIcon className="size-3.5" />
+          </button>
+          <span className="w-11 text-center text-[11px] tabular-nums text-[#57606a]" title="当前时间窗倍率">{ratio}%</span>
+          <button
+            type="button" title="放大（Ctrl + 滚轮）" aria-label="放大"
+            onClick={() => zoomAt(1.15, padL + chartW / 2)}
+            className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
+          >
+            <ZoomInIcon className="size-3.5" />
+          </button>
+          <span className="h-3.5 w-px bg-black/10" aria-hidden />
+          <button
+            type="button" title="适配全程" aria-label="适配全程"
+            onClick={() => setWin(null)}
+            className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
+          >
+            <MaximizeIcon className="size-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   )

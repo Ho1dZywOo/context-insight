@@ -6,6 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 
 import { useState, useEffect, useCallback } from "react"
+import { sessionViewUrlFor, type ViewUrlFor } from "@/lib/observe/member-url"
 
 export interface SkillContentAuditItem {
   skillName: string
@@ -17,7 +18,8 @@ export interface SkillContentAuditItem {
   maxLine: number | null
 }
 
-export function useSkillContentAudit(taskId: string, framework?: string) {
+export function useSkillContentAudit(taskId: string, framework?: string, urlFor?: ViewUrlFor) {
+  const buildUrl = urlFor ?? sessionViewUrlFor
   const [items, setItems] = useState<SkillContentAuditItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -26,7 +28,7 @@ export function useSkillContentAudit(taskId: string, framework?: string) {
     let cancelled = false
     const q = new URLSearchParams({ taskId })
     if (framework) q.set("framework", framework)
-    fetch(`/api/observe/session/skill-content-audit?${q.toString()}`)
+    fetch(buildUrl(`skill-content-audit?${q.toString()}`))
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
@@ -46,13 +48,13 @@ export function useSkillContentAudit(taskId: string, framework?: string) {
         }
       })
     return () => { cancelled = true }
-  }, [taskId, framework])
+  }, [taskId, framework, buildUrl])
 
   const refetch = useCallback(() => {
     setLoading(true)
     const q = new URLSearchParams({ taskId })
     if (framework) q.set("framework", framework)
-    fetch(`/api/observe/session/skill-content-audit?${q.toString()}`)
+    fetch(buildUrl(`skill-content-audit?${q.toString()}`))
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
@@ -67,7 +69,7 @@ export function useSkillContentAudit(taskId: string, framework?: string) {
         setItems([])
         setLoading(false)
       })
-  }, [taskId, framework])
+  }, [taskId, framework, buildUrl])
 
   return { items, loading, error, refetch }
 }

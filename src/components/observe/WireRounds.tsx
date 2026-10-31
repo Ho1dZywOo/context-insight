@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { sessionViewUrlFor, type ViewUrlFor } from "@/lib/observe/member-url";
 
 interface Preview { json: string; truncated: boolean; chars: number }
 interface WireMessage { role: string; content: Preview; timestamp: string | null }
@@ -50,7 +51,8 @@ const ROLE_VARIANT: Record<string, "blue" | "green" | "purple" | "gray"> = {
   system: "purple",
 };
 
-export function WireRounds({ taskId, framework }: { taskId: string; framework?: string }) {
+export function WireRounds({ taskId, framework, urlFor }: { taskId: string; framework?: string; urlFor?: ViewUrlFor }) {
+  const buildUrl = urlFor ?? sessionViewUrlFor;
   const [state, setState] = useState<{ taskId: string; data: WireRoundsData | null; error: string | null } | null>(null);
 
   const [open, setOpen] = useState<Set<number>>(new Set());
@@ -60,7 +62,7 @@ export function WireRounds({ taskId, framework }: { taskId: string; framework?: 
     let alive = true;
     void (async () => {
       try {
-        const res = await fetch(`/api/observe/session/wire-rounds?taskId=${encodeURIComponent(taskId)}&delta=1${framework ? `&framework=${encodeURIComponent(framework)}` : ''}`);
+        const res = await fetch(buildUrl(`wire-rounds?taskId=${encodeURIComponent(taskId)}&delta=1${framework ? `&framework=${encodeURIComponent(framework)}` : ''}`));
         const j = await res.json() as WireRoundsData;
         if (!alive) return;
         if (j.error) setState({ taskId, data: null, error: j.error });
@@ -73,7 +75,7 @@ export function WireRounds({ taskId, framework }: { taskId: string; framework?: 
       }
     })();
     return () => { alive = false; };
-  }, [taskId]);
+  }, [taskId, framework, buildUrl]);
 
   // 切换会话时旧结果视为无数据（置空态由异步回调驱动，不在 effect 里同步 setState）
   const data = state?.taskId === taskId ? state.data : null;

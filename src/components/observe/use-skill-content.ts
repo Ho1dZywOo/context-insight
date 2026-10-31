@@ -7,6 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import { useState, useCallback } from "react"
+import { sessionViewUrlFor, type ViewUrlFor } from "@/lib/observe/member-url"
 
 export interface SkillContentResponse {
   skillName: string
@@ -19,7 +20,8 @@ export interface SkillContentResponse {
   via?: "system" | "disk" | null
 }
 
-export function useSkillContent(taskId: string) {
+export function useSkillContent(taskId: string, urlFor?: ViewUrlFor) {
+  const buildUrl = urlFor ?? sessionViewUrlFor
   const [loading, setLoading] = useState<Set<string>>(new Set())
   const [content, setContent] = useState<Map<string, SkillContentResponse>>(new Map())
   const [error, setError] = useState<Map<string, string>>(new Map())
@@ -29,7 +31,7 @@ export function useSkillContent(taskId: string) {
     setError(prev => { const n = new Map(prev); n.delete(skillName); return n })
     try {
       const r = await fetch(
-        `/api/observe/session/skill-content?taskId=${encodeURIComponent(taskId)}&skillName=${encodeURIComponent(skillName)}`
+        buildUrl(`skill-content?taskId=${encodeURIComponent(taskId)}&skillName=${encodeURIComponent(skillName)}`)
       )
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d: SkillContentResponse = await r.json()
@@ -39,7 +41,7 @@ export function useSkillContent(taskId: string) {
     } finally {
       setLoading(prev => { const n = new Set(prev); n.delete(skillName); return n })
     }
-  }, [taskId])
+  }, [taskId, buildUrl])
 
   /** Skills tab subagent 行"全文"按钮：取 agent .md。单一入口——会话恢复（system
    *  注入）为主数据、磁盘扫描兜底，两级优先由服务端 agent-content 路由内置；
@@ -54,7 +56,7 @@ export function useSkillContent(taskId: string) {
         agentName,
         ...(framework ? { framework } : {}),
       })
-      const r = await fetch(`/api/observe/session/agent-content?${q.toString()}`)
+      const r = await fetch(buildUrl(`agent-content?${q.toString()}`))
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d: SkillContentResponse = await r.json()
       setContent(prev => new Map(prev).set(key, d))
@@ -63,7 +65,7 @@ export function useSkillContent(taskId: string) {
     } finally {
       setLoading(prev => { const n = new Set(prev); n.delete(key); return n })
     }
-  }, [taskId])
+  }, [taskId, buildUrl])
 
   const clear = useCallback((skillName: string) => {
     setContent(prev => { const n = new Map(prev); n.delete(skillName); return n })
