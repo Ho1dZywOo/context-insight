@@ -97,7 +97,7 @@ afterAll(() => {
   fs.rmSync(TMP, { recursive: true, force: true });
 });
 
-const runs = await import('../../src/app/lake_viewer/_lib/runs');
+const runs = await import('../../src/lib/collection/lake-view/runs');
 
 describe('质量列回落：未导入行读仓内评审记录快照', () => {
   it('未导入 + 仓有评审记录：末条 scorecard 出分，scoreSource=lake-note，维度归一', async () => {

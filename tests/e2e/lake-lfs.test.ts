@@ -21,9 +21,15 @@
 //   ⑥ 工作树 .gitattributes 过期回归锁：默认模式上传剔除过 lfs 行的副本
 //      留在镜像工作树，LFS 导入前必须按"缺声明"判定刷新（不是仅看文件
 //      存在）——否则 --filters 不做 smudge，指针文本被当 gzip 落盘
-// 客户机无 git-lfs 时整组跳过（LFS 模式的硬前置）。
+//   ⑦ uploadBundleFolder：bundle 内 .jsonl.7z 指针出仓 + 实体落 LFS 存储
+//      + manifest（workflow.json）普通 blob + *.7z 声明进仓
+//   ⑧ materializeBundle：指针 → 真实字节（--filters smudge）+ 工作树
+//      .gitattributes 过期刷新（⑥ 的 bundle 版——该路径此前缺失就绪准备，
+//      过期副本下指针文本会被当 7z 落盘、git-lfs 缺失时 git 原文直抛）
+// 客户机无 git-lfs 时整组跳过（LFS 模式的硬前置；无 git-lfs 机器的
+// fail-fast 指引由 ut lake-lfs-read-prep-it.test.ts 锁定）。
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -90,7 +96,28 @@ fs.writeFileSync(path.join(STAGING, 'sessions', SID, `${SID}.meta.json`), JSON.s
 fs.mkdirSync(path.join(STAGING, 'sessions', SID, 'subagents'), { recursive: true });
 fs.writeFileSync(path.join(STAGING, 'sessions', SID, 'subagents', EVIL_NAME), EVIL_GZ);
 
-const { uploadFolder, materializeSession, listSessions } = await import('../../src/lib/lake/mirror');
+// ── bundle staging：staging-bundle/<runId>/ = workflow.json + 压缩会话（⑦⑧ 用）──
+const RUN_ID = 'run_lfsbundle01';
+const SID_B = 'ses_lfsbundle01ffeetestAA';
+// .jsonl.7z 出仓形态的实体（无需真 7z 归档——物化只锁字节级往返，解压归编排层）
+const SEVEN_Z = Buffer.from('fake-7z-payload-for-lfs-roundtrip\n');
+const STAGING_BUNDLE = path.join(TMP, 'staging-bundle');
+fs.mkdirSync(path.join(STAGING_BUNDLE, RUN_ID, 'sessions', SID_B), { recursive: true });
+fs.writeFileSync(path.join(STAGING_BUNDLE, RUN_ID, 'workflow.json'), '{"schema":"workflow-bundle"}');
+fs.writeFileSync(path.join(STAGING_BUNDLE, RUN_ID, 'sessions', SID_B, `${SID_B}.jsonl.7z`), SEVEN_Z);
+
+const { uploadFolder, materializeSession, listSessions, uploadBundleFolder, materializeBundle } = await import('../../src/lib/lake/mirror');
+const { privateLfsBinDir } = await import('../../src/lib/lake/lfs-setup');
+
+// skip 探测前把私有件前置 PATH：纯私有件机器（无系统 git-lfs、自举产物在
+// ~/.context-insight/bin 在位——生产运行时 ensurePrivateLfsOnPath 同款注入）
+// 上整组照跑，贴近用户现场形态。forks 池进程复用下用例后还原。
+const SAVED_PATH = process.env.PATH;
+const privBin = privateLfsBinDir();
+if (fs.existsSync(path.join(privBin, 'git-lfs')) && !(process.env.PATH ?? '').split(path.delimiter).includes(privBin)) {
+  process.env.PATH = `${privBin}${path.delimiter}${process.env.PATH ?? ''}`;
+}
+afterAll(() => { process.env.PATH = SAVED_PATH; });
 
 function blobBuffer(repoPath: string): Buffer {
   const oid = git(`git rev-parse main:${repoPath}`, BARE).trim();
@@ -175,5 +202,40 @@ describe.skipIf(!hasGitLfs())('lake LFS 模式（file:// bare + standalone 传�
     expect(fs.readFileSync(gaPath, 'utf8')).toContain('*.gz filter=lfs');
     // 实体照常恢复——不是指针文本（指针 gunzip 必炸且字节不等）
     expect(fs.readFileSync(mainJsonl).equals(MAIN_GZ)).toBe(true);
+  });
+
+  it('⑦ uploadBundleFolder：bundle .jsonl.7z 指针出仓 + 实体落 LFS 存储 + manifest 普通 blob', async () => {
+    const r = await uploadBundleFolder(STAGING_BUNDLE, RUN_ID, DESC, buildRemote(), 'others');
+    expect(r.folder).toBe(`others/${RUN_ID}/`);
+    expect(r.gitattributesFixed).toBe(false);
+
+    const pointer = blobBuffer(`others/${RUN_ID}/sessions/${SID_B}/${SID_B}.jsonl.7z`).toString('utf8');
+    const oidHex = createHash('sha256').update(SEVEN_Z).digest('hex');
+    expect(pointer.startsWith('version https://git-lfs.github.com/spec/v1')).toBe(true);
+    expect(pointer).toContain(`oid sha256:${oidHex}`);
+    expect(pointer).toContain(`size ${SEVEN_Z.length}`);
+    expect(fs.existsSync(lfsObjectPath(oidHex))).toBe(true);
+    expect(fs.readFileSync(lfsObjectPath(oidHex)).equals(SEVEN_Z)).toBe(true);
+
+    // manifest（workflow.json）非 lfs 声明覆盖 → 普通 blob，不被指针化
+    const manifest = blobBuffer(`others/${RUN_ID}/workflow.json`).toString('utf8');
+    expect(manifest).toContain('workflow-bundle');
+    expect(manifest).not.toContain('git-lfs');
+
+    // ensureLfsGitattributes 补 *.7z 声明进仓（新形态）
+    expect(blobBuffer('.gitattributes').toString('utf8')).toContain('*.7z filter=lfs');
+  });
+
+  it('⑧ materializeBundle：指针 → 真实字节（--filters smudge）+ 工作树 .gitattributes 过期刷新', () => {
+    // ⑥ 的 bundle 版：过期副本（剔除过 lfs 行）会让 --filters 不做 smudge
+    const gaPath = path.join(CACHE, '.gitattributes');
+    const stripped = fs.readFileSync(gaPath, 'utf8').split('\n').filter(l => !l.includes('filter=lfs')).join('\n');
+    fs.writeFileSync(gaPath, stripped);
+
+    const out = materializeBundle(RUN_ID, path.join(TMP, 'mat-bundle'), buildRemote(), 'others');
+    // 实体字节级恢复——不是指针文本
+    expect(fs.readFileSync(path.join(out, 'sessions', SID_B, `${SID_B}.jsonl.7z`)).equals(SEVEN_Z)).toBe(true);
+    // 工作树副本已从 origin/main 刷新（*.7z 声明回归）
+    expect(fs.readFileSync(gaPath, 'utf8')).toContain('*.7z filter=lfs');
   });
 });

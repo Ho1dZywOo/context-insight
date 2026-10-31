@@ -8,7 +8,7 @@
 
 // DB 导出→再导入的会话身份保持 IT（身份归会话、格式归文件）。
 // 客户路径：会话列表「导出」→ context_session_<taskId>.db → 别处导入。
-// 修复前：导入链只认容器格式（srcType=context-insight），源级 framework
+// 修复前：导入链只认容器格式（srcType=cannbot-insight），源级 framework
 // 兜底把容器身份冒充 agent 身份落库（framework='context-insight'、version
 // null），且记录类不命中既有行 → 同实例重导入产生重复行；导出件无格式头。
 // 修复后：身份从导出件 Session 行的会话级声明读取（readSessionMeta 能力）
@@ -29,8 +29,8 @@ const prisma = new PrismaClient();
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-identity-'));
 
 const SEED_TURNS = [
-  { turnIndex: 0, role: 'user', content: 'how to fuse matmul on xpu' },
-  { turnIndex: 1, role: 'assistant', content: 'use torch_accel.matmul then check the fuse pass report' },
+  { turnIndex: 0, role: 'user', content: 'how to fuse matmul on npu' },
+  { turnIndex: 1, role: 'assistant', content: 'use torch_npu.matmul then check the fuse pass report' },
 ];
 
 async function seedSession(taskId: string, framework: string, version: string | null) {

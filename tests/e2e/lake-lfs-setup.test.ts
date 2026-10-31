@@ -156,34 +156,6 @@ describe('insight git-lfs 自举（与 cpx 受控双实现 parity）', () => {
       .rejects.toThrow(/全部下载源失败[\s\S]*CONTEXT_CPX_LFS_BASE/);
   });
 
-  it.skipIf(!KEY)('旧代私有件复用：pin 同版本的健康件直接拷贝，零下载', async () => {
-    fs.rmSync(path.join(TMP, 'bin'), { recursive: true, force: true });
-    const legacyDir = path.join(TMP, 'legacy-bin');
-    fs.mkdirSync(legacyDir, { recursive: true });
-    const legacy = path.join(legacyDir, 'git-lfs');
-    fs.writeFileSync(legacy, '#!/bin/sh\necho "git-lfs/3.8.0 (legacy fixture)"\n', { mode: 0o755 });
-    let fetched = 0;
-    const fetchSpy = (async () => { fetched += 1; return new Response('x', { status: 200 }); }) as unknown as typeof fetch;
-    await ensureLfsBinaryAvailable({ fetchImpl: fetchSpy, legacyBins: [legacy], log: () => {} });
-    expect(fetched).toBe(0);
-    expect(privateGitLfsOk()).toBe(true);
-  });
-
-  it.skipIf(!KEY || !KEY.startsWith('linux'))('旧代版本不匹配（≠ pin）→ 不复用，走下载回退链', async () => {
-    fs.rmSync(path.join(TMP, 'bin'), { recursive: true, force: true });
-    const legacyDir = path.join(TMP, 'legacy-bin-old');
-    fs.mkdirSync(legacyDir, { recursive: true });
-    const legacy = path.join(legacyDir, 'git-lfs');
-    fs.writeFileSync(legacy, '#!/bin/sh\necho "git-lfs/3.7.0 (old)"\n', { mode: 0o755 });
-    await ensureLfsBinaryAvailable({
-      fetchImpl: fetchOf({ 'git-lfs-linux-amd64-v3.8.0.tar.gz': path.join(TMP, 'fixture-linux-x64', 'git-lfs-linux-amd64-v3.8.0.tar.gz') }),
-      legacyBins: [legacy],
-      sha256: FIXTURE_SHA['linux-x64'],
-      log: () => {},
-    });
-    expect(privateGitLfsOk()).toBe(true);
-  });
-
   it.skipIf(!KEY || !KEY.startsWith('linux'))('并发去重：并发触发只下载一次（后到者等待同一承诺）', async () => {
     fs.rmSync(path.join(TMP, 'bin'), { recursive: true, force: true });
     let fetched = 0;

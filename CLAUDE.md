@@ -42,7 +42,7 @@ Adapter registry in `src/lib/ingest/adapters/registry.ts`（agent-source-framewo
 
 ### Frontend Modes (shared backend)
 
-All three modes are pure API clients of the same 22 `/api/observe/*` endpoints:
+All three modes are pure API clients of the same `/api/observe/*` endpoints（run-first：`run/[runId]/*` 家族是唯一观测面——session 页面与 `/api/observe/session/*` 端点已退役，会话即 solo run（`solo:<taskId>`），session 处理器平移至 `src/lib/observe/session-handlers/` 由 run 转发端点消费）:
 
 | Mode | Entry | Rendering |
 |------|-------|-----------|
@@ -50,7 +50,7 @@ All three modes are pure API clients of the same 22 `/api/observe/*` endpoints:
 | **TUI** | `src/cli/tui/App.tsx` | Ink 7 + React 19 (ESM strict) |
 | **CLI** | `src/cli/index.ts` (Commander) | chalk + string-width + cli-truncate |
 
-Session detail page (`session/[taskId]/`) is `"use client"` with 10 tabs（`wireRounds`/`replay` 默认隐藏，URL `?a` 或 `NEXT_PUBLIC_SHOW_ADVANCED_TABS` 展开）fetching from `/api/observe/*`.
+Run 统一工作台（`run/[runId]`）is `"use client"` with 11 tabs（Overview/Graph/Turns/Context/Audit/Perf/Skills/Files/Wire/Replay/Score；`wire`/`replay` 默认隐藏，URL `?a` 或 `NEXT_PUBLIC_SHOW_ADVANCED_TABS` 展开）fetching from `/api/observe/*`——会话以 solo run（`solo:<taskId>`）形态打开同一工作台；离线 HTML bundle 的查看器组件在 `src/components/export-view/`（装配层 `src/lib/observe/export-html.ts`，run 页头导出）。
 
 ### Key Code Paths
 
@@ -91,8 +91,8 @@ proxy（cpx 捕获）是 insight 的扩展来源，不是核心管线的一部�
 | `src/lib/ingest/adapters/system-structure/` | ✅ 系统提示结构层（读侧对偶 injections/，纯函数无 fs）：memory/skills 结构段与结构化解析框架自持（`claude-code.ts`/`codex.ts`/`opencode.ts` 家族），`index.ts` 按行级 `source` 标记分发；消费侧 `readFullContext`/`readAvailableSkills` 零框架分支，禁止格式试探序嗅探（设计见 agent-source-framework §2.5c） |
 | `src/lib/ingest/proxy-classify.ts` | ✅ proxy 统一分类器（meta > 行级 `source` 标记 > wire 指纹），只产出 Session.framework/version 元数据 |
 | `src/lib/ingest/adapters/claude-jsonl-full-context.ts` | ✅ proxy 扩展层（system/tools/memory/skills + requestParams + 可用 skills 全集） |
-| `src/app/api/observe/session/wire-rounds/route.ts` | ✅ wire 轮次 API 直接解析捕获 jsonl（roundIndex 以 `x_lake.data.roundIndex` 为权威） |
-| `src/app/api/observe/session/turns/[turnId]/route.ts` | ✅ API 层调扩展层读 proxy 数据（像 `readFullContext`） |
+| `src/lib/observe/session-handlers/wire-rounds.ts` | ✅ wire 轮次处理器（平移自 session 端点，由 `run/[runId]/wire-rounds` 转发消费）直接解析捕获 jsonl（roundIndex 以 `x_lake.data.roundIndex` 为权威） |
+| `src/app/api/observe/turn/[turnId]/route.ts` | ✅ API 层调扩展层读 proxy 数据（像 `readFullContext`；处理器平移至 `src/lib/observe/session-handlers/turn-detail.ts`，路由委托） |
 
 **判定标准**：如果改动让 native（非 proxy）的 `RawInteraction` /
 `NormalizedInteraction` / `TurnRow` 的字段值发生变化（哪怕是 `?? null`），
@@ -104,7 +104,7 @@ proxy（cpx 捕获）是 insight 的扩展来源，不是核心管线的一部�
 
 - **framework 值域（方案一：同 sid 双会话）**：proxy 捕获行 = agent 框架 + `-proxy` 后缀（`claude-code-proxy` / `opencode-proxy` / `codex-proxy` / `cannbot-proxy`），与同 sid 原生会话共存两行。**判断一律走谓词，禁止对 framework 裸等值**：格式判断用 `isClaudeFormatSession`（放行 `-proxy` 变体）、agent 归属用 `agentFrameworkOf`（剥后缀）、proxy 与否用 `isProxyVersion(version)`；按 taskId 解析会话的 API 必须接受 `framework` 消歧参数（同 sid 可能两行）
 
-- **双名发布（cannbot 品牌变体）**：`node scripts/pack-cannbot.mjs` 产出 `cannbot-insight` 同内容变体 tgz（staging 精确字面量替换 + 每规则 minHits 哨兵，源码仓零改动）。新增/改动品牌字面量（显示名 `Context-Insight`、CLI 别名 `ctxi`、bin 文件名、数据目录 `~/.context-insight`）时必须同步 `scripts/pack-cannbot.mjs` 规则表与 `tests/cannbot-pack.test.ts` 泄漏哨兵；格式契约（`BRAND_SOURCE_TYPE` / `x_lake` / `LAKE_*`·`CONTEXT_*` env 名 / `context-smart-agent` 服务标识 / lake 机器提交身份）**不得品牌化**——两品牌数据互通靠它们
+- **双名发布（cannbot 品牌变体）**：`node scripts/pack-cannbot.mjs` 产出 `cannbot-insight` 同内容变体 tgz（staging 精确字面量替换 + 每规则 minHits 哨兵，源码仓零改动）。新增/改动品牌字面量（显示名 `Context-Insight`、CLI 别名 `ctxi`、bin 文件名、数据目录 `~/.context-insight`、env 前缀 `CONTEXT_*`、`context-smart-agent` 服务标识、导出前缀 `context_session_`、lake 机器提交身份）时必须同步 `scripts/pack-cannbot.mjs` 规则表与 `tests/e2e/cannbot-pack.test.ts` 泄漏哨兵；格式契约（`BRAND_SOURCE_TYPE` / `x_lake` 信封键 / `LAKE_*` env 名 / framework 值）**不得品牌化**——两品牌数据互通靠它们
 - **ESM strict** (`"type": "module"` in package.json) — no `require()`, use `import`
 - **Ink v7 has no lastFrame/frames/output** on native `render()` — use `ink-testing-library` for tests only
 - **No third-party Ink components** — ink-table/ink-select/ink-spinner incompatible with Ink v7; self-implement all components

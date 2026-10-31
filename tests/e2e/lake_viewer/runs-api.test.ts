@@ -6,11 +6,13 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// runs 路由 e2e：本地 bare 数据湖 × 真测试库（进程内取数）。含一键导入全链路
-// （物化 bare 仓 jsonl → claude-jsonl 适配 → 写库）。不设 LAKE_VIEWER_CACHE_DIR
-// ——viewer 列表与 lake 导入共用 LAKE_CACHE_DIR 同一镜像（生产同款拓扑，
-// 亦即「session 文件只落一处」的契约）。env 必须在 src 模块导入前设置
-//（lake/lake remote 的 env 常量在 import 时求值）。
+// runs 数据面 e2e（lake action 集）：本地 bare 数据湖 × 真测试库（进程内取数）。
+// 含一键导入全链路（物化 bare 仓 jsonl → claude-jsonl 适配 → 写库）。不设
+// LAKE_VIEWER_CACHE_DIR——lake-runs 列表与 lake 导入共用 LAKE_CACHE_DIR 同一
+// 镜像（生产同款拓扑，亦即「session 文件只落一处」的契约）。env 必须在 src
+// 模块导入前设置（lake/lake remote 的 env 常量在 import 时求值）。
+// 刀4 收敛：旧 /lake_viewer/api/runs|paradigms|runs/import 路由并入
+// /api/ingest/lake 的 lake-runs / paradigm-summary / import action。
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -81,11 +83,23 @@ afterAll(async () => {
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best-effort */ }
 });
 
-const runsReq = (query: string) => new NextRequest(`http://localhost/lake_viewer/api/runs?${query}`);
-const importReq = (sid: string, recording?: 'capture' | 'native') => new NextRequest('http://localhost/lake_viewer/api/runs/import', {
+// 旧 GET 查询串 → lake-runs action body（scored/imported 布尔化）
+const runsReq = (query: string) => {
+  const p = new URLSearchParams(query);
+  const body: Record<string, unknown> = { action: 'lake-runs' };
+  for (const [k, v] of p) {
+    body[k] = k === 'scored' || k === 'imported' ? v === 'true' : v;
+  }
+  return new NextRequest('http://localhost/api/ingest/lake', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+};
+const importReq = (sid: string, recording?: 'capture' | 'native') => new NextRequest('http://localhost/api/ingest/lake', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify(recording ? { sid, recording } : { sid }),
+  body: JSON.stringify(recording ? { action: 'import', sid, recording } : { action: 'import', sid }),
 });
 
 interface ApiRun {
@@ -100,10 +114,10 @@ interface ApiRun {
   author: string | null;
 }
 
-describe('GET /lake_viewer/api/runs', () => {
+describe('action lake-runs', () => {
   it('混合口径 join：已导入出指标、未导入降级、baseline 在列', async () => {
-    const { GET } = await import('../../../src/app/lake_viewer/api/runs/route');
-    const res = await GET(runsReq('paradigm=elementwise'));
+    const { POST } = await import('../../../src/app/api/ingest/lake/route');
+    const res = await POST(runsReq('paradigm=elementwise'));
     expect(res.status).toBe(200);
     const data = await res.json() as { total: number; baselineSid: string | null; items: ApiRun[] };
     expect(data.baselineSid).toBe('e2e-base9999');
@@ -129,16 +143,20 @@ describe('GET /lake_viewer/api/runs', () => {
   });
 
   it('缺 paradigm → 400', async () => {
-    const { GET } = await import('../../../src/app/lake_viewer/api/runs/route');
-    const res = await GET(runsReq('framework=claude-code'));
+    const { POST } = await import('../../../src/app/api/ingest/lake/route');
+    const res = await POST(runsReq('framework=claude-code'));
     expect(res.status).toBe(400);
   });
 });
 
-describe('GET /lake_viewer/api/paradigms', () => {
+describe('action paradigm-summary', () => {
   it('范式清单（目录即注册表）', async () => {
-    const { GET } = await import('../../../src/app/lake_viewer/api/paradigms/route');
-    const res = await GET();
+    const { POST } = await import('../../../src/app/api/ingest/lake/route');
+    const res = await POST(new NextRequest('http://localhost/api/ingest/lake', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'paradigm-summary' }),
+    }));
     expect(res.status).toBe(200);
     const data = await res.json() as { items: Array<{ name: string; runCount: number }> };
     const names = data.items.map(p => p.name);
@@ -186,20 +204,19 @@ describe('镜像目录共用（session 文件只落一处）', () => {
   });
 });
 
-describe('POST /lake_viewer/api/runs/import（一键导入全链路）', () => {
+describe('action import（一键导入全链路）', () => {
   it('导入 bare 仓会话 → 写库 → 该行转已导入并出指标', async () => {
-    const { GET: getRuns } = await import('../../../src/app/lake_viewer/api/runs/route');
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/import/route');
+    const { POST: lake } = await import('../../../src/app/api/ingest/lake/route');
 
-    const before = await (await getRuns(runsReq('paradigm=elementwise'))).json() as { items: ApiRun[] };
+    const before = await (await lake(runsReq('paradigm=elementwise'))).json() as { items: ApiRun[] };
     expect(before.items.find(x => x.sid === 'e2e-cccc3333')?.imported).toBe(false);
 
-    const res = await POST(importReq('e2e-cccc3333'));
+    const res = await lake(importReq('e2e-cccc3333'));
     const body0 = await res.json().catch(() => null);
     expect(res.status, `body: ${JSON.stringify(body0)}`).toBe(200);
-    expect((body0 as { ok: boolean }).ok).toBe(true);
+    expect((body0 as { result: { imported: boolean } }).result.imported).toBe(true);
 
-    const after = await (await getRuns(runsReq('paradigm=elementwise'))).json() as { items: ApiRun[] };
+    const after = await (await lake(runsReq('paradigm=elementwise'))).json() as { items: ApiRun[] };
     const row = after.items.find(x => x.sid === 'e2e-cccc3333');
     expect(row?.imported).toBe(true);
     // 会话行真实落库（taskId 即 sid）
@@ -208,10 +225,9 @@ describe('POST /lake_viewer/api/runs/import（一键导入全链路）', () => {
   });
 
   it('导入 native 位会话（.native 目录）→ 写库 → 行转已导入', async () => {
-    const { GET: getRuns } = await import('../../../src/app/lake_viewer/api/runs/route');
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/import/route');
+    const { POST: lake } = await import('../../../src/app/api/ingest/lake/route');
 
-    const before = await (await getRuns(runsReq('paradigm=contraction'))).json() as { items: Array<ApiRun & { recording?: string }> };
+    const before = await (await lake(runsReq('paradigm=contraction'))).json() as { items: Array<ApiRun & { recording?: string }> };
     const natRow = before.items.find(x => x.sid === 'e2e-nat4444');
     // 列表层（回归：native 目录 meta 此前读不出 → 工具未知/时间为上传时刻）
     expect(natRow?.recording).toBe('native');
@@ -220,26 +236,25 @@ describe('POST /lake_viewer/api/runs/import（一键导入全链路）', () => {
     expect(natRow?.startTimeApprox).toBe(false);
     expect(natRow?.startTime).toBe('2026-09-02T09:00:00+08:00');
 
-    const res = await POST(importReq('e2e-nat4444', 'native'));
+    const res = await lake(importReq('e2e-nat4444', 'native'));
     const body1 = await res.json().catch(() => null);
     expect(res.status, `body: ${JSON.stringify(body1)}`).toBe(200);
-    expect((body1 as { ok: boolean }).ok).toBe(true);
+    expect((body1 as { result: { imported: boolean } }).result.imported).toBe(true);
 
-    const after = await (await getRuns(runsReq('paradigm=contraction'))).json() as { items: ApiRun[] };
+    const after = await (await lake(runsReq('paradigm=contraction'))).json() as { items: ApiRun[] };
     expect(after.items.find(x => x.sid === 'e2e-nat4444')?.imported).toBe(true);
     const dbRow = await prisma.session.findFirst({ where: { taskId: 'e2e-nat4444' }, select: { id: true } });
     expect(dbRow).toBeTruthy();
   });
 
   it('双记录只导 native → capture 行仍为未导入，不借显他行指标（review 回归）', async () => {
-    const { GET: getRuns } = await import('../../../src/app/lake_viewer/api/runs/route');
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/import/route');
+    const { POST: lake } = await import('../../../src/app/api/ingest/lake/route');
 
-    const res = await POST(importReq('e2e-dual5555', 'native'));
+    const res = await lake(importReq('e2e-dual5555', 'native'));
     const body2 = await res.json().catch(() => null);
     expect(res.status, `body: ${JSON.stringify(body2)}`).toBe(200);
 
-    const after = await (await getRuns(runsReq('paradigm=dualdb'))).json() as { items: Array<ApiRun & { recording?: string }> };
+    const after = await (await lake(runsReq('paradigm=dualdb'))).json() as { items: Array<ApiRun & { recording?: string }> };
     const nat = after.items.find(x => x.sid === 'e2e-dual5555' && x.recording === 'native');
     const cap = after.items.find(x => x.sid === 'e2e-dual5555' && x.recording === 'capture');
     expect(nat?.imported).toBe(true);
@@ -250,18 +265,18 @@ describe('POST /lake_viewer/api/runs/import（一键导入全链路）', () => {
     expect(cap?.totalTokens).toBeNull();
   });
 
-  it('未知 sid → 502（物化失败上抛为导入错误）', async () => {
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/import/route');
+  it('未知 sid → 500（物化失败上抛，lake action 统一错误出界）', async () => {
+    const { POST } = await import('../../../src/app/api/ingest/lake/route');
     const res = await POST(importReq('no-such-sid-anywhere'));
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(500);
   });
 
   it('缺 sid → 400', async () => {
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/import/route');
-    const res = await POST(new NextRequest('http://localhost/lake_viewer/api/runs/import', {
+    const { POST } = await import('../../../src/app/api/ingest/lake/route');
+    const res = await POST(new NextRequest('http://localhost/api/ingest/lake', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ action: 'import' }),
     }));
     expect(res.status).toBe(400);
   });
