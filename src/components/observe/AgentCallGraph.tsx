@@ -34,6 +34,12 @@ export interface AgentItem {
   // span 里其余部分就是休眠，画浅色。
   activeIntervals?: Array<{ start: number; end: number }>
   firstPrompt: string | null
+  /** run executions 收集器注入（AgentItem 超集）：Σ 指标卡消费 */
+  llmCallCount?: number
+  // run 级成员归因（run executions 收集器注入）：多成员时 root 按成员分道
+  //（成员 = 泳道）；isProxy 为该成员会话行的 proxy 判定（run 级可能混布）。
+  // session 视图缺省 null——root 单道、proxy 走 isProxy prop，行为不变。
+  member?: { taskId: string; label: string | null; isProxy?: boolean } | null
 }
 
 export interface BridgeItem {

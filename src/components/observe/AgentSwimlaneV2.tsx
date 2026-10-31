@@ -7,10 +7,10 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// Agent Swimlane V2（与旧块 AgentCallGraph 并排对比）：
+// Agent Swimlane V2（Perf 页执行时间线；与旧块 AgentCallGraph 同族）：
 // ①并发槽位数 = 当前可见集合的真实最大并发（旧块固定 5 槽）
 // ②底部图例 = 子代理类型（resolveSubagentIdentity 唯一入口）可勾选过滤
-// ③点击泳道内两点测时距（第三次点击重置）
+// ③点击泳道内两点测时距（第三次点击重置）；双击条子跳转（member 归因随行）
 import { useMemo, useState, useCallback, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardAction } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -67,12 +67,6 @@ function computeTickInterval(totalMs: number): number {
   }
   return Math.ceil(totalMs / 6 / D) * D
 }
-function fmtTick(ms: number): string {
-  if (ms >= 3_600_000 && ms % 3_600_000 === 0) return `${Math.round(ms / 3_600_000)}h`
-  if (ms >= 60_000) return `${Math.round(ms / 60_000)}m`
-  if (ms >= 1000) return `${Math.round(ms / 1000)}s`
-  return `${ms}`
-}
 
 interface Span {
   agent: AgentItem
@@ -108,7 +102,7 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
   agents: AgentItem[]
   bridges: BridgeItem[]
   isProxy?: boolean
-  onViewTurns?: (agentSessionId: string | null, sinceMs?: number) => void
+  onViewTurns?: (agentSessionId: string | null, sinceMs?: number, memberTaskId?: string | null) => void
   lanes?: string[]
   lanesInferred?: boolean
 }) {
@@ -157,13 +151,15 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
     return map
   }, [bridges])
 
-  // 身份唯一入口：类型（泳道条配色/图例/浮窗）+ 步骤（浮窗第二行）
+  // 身份唯一入口：类型（泳道条配色/图例/浮窗）+ 步骤（浮窗第二行）。
+  // isProxy 按 agent 的成员归因判定（run 级成员可能混布 proxy/native），缺省
+  // 回落 prop（session 视图）
   const identityOf = useCallback((a: AgentItem) =>
     a.isSubagent && a.agentSessionId
       ? resolveSubagentIdentity({
           subagentName: a.agentName,
           bridge: bridgeBySessionId.get(a.agentSessionId)?.[0] ?? null,
-          isProxy,
+          isProxy: a.member?.isProxy ?? isProxy,
         })
       : null, [bridgeBySessionId, isProxy])
   const keyOf = useCallback((a: AgentItem): string =>
@@ -221,11 +217,28 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
     return m
   }, [visible, thresholdMs])
 
-  const rootSpans = useMemo<Span[]>(() =>
-    visibleSorted.filter(a => !a.isSubagent).map(a => {
+  // root 泳道（run 级成员分组）：多成员时每个成员一条道（成员 = 泳道，run
+  // 的设计单元），按最早 span 排序；单成员/无归因（session 视图与 solo run）
+  // 合并为 root 单道——与 session 页逐像素一致
+  const rootLanes = useMemo<Array<{ key: string; label: string; spans: Span[] }>>(() => {
+    const groups = new Map<string, { label: string; spans: Span[] }>()
+    for (const a of visibleSorted.filter(x => !x.isSubagent)) {
       const sp = spanOf(a)
-      return { agent: a, start: sp.start, end: sp.end, key: a.executionId }
-    }), [visibleSorted, spanOf])
+      const mk = a.member?.taskId ?? 'root'
+      let g = groups.get(mk)
+      if (!g) {
+        g = { label: mk === 'root' ? 'root' : (a.member?.label ?? mk), spans: [] }
+        groups.set(mk, g)
+      }
+      g.spans.push({ agent: a, start: sp.start, end: sp.end, key: a.executionId })
+    }
+    const list = [...groups.entries()].map(([key, g]) => ({ key, label: g.label, spans: g.spans }))
+    if (list.length <= 1) {
+      return [{ key: 'root', label: 'root', spans: list.flatMap(l => l.spans) }]
+    }
+    return list.sort((a, b) =>
+      Math.min(...a.spans.map(s => s.start)) - Math.min(...b.spans.map(s => s.start)))
+  }, [visibleSorted, spanOf])
 
   // 子代理条：会话被多次派发（首发+返工）时按派发拆条——各根区间取该次桥的
   // dispatch→response，返工的时间位置/时长/状态独立可见；仅一次派发或缺时间戳
@@ -394,7 +407,7 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
             const sinceMs = span.bridge?.dispatchTimestamp
               ? new Date(span.bridge.dispatchTimestamp).getTime()
               : undefined
-            onViewTurns?.(span.agent.isSubagent ? span.agent.agentSessionId : null, sinceMs)
+            onViewTurns?.(span.agent.isSubagent ? span.agent.agentSessionId : null, sinceMs, span.agent.member?.taskId ?? null)
           }}
           onMouseEnter={(e) => handleMouseEnter(e, span)}
           onMouseLeave={handleMouseLeave}
@@ -415,10 +428,12 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
   }
 
   return (
-    <Card size="sm">
+    <Card size="sm" className="rounded-2xl ring-foreground/[0.06] shadow-[0_1px_2px_rgba(0,0,0,0.03),0_12px_32px_-20px_rgba(0,0,0,0.22)]">
       <CardHeader>
-        <CardTitle>Agent Swimlane ({agents.length}) · 最大并发 {maxConcurrency}{lanesInferred && lanes.length > 0
-          && <span className="ml-1 text-[10px] font-normal text-muted-foreground">(车道按内容推断)</span>}</CardTitle>
+        <CardTitle>
+          Agent Swimlane ({agents.length} · 子代理 {agents.filter(a => a.isSubagent).length}) · 最大并发 {maxConcurrency}{lanesInferred && lanes.length > 0
+            && <span className="ml-1 text-[10px] font-normal text-muted-foreground">(车道按内容推断)</span>}
+        </CardTitle>
         <CardAction>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1">
@@ -452,14 +467,16 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
             <div className="shrink-0" style={{ width: LANE_LABEL_WIDTH }}>
               <div className="h-[20px]" />
               <div className="h-px bg-border" />
-              <div className="flex flex-col items-center justify-center text-[10px] font-bold border-r-2 leading-tight px-1.5"
-                style={{ height: laneH(rootSpans.length), backgroundColor: "#3b82f620", borderColor: "#3b82f6", color: "#3b82f6" }}>
-                <span className="break-all text-center">root</span>
-              </div>
+              {rootLanes.map(lane => (
+                <div key={lane.key} className="flex flex-col items-center justify-center text-[10px] font-bold border-r-2 leading-tight px-1.5"
+                  style={{ height: laneH(lane.spans.length), backgroundColor: "#3b82f620", borderColor: "#3b82f6", color: "#3b82f6" }}>
+                  <span className="w-full truncate text-center" title={lane.label}>{lane.label}</span>
+                </div>
+              ))}
               {slots.map((lane, i) => (
                 <div key={i} className="flex flex-col items-center justify-center text-[10px] font-bold border-r-2 leading-tight px-1.5"
                   style={{ height: laneH(1), backgroundColor: "#94a3b812", borderColor: "#94a3b8", color: "#94a3b8" }}>
-                  <span className="break-all text-center">{slotLabels[i] ?? `slot${i + 1}`}</span>
+                  <span className="w-full truncate text-center" title={slotLabels[i] ?? `slot${i + 1}`}>{slotLabels[i] ?? `slot${i + 1}`}</span>
                 </div>
               ))}
             </div>
@@ -499,24 +516,26 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
                   ))}
                 </div>
                 <div className="h-px bg-border" />
-                <div className="relative border-b" style={{ height: laneH(rootSpans.length) }} onClick={handlePlotClick} data-lane="root">
-                  {ticks.filter(t => t.pct > 0 && t.pct < 100).map((t, i) => (
-                    <div key={i} className="absolute top-0 h-full w-px bg-border/20" style={{ left: `${t.pct}%` }} />
-                  ))}
-                  {measure && measure.a.pct > 0 && (
-                    <div className="absolute top-0 h-full border-l border-dashed border-rose-500" style={{ left: `${measure.a.pct}%` }} />
-                  )}
-                  {measure?.b && measure.b.pct > 0 && (
-                    <div className="absolute top-0 h-full border-l border-dashed border-rose-500" style={{ left: `${measure.b.pct}%` }} />
-                  )}
-                  {measure?.b && (
-                    <div className="absolute top-0 h-full bg-rose-500/10" style={{
-                      left: `${Math.min(measure.a.pct, measure.b.pct)}%`,
-                      width: `${Math.abs(measure.b.pct - measure.a.pct)}%`,
-                    }} />
-                  )}
-                  {rootSpans.map(s => renderBar(s, ((s.start - globalStartMs) / totalDuration) * 100, Math.max(0.15, ((s.end - s.start) / totalDuration) * 100)))}
-                </div>
+                {rootLanes.map(lane => (
+                  <div key={lane.key} className="relative border-b" style={{ height: laneH(lane.spans.length) }} onClick={handlePlotClick} data-lane={lane.key}>
+                    {ticks.filter(t => t.pct > 0 && t.pct < 100).map((t, i) => (
+                      <div key={i} className="absolute top-0 h-full w-px bg-border/20" style={{ left: `${t.pct}%` }} />
+                    ))}
+                    {measure && measure.a.pct > 0 && (
+                      <div className="absolute top-0 h-full border-l border-dashed border-rose-500" style={{ left: `${measure.a.pct}%` }} />
+                    )}
+                    {measure?.b && measure.b.pct > 0 && (
+                      <div className="absolute top-0 h-full border-l border-dashed border-rose-500" style={{ left: `${measure.b.pct}%` }} />
+                    )}
+                    {measure?.b && (
+                      <div className="absolute top-0 h-full bg-rose-500/10" style={{
+                        left: `${Math.min(measure.a.pct, measure.b.pct)}%`,
+                        width: `${Math.abs(measure.b.pct - measure.a.pct)}%`,
+                      }} />
+                    )}
+                    {lane.spans.map(s => renderBar(s, ((s.start - globalStartMs) / totalDuration) * 100, Math.max(0.15, ((s.end - s.start) / totalDuration) * 100)))}
+                  </div>
+                ))}
                 {slots.map((lane, i) => (
                   <div key={i} className="relative border-b last:border-b-0" style={{ height: laneH(1) }} onClick={handlePlotClick} data-lane={`slot-${i + 1}`}>
                     {ticks.filter(t => t.pct > 0 && t.pct < 100).map((t, ti) => (
