@@ -158,3 +158,51 @@ describe('reader：警告矩阵（容忍态，不阻断）', () => {
     expect(index.warnings.some(w => w.includes('exportDataComplete 缺失'))).toBe(true);
   });
 });
+
+describe('reader：存量旧格式兼容读（annotation.graph / annotation.type）', () => {
+  // 存量 run 落盘件是旧格式（graph 注解整体在 annotation.graph、关系类型在
+  // annotation.type）。导入闸只认新格式（随包 schema 哈希），但已落盘的 run
+  // 仍经 parseManifest 读取——顶层定位字段缺失时回退旧位，图视图不降级。
+  const legacy: unknown = {
+    schema: 'cannbot.workflow-bundle', version: 1, id: 'legacy-run', kind: 'workflow',
+    name: '旧格式存量 run', startedAt: null, finishedAt: null,
+    data: {
+      exportDataComplete: true,
+      members: [
+        {
+          id: 'm_exec', kind: 'session', name: 'build 执行', startedAt: null, finishedAt: null,
+          sessionId: 'ses_legacy_exec', location: 'sessions/ses_legacy_exec',
+          annotation: { graph: { nodeId: 'build', generation: 0, attempt: 1, role: 'execute', executionState: 'executed' } },
+        },
+        {
+          id: 'm_verify', kind: 'session', name: 'build 验收', startedAt: null, finishedAt: null,
+          sessionId: 'ses_legacy_verify', location: 'sessions/ses_legacy_verify',
+          annotation: { graph: { nodeId: 'build', generation: 0, attempt: 1, role: 'verify' } },
+        },
+        { id: 'm_pack', kind: 'process', name: '打包', startedAt: null, finishedAt: null, output: { text: 'done' } },
+      ],
+      relations: [
+        { from: 'm_exec', to: 'm_verify', annotation: { type: 'depends_on' } },
+      ],
+    },
+  };
+
+  it('annotation.graph 成员进 graphMembers（五键归一），会话成员照常进观测面', () => {
+    const index = parseAndIndex(legacy);
+    expect(index.graphMembers).toHaveLength(2);
+    const exec = index.graphMembers.find(m => m.member.id === 'm_exec')!;
+    expect(exec.graph!.nodeId).toBe('build');
+    expect(exec.graph!.role).toBe('execute');
+    expect(index.sessionMembers).toHaveLength(2);
+  });
+
+  it('view-model 消费旧格式关系（annotation.type）与图注解——图视图不降级', async () => {
+    const { buildViewModel } = await import('@/lib/run/view-model');
+    const vm = buildViewModel(parseAndIndex(legacy));
+    expect(vm.nodes).toHaveLength(1); // (build, gen 0) 单节点
+    expect(vm.nodes[0].attempts).toHaveLength(1); // attempt 1：execute 记录携带 verify
+    expect(vm.nodes[0].attempts[0].executeMember.memberId).toBe('m_exec');
+    expect(vm.nodes[0].attempts[0].verifyMember!.memberId).toBe('m_verify');
+    expect(vm.nodes[0].predecessorKeys).toEqual([]);
+  });
+});
