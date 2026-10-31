@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
+import { sessionViewUrlFor, type ViewUrlFor } from "@/lib/observe/member-url"
 import { auditKindsForEvents, MAIN_AGENT_WORKFLOW_NAME, isDispatchOnlyAgent } from "@/lib/sift-audit"
 import { SkillCharts } from "@/components/observe/SkillCharts"
 import { SkillCoverageCard } from "@/components/observe/SkillCoverageCard"
@@ -32,6 +33,8 @@ interface SessionSkillItem {
   skillName: string
   version: number | null
   invocationCount: number
+  /** 使用成员标签（run 合并视图归因；session 不带 → 行为零变化） */
+  members?: string[]
 }
 
 interface SkillEventItem {
@@ -77,6 +80,8 @@ interface SkillDetailProps {
   /** 跳转到 Audit 板块的 Skill 子 tab 并预选该 {name, kind} 进行对账。按行 eventType+isSubagent 路由 kind。 */
   onAuditSkill?: (skillName: string, kind: "skill" | "agent" | "root" | "llm-root") => void
   framework?: string
+  /** run 工作台挂载时的成员视图端点覆盖（缺省 session 端点）。 */
+  urlFor?: ViewUrlFor
 }
 
 const EVENT_TYPE_BADGE: Record<string, "blue" | "green" | "orange" | "gray"> = {
@@ -102,11 +107,11 @@ function formatTokens(n: number): string {
 /** 模块级缓存：taskId → LLM 提取状态。切 tab 不 re-fetch，切 session 才重取。 */
 const llmExtractCache = new Map<string, { loading: boolean; content: string | null; source: string | null; error: string | null }>();
 
-export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWorkflow, mainAgentWorkflowName, mainAgentWorkflowStats, onNavigateToTurn, onAuditSkill, framework }: SkillDetailProps) {
+export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWorkflow, mainAgentWorkflowName, mainAgentWorkflowStats, onNavigateToTurn, onAuditSkill, framework, urlFor }: SkillDetailProps) {
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set())
-  const sc = useSkillContent(taskId)
+  const sc = useSkillContent(taskId, urlFor)
   // agent .md 全文用独立实例（磁盘扫描），与 skill SKILL.md（session 注入）分桶，避免同名覆盖。
-  const scAgent = useSkillContent(taskId)
+  const scAgent = useSkillContent(taskId, urlFor)
   // LLM 提取组合声明（泛化路径：候选收集 + LLM 选择 + 共享装配）：不自动触发，点「提取」才跑。
   const cached = llmExtractCache.get(taskId)
   const [llmLoading, setLlmLoading] = useState(cached ? cached.loading : false)
@@ -115,10 +120,7 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
   const [llmError, setLlmError] = useState<string | null>(cached ? cached.error : null)
 
   /** 点击「提取/重试」按钮：启动 LLM 组合声明提取 + 轮询（不自动触发，只在用户点击时跑）。
-   * force=true（重试）：丢弃已失败的缓存，首发请求带 restart=1 让服务端重启失败的 job。
-   * restart=1 只随首发请求走；后续轮询一律 restart=0——若轮询也带 restart=1，
-   * 每次轮询都会重启已 settle 的失败 job，且响应恰是重启瞬间的 loading:true，
-   * 失败态永远轮不到（表现为「提取中…」无限转圈、服务端每 5s 重 spawn CLI）。 */
+   * force=true（重试）：丢弃已失败的缓存，带 restart=1 让服务端重启失败的 job。 */
   function fetchLlmWorkflow(force = false) {
     const cached = llmExtractCache.get(taskId)
     if (!force) {
@@ -144,15 +146,12 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
 
     let timer: ReturnType<typeof setTimeout>
     let active = true
-    // 重试意图（restart=1）只表达在首发请求；进入轮询后即清零（见函数头注释）。
-    let first = true
 
     const poll = async () => {
       try {
         const r = await fetch(
-          `/api/observe/session/llm-workflow-extract?taskId=${encodeURIComponent(taskId)}&framework=${encodeURIComponent(framework ?? "")}&restart=${force && first ? "1" : "0"}`
+          (urlFor ?? sessionViewUrlFor)(`llm-workflow-extract?taskId=${encodeURIComponent(taskId)}&framework=${encodeURIComponent(framework ?? "")}&restart=${force ? "1" : "0"}`)
         )
-        first = false
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const d = await r.json()
         if (!active) return
@@ -205,6 +204,8 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
       skillName: string
       version: number | null
       invocationCount: number
+      /** 使用成员标签（run 合并视图归因；session 不带 → 不渲染徽标） */
+      members?: string[]
       totalEvents: number
       successCount: number
       failCount: number
@@ -234,6 +235,7 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
       byName.set(ss.skillName, {
         skillName: ss.skillName,
         version: ss.version ?? events[0]?.skillVersion ?? null,
+        members: ss.members,
         invocationCount: ss.invocationCount,
         totalEvents: events.length,
         successCount,
@@ -296,9 +298,9 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
         </span>
       </div>
 
-      <SkillCoverageCard taskId={taskId} framework={framework} />
+      <SkillCoverageCard taskId={taskId} framework={framework} urlFor={urlFor} />
 
-      <SkillCharts taskId={taskId} skillEvents={chartSkillEvents} />
+      <SkillCharts taskId={taskId} skillEvents={chartSkillEvents} urlFor={urlFor} />
 
       <Card size="sm">
         <CardHeader>
@@ -565,7 +567,18 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                       </span>
                     </TableCell>
                     <TableCell className="text-xs font-medium truncate max-w-[20ch]">
-                      {sa.skillName}
+                      <div className="flex flex-col gap-0.5">
+                        <span className="truncate" title={sa.skillName}>{sa.skillName}</span>
+                        {sa.members && sa.members.length > 0 ? (
+                          <span className="flex flex-wrap gap-1">
+                            {sa.members.map(m => (
+                              <span key={m} className="inline-flex items-center rounded border border-black/10 bg-black/[0.03] px-1 text-[10px] leading-4 text-[#57606a]" title={m}>
+                                {m}
+                              </span>
+                            ))}
+                          </span>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="text-xs">{sa.version != null ? `v${sa.version}` : "N/A"}</TableCell>
                     <TableCell className="text-xs tabular-nums">{sa.invocationCount}</TableCell>
@@ -877,6 +890,7 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
       <SkillContentAudit
         taskId={taskId}
         skillNames={skillNames}
+        urlFor={urlFor}
         onView={(skillName) => {
           if (!expandedSkills.has(skillName)) {
             setExpandedSkills(prev => new Set(prev).add(skillName))

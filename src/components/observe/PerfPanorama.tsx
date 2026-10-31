@@ -1,51 +1,44 @@
 "use client"
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// This program is free software; you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// You may refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { useEffect, useMemo, useState } from "react"
-import { resolveSubagentIdentity } from "@/lib/subagent-identity"
-import {
-  PerfTopTable, PerfBenchmarkChart,
-  type SubagentStat, type TurnPerf, type BridgePerf,
-} from "./perf-shared"
+// Perf 全景（run 视角）：画像（时间与 Token 构成——总量瓦片归 Overview，
+// 不复读）→ 执行时间线（AgentSwimlaneV2，自 Overview 迁入——真实时间轴/
+// 并发/空档是时间维度的唯一视图，量级对比由热点排行承接，不再摆执行序
+// 列柱状图）→ 热点排行（PerfLaneList）→ 效率分布。取数恒为 run 合并端点
+// （executions / turns / bridges / lanes 镜像形状），无会话隔离；定位出口
+// 唯一收敛到 turnId（时间线条子/热点行/效率柱 → 泳道首轮），由装配层接
+// Turns 深链管线。
 
-interface ExecItem {
-  executionId: string
-  agentName: string | null
-  isSubagent: boolean
-  subagentName: string | null
-  agentSessionId: string | null
-  depth: number
-  tokens: number
-  inputTokens: number
-  outputTokens: number
-  reasoningTokens: number
-  cacheReadInputTokens: number
-  cacheCreationInputTokens: number
-  cost: number
-  latencyMs: number
-  toolCallCount: number
-  toolCallErrorCount: number
-  llmCallCount: number
-  model: string | null
-  createdAt: string
-  /** 桥 join 解析出的子代理类型（resolveSubagentIdentity 唯一入口）；
-   *  原生形态 subagentName 泛化（全体 "design"），真类型在桥里 */
-  subagentType?: string | null
-  /** 派发内容（桥 dispatchContent，悬停展示用） */
-  dispatchContent?: string | null
-}
+import { useEffect, useMemo, useState } from "react"
+import {
+  PerfBenchmarkChart, perfEntrance, PERF_CARD_CLS, PERF_CARD_SM,
+  fmtMs, fmtTok, TOKEN_COLORS,
+  type TurnPerf, type BridgePerf, type ExecItem, type PerfLaneStat, type LaneExec,
+} from "./perf-shared"
+import { PerfLaneList } from "./PerfLaneList"
+import { AgentSwimlaneV2 } from "./AgentSwimlaneV2"
+import type { AgentItem, BridgeItem } from "./AgentCallGraph"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 interface Props {
-  taskId: string
-  framework?: string
-  onJumpToTurn?: (turn: number) => void
-  onJumpToSubagent?: (agentSessionId: string) => void
+  /** run 合并端点（executions / turns / bridges / lanes，返回形状镜像） */
+  endpoints: { executions: string; turns: string; bridges: string; lanes?: string }
+  /** 定位出口：统一收敛到 turnId（Turns 深链管线入态） */
+  onOpenTurn?: (turnId: string) => void
+  /** 时间线载荷直供（离线导出查看器）：提供时时间线卡与跳转解析免请求渲染 */
+  swimlanePayload?: {
+    agents: AgentItem[]
+    bridges: BridgeItem[]
+    lanes?: string[]
+    /** 跳转解析用轮次（载荷直供时优先于端点取数） */
+    turns?: TurnPerf[]
+  } | null
 }
 
 interface PerfModel {
@@ -57,135 +50,13 @@ interface PerfModel {
   totalReasoning: number
   totalCacheRead: number
   totalCacheWrite: number
-  totalCompute: number
   totalWall: number
   totalLlmCapped: number
   totalNonLlm: number
-  totalLlm: number
-  totalTools: number
-  totalToolErr: number
-  totalCost: number
-  cacheRatio: number
-  agentStats: [string, { count: number; tokens: number; ms: number; llm: number; tools: number }][]
   t0: number
 }
 
-// ── Color scheme (fixed per agent / token kind, never changes with rank) ──────
-const AGENT_COLORS: Record<string, string> = {
-  developer: "#4E79A7",
-  verifier: "#76B7B2",
-  "state-generator": "#B07AA1",
-  "req-analyst": "#F28E2B",
-  "req-verifier": "#FFBE7D",
-  "spec-generator": "#59A14F",
-  "spec-verifier": "#8CD17D",
-  designer: "#E15759",
-  "design-verifier": "#FF9D9A",
-  "design-task-generator": "#D37295",
-  "find-proto": "#FABFD2",
-  "opdef-developer": "#B6992D",
-  "blackbox-designer": "#499894",
-  "st-verifier": "#86BCB6",
-  "task-generator": "#9D7660",
-  "tiling-developer": "#D4A6C8",
-  "kernel-developer": "#79706E",
-}
-const DEFAULT_AGENT_COLOR = "#CCCCCC"
-const TOKEN_COLORS = {
-  input: "#4E79A7",
-  cacheRead: "#A0CBE8",
-  cacheWrite: "#F1CE63",
-  output: "#59A14F",
-}
-const C = {
-  axis: "#94a3b8",
-  grid: "#e2e8f0",
-  text: "#475569",
-  dur: "#4E79A7",
-  tok: "#59A14F",
-  danger: "#dc2626",
-}
-
-function agentColor(name: string | null) {
-  return AGENT_COLORS[name ?? ""] ?? DEFAULT_AGENT_COLOR
-}
-
-// ── Formatters ────────────────────────────────────────────────────────────────
-function fmtMs(ms: number): string {
-  if (ms <= 0) return "0s"
-  const s = ms / 1000
-  if (s < 60) return `${s.toFixed(1)}s`
-  const m = Math.floor(s / 60)
-  const rem = Math.round(s % 60)
-  if (m < 60) return `${m}m${rem.toString().padStart(2, "0")}s`
-  const h = Math.floor(m / 60)
-  return `${h}h${(m % 60).toString().padStart(2, "0")}m`
-}
-function fmtTok(n: number): string {
-  if (n === 0) return "0"
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return `${n}`
-}
-function fmtOffset(base: number, ts: string): string {
-  const t = new Date(ts).getTime()
-  if (!base || !t) return "—"
-  const d = Math.max(0, Math.floor((t - base) / 1000))
-  const h = Math.floor(d / 3600)
-  const m = Math.floor((d % 3600) / 60)
-  const s = d % 60
-  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`
-}
-
-// ── 横轴 agent 名宽度:拉丁 1 / CJK 2 计单位;- 与空格后断行,≤2 行,超宽 … ────
-const AXIS_NAME_MAX_UNITS = 12
-const AXIS_NAME_MAX_LINES = 2
-
-function textUnits(s: string): number {
-  let u = 0
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    u += (c >= 0x2e80 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xffef) ? 2 : 1
-  }
-  return u
-}
-
-function truncateUnits(s: string, maxUnits: number): string {
-  if (textUnits(s) <= maxUnits) return s
-  const chars = [...s]
-  let u = 0
-  let cut = 0
-  for (let i = 0; i < chars.length; i++) {
-    const cu = textUnits(chars[i])
-    if (u + cu > maxUnits - 1) break
-    u += cu
-    cut = i + 1
-  }
-  return chars.slice(0, cut).join("") + "…"
-}
-
-function wrapAxisName(name: string): string[] {
-  const pieces = name.split(/(?<=[- ])/)
-  const lines: string[] = []
-  let cur = ""
-  for (const p of pieces) {
-    if (cur && textUnits(cur + p) > AXIS_NAME_MAX_UNITS) {
-      lines.push(cur)
-      cur = p
-    } else {
-      cur += p
-    }
-  }
-  if (cur) lines.push(cur)
-  const out = lines.slice(0, AXIS_NAME_MAX_LINES).map(l => truncateUnits(l, AXIS_NAME_MAX_UNITS))
-  if (lines.length > AXIS_NAME_MAX_LINES) {
-    const t = truncateUnits(out[out.length - 1], AXIS_NAME_MAX_UNITS - 1)
-    out[out.length - 1] = t.endsWith("…") ? t : `${t}…`
-  }
-  return out
-}
-
-// ── Wall-clock timeline slices: each task owns start→next-start ───────────────
+// ── 墙钟切片：每个执行占 start→next-start（末条回落自身 latency） ────────────
 function computeWallSlices(subtasks: ExecItem[]): number[] {
   const starts = subtasks.map(r => new Date(r.createdAt).getTime())
   const slices: number[] = []
@@ -199,64 +70,88 @@ function computeWallSlices(subtasks: ExecItem[]): number[] {
   return slices
 }
 
-export function PerfPanorama({ taskId, framework, onJumpToTurn, onJumpToSubagent }: Props) {
+const DUR_LLM = "#6366f1"
+const DUR_NONLLM = "#f59e0b"
+
+export function PerfPanorama({ endpoints, onOpenTurn, swimlanePayload }: Props) {
   const [items, setItems] = useState<ExecItem[] | null>(null)
   const [turns, setTurns] = useState<TurnPerf[] | null>(null)
   const [bridges, setBridges] = useState<BridgePerf[]>([])
+  const [laneTable, setLaneTable] = useState<string[]>([])
+  const [laneTableInferred, setLaneTableInferred] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [includeRoot, setIncludeRoot] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    const params = new URLSearchParams({ taskId })
-    if (framework) params.set("framework", framework)
+    const fetchJson = (url: string) => fetch(url).then(r => r.json())
+    const lanesP = endpoints.lanes
+      ? fetchJson(endpoints.lanes).catch(() => null)
+      : Promise.resolve(null)
     Promise.all([
-      fetch(`/api/observe/executions?${params}`).then(r => r.json()),
-      fetch(`/api/observe/session/turns?${params}`).then(r => r.json()),
-      fetch(`/api/observe/session/bridges?${params}`).then(r => r.json()),
+      fetchJson(endpoints.executions),
+      fetchJson(endpoints.turns),
+      fetchJson(endpoints.bridges),
+      lanesP,
     ])
-      .then(([execData, turnsData, bridgesData]) => {
+      .then(([execData, turnsData, bridgesData, lanesData]) => {
         if (cancelled) return
         setItems(execData.items ?? [])
         setTurns(turnsData.items ?? [])
         setBridges(bridgesData.items ?? [])
+        setLaneTable(Array.isArray(lanesData?.lanes) ? lanesData.lanes : [])
+        setLaneTableInferred(lanesData?.source === "inferred")
         setLoading(false)
       })
       .catch(() => {
         if (cancelled) return
         setItems(null)
+        setTurns(null)
         setLoading(false)
       })
     return () => { cancelled = true }
-  }, [taskId, framework])
+  }, [endpoints])
 
-  // perf top + 性能效率:per-subagent stats + per-root-turn TPS/TPOT series,
-  // ported from PerfPanorama (turn-level, independent of execution wall-slice math).
-  const perfTop = useMemo<{ subagents: SubagentStat[]; perfSeries: { turnIndex: number; createdAt: string | null; tpot: number; tps: number }[] }>(() => {
-    if (!turns || turns.length === 0) return { subagents: [], perfSeries: [] }
-    const rootTurns = turns.filter(t => !t.isSubagent)
-    const subTurns = turns.filter(t => t.isSubagent)
+  // 时间线数据：载荷直供（离线导出）优先，线上回落同源端点取数
+  const swimAgents: AgentItem[] = swimlanePayload?.agents ?? items ?? []
+  const swimBridges: BridgeItem[] = swimlanePayload?.bridges ?? bridges
+  const swimLanes: string[] = swimlanePayload?.lanes ?? laneTable
+
+  // 热点排行模型（run 观测基础单元）：子代理轮按 subagentSessionId 归组
+  //（owner = 父成员）；成员 root 轮按成员归组（成员会话即一级单元）。
+  // firstTurnId = 该单元首个轮次（Turns 深链入态）。
+  const lanes = useMemo<PerfLaneStat[]>(() => {
+    if (!turns || turns.length === 0) return []
     const bridgeBySession = new Map(bridges.map(b => [b.subagentSessionId ?? "", b]))
-    const m = new Map<string, SubagentStat>()
-    for (const t of subTurns) {
-      const sid = t.subagentSessionId ?? "unknown"
-      const ex = m.get(sid) ?? {
-        // 主标题=派发步骤（API 已按 proxy/原生优先级解析），subagentName 仅兜底
-        sessionId: sid, name: t.dispatchStep ?? t.subagentName ?? "unknown",
-        subagentType: t.subagentType ?? null, taskDescription: null, turns: [],
-        totalMs: 0, totalTokens: 0, totalGenTokens: 0, tps: 0,
-        cacheRead: 0, inputTokens: 0, cacheHitRate: 0,
-      } as SubagentStat
+    const m = new Map<string, PerfLaneStat>()
+    for (const t of turns) {
+      const lane = t.isSubagent
+        ? {
+          laneId: t.subagentSessionId ?? "unknown",
+          kind: "subagent" as const,
+          // 主标题=派发步骤（API 已按 proxy/原生优先级解析），subagentName 仅兜底
+          name: t.dispatchStep ?? t.subagentName ?? "unknown",
+          owner: t.member?.label ?? t.member?.taskId ?? null,
+          subagentType: t.subagentType ?? null,
+        }
+        : t.member
+          ? { laneId: t.member.taskId, kind: "agent" as const, name: t.member.label ?? t.member.taskId, owner: null, subagentType: null }
+          : null
+      if (lane == null) continue
+      const ex = m.get(lane.laneId) ?? {
+        laneId: lane.laneId, kind: lane.kind, name: lane.name, owner: lane.owner,
+        subagentType: lane.subagentType, taskDescription: null, turns: [], totalMs: 0, totalTokens: 0, totalGenTokens: 0,
+        tps: 0, cacheRead: 0, inputTokens: 0, cacheHitRate: 0, firstTurnId: t.turnId,
+      }
       ex.turns.push(t)
       ex.totalMs += t.latencyMs
       ex.totalTokens += t.totalTokens
       ex.totalGenTokens += (t.outputTokens ?? 0) + (t.reasoningTokens ?? 0)
       ex.cacheRead += t.cacheReadTokens
       ex.inputTokens += t.inputTokens
-      m.set(sid, ex)
+      m.set(lane.laneId, ex)
     }
     for (const s of m.values()) {
-      const bridge = bridgeBySession.get(s.sessionId)
+      const bridge = bridgeBySession.get(s.laneId)
       const dc = bridge?.dispatchContent
       if (dc) {
         const cleaned = dc.replace(/[\n\r]+/g, " ").trim()
@@ -265,62 +160,32 @@ export function PerfPanorama({ taskId, framework, onJumpToTurn, onJumpToSubagent
       s.cacheHitRate = s.cacheRead + s.inputTokens > 0 ? (s.cacheRead / (s.cacheRead + s.inputTokens)) * 100 : 0
       s.tps = s.totalMs > 0 ? s.totalGenTokens / (s.totalMs / 1000) : 0
     }
-    const subagents = [...m.values()]
+    return [...m.values()]
+  }, [turns, bridges])
 
+  // 效率序列：主 agent 轮（root）TPS / TPOT，x 轴按轮次时刻呈现（真实
+  // 时间轴——turnIndex 是会话内局部序号，多成员混排不可作轴），排除压
+  // 缩/续写与派发轮；仅 assistant 轮（result 轮 tokens 恒 0，混入只会产
+  // tps=0/tpot=0 零值噪声点）
+  const perfSeries = useMemo(() => {
+    if (!turns || turns.length === 0) return []
+    const rootTurns = turns.filter(t => !t.isSubagent)
     const dispatchTurnIds = new Set(bridges.map(b => b.dispatchTurnId).filter(Boolean) as string[])
-    // 「含 root」勾选对 TopDown 同样生效：主 agent 的 assistant 轮聚合成一行
-    // 参与排序，口径与性能效率序列一致（剔 compaction/continuation、派发轮、
-    // 零时延轮）——无子代理的会话也能看到主 agent 的 turn 排序
-    // 性能效率曲线随之收窄为仅 assistant 轮（PR #140 review 点明）：result 轮
-    // tokens 恒 0（adapter result 分支不产 token usage），此前混入的 result 点
-    // 是 tps=0/tpot=0 零值噪声，属顺带修正
-    const rootStatTurns = rootTurns.filter(t =>
-      t.role === "assistant" && t.latencyMs > 0 &&
-      t.agentName !== "compaction" && t.agentName !== "continuation" &&
-      !dispatchTurnIds.has(t.turnId))
-    if (includeRoot && rootStatTurns.length > 0) {
-      const totalMs = rootStatTurns.reduce((s, t) => s + t.latencyMs, 0)
-      const totalTokens = rootStatTurns.reduce((s, t) => s + t.totalTokens, 0)
-      const totalGenTokens = rootStatTurns.reduce((s, t) => s + (t.outputTokens ?? 0) + (t.reasoningTokens ?? 0), 0)
-      const cacheRead = rootStatTurns.reduce((s, t) => s + t.cacheReadTokens, 0)
-      const inputTokens = rootStatTurns.reduce((s, t) => s + t.inputTokens, 0)
-      subagents.push({
-        sessionId: "root", name: "主 agent",
-        subagentType: null, taskDescription: null, turns: rootStatTurns,
-        totalMs, totalTokens, totalGenTokens,
-        tps: totalMs > 0 ? totalGenTokens / (totalMs / 1000) : 0,
-        cacheRead, inputTokens,
-        cacheHitRate: cacheRead + inputTokens > 0 ? (cacheRead / (cacheRead + inputTokens)) * 100 : 0,
-      })
-    }
-    const perfSeries = rootStatTurns
+    return rootTurns
+      .filter(t => t.role === "assistant" && t.latencyMs > 0 && t.agentName !== "compaction" && t.agentName !== "continuation" && !dispatchTurnIds.has(t.turnId))
       .map(t => {
         const gen = (t.outputTokens ?? 0) + (t.reasoningTokens ?? 0)
         const tpot = gen > 0 ? t.latencyMs / gen : 0
         const tps = t.latencyMs > 0 ? gen / (t.latencyMs / 1000) : 0
-        return { turnIndex: t.turnIndex, createdAt: t.createdAt, tpot, tps }
+        return { turnIndex: t.turnIndex, turnId: t.turnId, createdAt: t.createdAt, tpot, tps }
       })
-    return { subagents, perfSeries }
-  }, [turns, bridges, includeRoot])
+  }, [turns, bridges])
 
   const model = useMemo<PerfModel | null>(() => {
     if (!items || items.length === 0) return null
-    // 子代理身份唯一入口：按 agentSessionId ↔ 桥 join 出类型（与 Turns/
-    // 泳道同源），X 轴标签不再用泛化的 subagentName
-    const identityBySession = new Map<string, { subagentType: string | null; dispatchContent: string | null }>()
-    for (const b of bridges) {
-      if (b.subagentSessionId && !identityBySession.has(b.subagentSessionId)) {
-        identityBySession.set(b.subagentSessionId, {
-          subagentType: resolveSubagentIdentity({ bridge: b }).subagentType,
-          dispatchContent: b.dispatchContent?.replace(/[\n\r]+/g, ' ').trim() || null,
-        })
-      }
-    }
     const sub = items
-      .filter(r => includeRoot ? true : r.isSubagent)
       .slice()
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-      .map(r => ({ ...r, ...(r.agentSessionId ? identityBySession.get(r.agentSessionId) ?? { subagentType: null, dispatchContent: null } : { subagentType: null, dispatchContent: null }) }))
     if (sub.length === 0) return null
     const slices = computeWallSlices(sub)
     const totalTokens = sub.reduce((s, r) => s + r.tokens, 0)
@@ -329,454 +194,212 @@ export function PerfPanorama({ taskId, framework, onJumpToTurn, onJumpToSubagent
     const totalReasoning = sub.reduce((s, r) => s + r.reasoningTokens, 0)
     const totalCacheRead = sub.reduce((s, r) => s + r.cacheReadInputTokens, 0)
     const totalCacheWrite = sub.reduce((s, r) => s + r.cacheCreationInputTokens, 0)
-    const totalCompute = sub.reduce((s, r) => s + r.latencyMs, 0)
     const totalWall = slices.reduce((s, x) => s + x, 0)
-    // 逐任务钳制:LLM 耗时 = Σ min(latency, slice);LLM 外 = 总 - LLM。处处闭合。
+    // 逐任务钳制：LLM 耗时 = Σ min(latency, slice)；LLM 外 = 总 - LLM。处处闭合。
     const totalLlmCapped = sub.reduce((s, r, i) => s + Math.min(r.latencyMs, slices[i]), 0)
     const totalNonLlm = Math.max(0, totalWall - totalLlmCapped)
-    const totalLlm = sub.reduce((s, r) => s + r.llmCallCount, 0)
-    const totalTools = sub.reduce((s, r) => s + r.toolCallCount, 0)
-    const totalToolErr = sub.reduce((s, r) => s + r.toolCallErrorCount, 0)
-    const totalCost = sub.reduce((s, r) => s + (r.cost || 0), 0)
-    const cacheRatio = totalTokens > 0 ? ((totalCacheRead + totalCacheWrite) / totalTokens) * 100 : 0
-
-    const agentMap = new Map<string, { count: number; tokens: number; ms: number; llm: number; tools: number }>()
-    for (const r of sub) {
-      const k = r.agentName ?? "—"
-      const a = agentMap.get(k) ?? { count: 0, tokens: 0, ms: 0, llm: 0, tools: 0 }
-      a.count++; a.tokens += r.tokens; a.ms += r.latencyMs; a.llm += r.llmCallCount; a.tools += r.toolCallCount
-      agentMap.set(k, a)
-    }
-    const agentStats = [...agentMap.entries()].sort((a, b) => b[1].tokens - a[1].tokens)
 
     return {
       sub, slices,
       totalTokens, totalInput, totalOutput, totalReasoning, totalCacheRead, totalCacheWrite,
-      totalCompute, totalWall, totalLlmCapped, totalNonLlm,
-      totalLlm, totalTools, totalToolErr, totalCost, cacheRatio,
-      agentStats, t0: new Date(sub[0].createdAt).getTime(),
+      totalWall, totalLlmCapped, totalNonLlm,
+      t0: new Date(sub[0].createdAt).getTime(),
     }
-  }, [items, includeRoot, bridges])
+  }, [items])
 
-  if (loading) {
-    return <div className="rounded-lg border bg-card p-4 text-xs text-muted-foreground">加载中…</div>
+  // 执行切片按单元归组（全局序号与画像墙钟同口径）
+  const laneExecs = useMemo(() => {
+    const map = new Map<string, LaneExec[]>()
+    if (!model) return map
+    model.sub.forEach((exec, i) => {
+      const key = exec.isSubagent ? exec.agentSessionId : exec.member?.taskId ?? null
+      if (!key) return
+      const arr = map.get(key) ?? []
+      arr.push({ ord: i + 1, sliceMs: model.slices[i], exec })
+      map.set(key, arr)
+    })
+    return map
+  }, [model])
+
+  // 时间线跳转：子代理条 → 该会话首轮（多次派发时按派发时刻后定位）；
+  // root 条 → 该成员首轮。唯一出口 onOpenTurn(turnId)；解析用轮次载荷直供
+  // 优先（离线导出），线上回落端点取数
+  const jumpTurns = swimlanePayload?.turns ?? turns
+  const openSwimTurn = (agentSessionId: string | null, sinceMs?: number, memberTaskId?: string | null) => {
+    if (!onOpenTurn || !jumpTurns) return
+    if (agentSessionId) {
+      const subs = jumpTurns.filter(t => t.isSubagent && t.subagentSessionId === agentSessionId)
+      const first = sinceMs
+        ? subs.find(t => t.createdAt && new Date(t.createdAt).getTime() >= sinceMs) ?? subs[0]
+        : subs[0]
+      if (first) onOpenTurn(first.turnId)
+      return
+    }
+    const roots = memberTaskId
+      ? jumpTurns.filter(t => !t.isSubagent && t.member?.taskId === memberTaskId)
+      : jumpTurns.filter(t => !t.isSubagent)
+    if (roots[0]) onOpenTurn(roots[0].turnId)
   }
-  if (!model) {
+
+  if (loading) return <PerfSkeleton />
+
+  if (!model && lanes.length === 0 && swimAgents.length === 0) {
     return (
-      <div className="rounded-lg border bg-card p-4 text-xs text-muted-foreground space-y-1">
-        <div>暂无子代理 execution 数据</div>
-        <button
-          className="text-blue-600 dark:text-blue-400 underline cursor-pointer"
-          onClick={() => setIncludeRoot(true)}
-        >
-          勾选「含 root」查看主 agent 性能数据 →
-        </button>
-      </div>
+      <Card {...perfEntrance(0, PERF_CARD_SM)} size="sm">
+        <CardContent className="px-5 py-6 text-xs text-muted-foreground">暂无执行数据</CardContent>
+      </Card>
     )
   }
 
-  const cards = [
-    { label: "总耗时", value: fmtMs(model.totalWall), color: "text-rose-600", sub: `${model.sub.length} 子任务 · start→next` },
-    { label: "LLM 耗时", value: fmtMs(model.totalLlmCapped), color: "text-indigo-600", sub: `${model.totalLlm} 次 · Σ min(lat,slice)` },
-    { label: "LLM 外耗时", value: fmtMs(model.totalNonLlm), color: "text-amber-600", sub: `总-LLM · ${model.totalWall > 0 ? (model.totalNonLlm / model.totalWall * 100).toFixed(0) : 0}%` },
-    { label: "总 Tokens", value: fmtTok(model.totalTokens), color: "text-blue-600", sub: `工具 ${model.totalTools} (错 ${model.totalToolErr})` },
-    { label: "Cache 比率", value: `${model.cacheRatio.toFixed(1)}%`, color: "text-emerald-600", sub: `读+写 / 总量` },
-    { label: "总成本", value: model.totalCost > 0 ? `$${model.totalCost.toFixed(4)}` : "—", color: "", sub: "USD" },
-  ]
-
-  return (
-    <div className="rounded-lg border bg-card overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-2.5">
-        <h3 className="font-semibold text-sm">overview</h3>
-        <label className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
-          <input type="checkbox" checked={includeRoot} onChange={e => setIncludeRoot(e.target.checked)} className="size-3" />
-          含 root
-        </label>
-      </div>
-
-      <div className="p-4 pt-0 space-y-6">
-        {/* Summary cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
-            {cards.map(c => (
-              <div key={c.label} className="rounded border p-1.5 leading-tight">
-                <div className="text-xs text-muted-foreground">{c.label}</div>
-                <div className={`font-semibold text-base ${c.color}`}>{c.value}</div>
-                <div className="text-[10px] text-muted-foreground">{c.sub}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Token decomposition bar */}
-          <TokenBar
-            input={model.totalInput}
-            cacheRead={model.totalCacheRead}
-            cacheWrite={model.totalCacheWrite}
-            output={model.totalOutput}
-            reasoning={model.totalReasoning}
-          />
-
-          {/* duration + token charts */}
-          <TripleChart model={model} onJumpToSubagent={onJumpToSubagent} />
-
-          {/* perf top — Top 排序表（默认子代理；勾选「含 root」加入主 agent 行） */}
-          {perfTop.subagents.length > 0 && (
-            <div>
-              <h4 className="text-sm font-semibold text-muted-foreground mb-1.5">Perf TopDown</h4>
-              <PerfTopTable subagents={perfTop.subagents} onJumpToTurn={onJumpToTurn} includeRoot={includeRoot} />
-            </div>
-          )}
-
-          {/* 性能效率 — per-root-turn TPS / TPOT(自 PerfPanorama) */}
-          {perfTop.perfSeries.length > 1 && (
-            <div>
-              <h4 className="text-sm font-semibold text-muted-foreground mb-1.5">性能效率</h4>
-              <PerfBenchmarkChart points={perfTop.perfSeries} onJumpToTurn={onJumpToTurn} />
-            </div>
-          )}
-
-          {/* Agent type breakdown */}
-          <AgentTable agentStats={model.agentStats} totalTokens={model.totalTokens} totalCompute={model.totalCompute} totalLlm={model.totalLlm} totalTools={model.totalTools} />
-
-          {/* Task detail */}
-          <TaskDetail model={model} />
-        </div>
-    </div>
-  )
-}
-
-// ── Token decomposition stacked bar ──────────────────────────────────────────
-function TokenBar({ input, cacheRead, cacheWrite, output, reasoning }: {
-  input: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number
-}) {
-  const total = input + cacheRead + cacheWrite + output + reasoning || 1
-  const segs = [
-    { label: "Input (fresh)", v: input, c: TOKEN_COLORS.input },
-    { label: "Cache Read", v: cacheRead, c: TOKEN_COLORS.cacheRead },
-    { label: "Cache Write", v: cacheWrite, c: TOKEN_COLORS.cacheWrite },
-    { label: "Output", v: output, c: TOKEN_COLORS.output },
-    { label: "Reasoning", v: reasoning, c: "#8b5cf6" },
-  ]
-  return (
-    <div>
-      <div className="flex h-6 w-full rounded overflow-hidden border">
-        {segs.map(s => s.v > 0 && (
-          <div key={s.label} style={{ width: `${(s.v / total) * 100}%`, background: s.c }} className="h-full" title={`${s.label}: ${fmtTok(s.v)} (${(s.v / total * 100).toFixed(1)}%)`} />
-        ))}
-      </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5">
-        {segs.map(s => (
-          <span key={s.label} className="flex items-center gap-1.5 text-[10px]">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: s.c }} />
-            <span className="text-muted-foreground">{s.label}</span>
-            <span className="font-semibold tabular-nums">{fmtTok(s.v)}</span>
-            <span className="text-muted-foreground">({(s.v / total * 100).toFixed(1)}%)</span>
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── 横轴标签:#N(与 Task Detail 交叉引用)+ agent 名(按 agent 固定色,≤2 行) ──
-function AxisLabels({ sub, x, barW, baseY, onJumpToSubagent, keyPrefix }: {
-  sub: ExecItem[]
-  x: (i: number) => number
-  barW: number
-  baseY: number
-  onJumpToSubagent?: (agentSessionId: string) => void
-  keyPrefix: string
-}) {
-  return (
-    <>
-      {sub.map((r, i) => {
-        const jump = onJumpToSubagent && r.agentSessionId
-          ? () => onJumpToSubagent(r.agentSessionId!)
-          : undefined
-        const name = r.subagentType ?? r.subagentName ?? r.agentName ?? "—"
-        return (
-          <g key={`${keyPrefix}${i}`} onClick={jump} style={jump ? { cursor: "pointer" } : undefined}>
-            <title>{`${name}${r.dispatchContent ? `\n${r.dispatchContent}` : ""} — 点击跳转 Turns`}</title>
-            {wrapAxisName(name).map((ln, li) => (
-              <text key={li} x={x(i) + barW / 2} y={baseY + 18 + li * 9} textAnchor="middle" fontSize="8" fontWeight="600" fill={AGENT_COLORS[name] ?? undefined} className="fill-foreground">{ln}</text>
-            ))}
-          </g>
-        )
-      })}
-    </>
-  )
-}
-
-// ── charts: task duration (stacked 总耗时=LLM+LLM外) + stacked tokens ───────
-function TripleChart({ model, onJumpToSubagent }: { model: PerfModel; onJumpToSubagent?: (agentSessionId: string) => void }) {
-  const { sub, slices } = model
-  const n = sub.length
-
-  // 列距留足横轴 agent 名(≤2 行)空间,避免相邻标签重叠
-  const barW = 30
-  const gap = 28
-  const padL = 44, padR = 12, padT = 16, padB = 48
-  const W = Math.max(600, padL + padR + n * (barW + gap))
-  const chartH = 180
-  // Panel 1 + Panel 2 share one SVG; height must cover both (Panel 2 is
-  // translated below Panel 1, so it was being clipped when height == p1H only).
-  const p1H = padT + chartH + padB
-  const p2PadT = 16, p2PadB = 48
-  const p2H = p2PadT + chartH + p2PadB
-
-  // 总耗时(wall) = start→next 切片; LLM 耗时 = min(latency, wall)(逐任务钳制); LLM 外 = 总-LLM
-  const wall = slices.map(ms => ms / 1000)
-  const llm = sub.map((r, i) => Math.min(r.latencyMs, slices[i]) / 1000)
-  const nonLlm = sub.map((_, i) => Math.max(0, wall[i] - llm[i]))
-
-  const tokIn = sub.map(r => r.inputTokens)
-  const tokCr = sub.map(r => r.cacheReadInputTokens)
-  const tokCw = sub.map(r => r.cacheCreationInputTokens)
-  const tokOut = sub.map(r => r.outputTokens)
-  const tokTot = sub.map(r => r.tokens)
-
-  const dmax = Math.max(...wall, 1)
-  const tmax = Math.max(...tokTot, 1)
-
-  const x = (i: number) => padL + i * (barW + gap) + gap / 2
-  const yDur = (v: number) => padT + chartH - (v / dmax) * chartH
-
-  const DUR_LLM = "#6366f1"      // LLM 耗时
-  const DUR_NONLLM = "#f59e0b"   // LLM 外耗时
-
   return (
     <div className="space-y-4">
-      {/* Task Duration chart — 总耗时 = LLM 耗时 + LLM 外耗时 (stacked) */}
-      <div className="rounded border p-3 bg-muted/5">
-        <div className="flex items-center gap-4 mb-1.5">
-          <h4 className="text-sm font-semibold text-muted-foreground">Task Duration</h4>
-          {/* legend 放卡片头右上(HTML):不占 svg 底部,避免与横轴 agent 名冲突;宽图滚动时也始终可见 */}
-          <div className="ml-auto flex items-center gap-3">
-            {[
-              { l: "LLM 耗时", c: DUR_LLM },
-              { l: "LLM 外耗时", c: DUR_NONLLM },
-            ].map(s => (
-              <span key={s.l} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: s.c }} />
-                {s.l}
-              </span>
-            ))}
+      {model && <ProfileCard model={model} />}
+      {swimAgents.length > 0 && (
+        <div {...perfEntrance(75)}>
+          <AgentSwimlaneV2
+            agents={swimAgents}
+            bridges={swimBridges}
+            lanes={swimLanes}
+            lanesInferred={laneTableInferred}
+            onViewTurns={openSwimTurn}
+          />
+        </div>
+      )}
+      {lanes.length > 0 && (
+        <PerfLaneList
+          lanes={lanes}
+          laneExecs={laneExecs}
+          t0={model?.t0 ?? 0}
+          onOpenTurn={onOpenTurn}
+        />
+      )}
+      {perfSeries.length > 1 && (
+        <Card {...perfEntrance(225, PERF_CARD_SM)} data-testid="perf-benchmark-card" size="sm">
+          <CardHeader>
+            <CardTitle>效率分布</CardTitle>
+            <span className="self-center text-[11px] text-muted-foreground">主 agent 轮 TPS / TPOT · 真实时间轴 · 悬停看数值</span>
+          </CardHeader>
+          <CardContent>
+            <PerfBenchmarkChart points={perfSeries} />
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+// ── 运行画像（两区头卡，发丝分隔）：墙钟 hero（LLM/LLM 外时间构成）→
+//    Token 构成。总量类指标（Tokens/Cost/LLM 调用/工具调用）不在此重复——
+//    Overview Σ瓦片单一源，Perf 只摆分解与比率 ─────────────────────────────
+function ProfileCard({ model }: { model: PerfModel }) {
+  const llmPct = model.totalWall > 0 ? (model.totalLlmCapped / model.totalWall * 100) : 0
+  const tokTotal = model.totalInput + model.totalCacheRead + model.totalCacheWrite + model.totalOutput + model.totalReasoning || 1
+  const tokSegs = [
+    { label: "输入", v: model.totalInput, c: TOKEN_COLORS.input },
+    { label: "缓存读", v: model.totalCacheRead, c: TOKEN_COLORS.cacheRead },
+    { label: "缓存写", v: model.totalCacheWrite, c: TOKEN_COLORS.cacheWrite },
+    { label: "输出", v: model.totalOutput, c: TOKEN_COLORS.output },
+    { label: "推理", v: model.totalReasoning, c: TOKEN_COLORS.reasoning },
+  ]
+  return (
+    <Card {...perfEntrance(0, PERF_CARD_CLS)} data-testid="perf-profile-card">
+      <CardContent className="px-5 pt-4 pb-4">
+        <div className="divide-y divide-foreground/[0.06]">
+          {/* 区一：墙钟 hero + LLM/LLM 外构成条 */}
+          <div className="flex flex-wrap items-end gap-x-8 gap-y-3 pb-3.5">
+            <div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-[13px] font-semibold">运行画像</span>
+                <span className="text-[11px] text-muted-foreground">{model.sub.length} 个执行切片 · 全成员融合</span>
+              </div>
+              <div className="mt-1 text-[11px] text-muted-foreground">总耗时（墙钟）</div>
+              <div className="text-[26px] font-semibold leading-tight tabular-nums">{fmtMs(model.totalWall)}</div>
+            </div>
+            <div className="min-w-[240px] flex-1">
+              <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full transition-[width] duration-500 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]"
+                  style={{ width: `${llmPct}%`, background: DUR_LLM }}
+                />
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] tabular-nums">
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2 rounded-sm" style={{ background: DUR_LLM }} />
+                  LLM {fmtMs(model.totalLlmCapped)} · {llmPct.toFixed(0)}%
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2 rounded-sm" style={{ background: DUR_NONLLM }} />
+                  LLM 外 {fmtMs(model.totalNonLlm)} · {(100 - llmPct).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+          </div>
+          {/* 区二：Token 构成（五段胶囊条 + 图例） */}
+          <div className="py-3.5">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className="text-[11px] font-medium text-muted-foreground">Token 构成</span>
+              <span className="text-[11px] tabular-nums text-muted-foreground/70">{fmtTok(model.totalTokens)} tokens</span>
+            </div>
+            <div className="mt-2 flex h-2.5 overflow-hidden rounded-full bg-muted">
+              {tokSegs.map(s => s.v > 0 && (
+                <div
+                  key={s.label}
+                  className="h-full transition-[width] duration-500 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]"
+                  style={{ width: `${(s.v / tokTotal) * 100}%`, background: s.c }}
+                  title={`${s.label}: ${fmtTok(s.v)} (${(s.v / tokTotal * 100).toFixed(1)}%)`}
+                />
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
+              {tokSegs.map(s => (
+                <span key={s.label} className="flex items-center gap-1.5 text-[11px] tabular-nums">
+                  <span className="size-2 rounded-sm" style={{ background: s.c }} />
+                  <span className="text-muted-foreground">{s.label}</span>
+                  <span className="font-semibold">{fmtTok(s.v)}</span>
+                  <span className="text-muted-foreground">({(s.v / tokTotal * 100).toFixed(1)}%)</span>
+                </span>
+              ))}
+            </div>
           </div>
         </div>
-        <div className="overflow-x-auto">
-          <svg viewBox={`0 0 ${W} ${p1H}`} width={W} height={p1H} className="block" style={{ minWidth: "100%" }}>
-            {[0, 0.25, 0.5, 0.75, 1].map(f => {
-              const v = dmax * f
-              const y = padT + chartH - f * chartH
-              return (
-                <g key={f}>
-                  <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={C.grid} strokeWidth={0.5} />
-                  <text x={padL - 4} y={y + 3} textAnchor="end" fontSize="9" className="fill-muted-foreground">{fmtMs(v * 1000)}</text>
-                </g>
-              )
-            })}
-            {sub.map((r, i) => {
-              const topY = yDur(wall[i])
-              const llmH = (llm[i] / dmax) * chartH
-              const nonLlmH = (nonLlm[i] / dmax) * chartH
-              const jump = onJumpToSubagent && r.agentSessionId
-                ? () => onJumpToSubagent(r.agentSessionId!)
-                : undefined
-              return (
-                <g key={`d${i}`} onClick={jump} style={jump ? { cursor: "pointer" } : undefined}>
-                  <title>{`#${i + 1} ${r.subagentType ?? r.subagentName ?? r.agentName ?? "?"}（${r.agentName ?? "?"}）\n总耗时 ${fmtMs(wall[i] * 1000)} · tokens ${fmtTok(tokTot[i])}\n点击跳转 Turns 定位该 subagent`}</title>
-                  <rect x={x(i)} y={padT + chartH - llmH} width={barW} height={llmH} fill={DUR_LLM} />
-                  {nonLlm[i] > 0 && (
-                    <rect x={x(i)} y={topY} width={barW} height={nonLlmH} fill={DUR_NONLLM} />
-                  )}
-                  {wall[i] >= dmax * 0.06 && (
-                    <text x={x(i) + barW / 2} y={topY - 3} textAnchor="middle" fontSize="8" fontWeight="700" className="fill-foreground">
-                      {wall[i] >= 60 ? `${(wall[i] / 60).toFixed(1)}m` : `${wall[i].toFixed(0)}s`}
-                    </text>
-                  )}
-                </g>
-              )
-            })}
-            <AxisLabels sub={sub} x={x} barW={barW} baseY={padT + chartH} onJumpToSubagent={onJumpToSubagent} keyPrefix="dl" />
-          </svg>
+        <div className="mt-3 text-[10px] text-muted-foreground/70">
+          总耗时 = start→next 切片 · LLM 耗时 = Σ min(latency, slice)（逐任务钳制）
         </div>
-      </div>
+      </CardContent>
+    </Card>
+  )
+}
 
-      {/* Token consumption chart (stacked) */}
-      <div className="rounded border p-3 bg-muted/5">
-        <div className="flex items-center gap-4 mb-1.5">
-          <h4 className="text-sm font-semibold text-muted-foreground">Token consumption</h4>
-          <div className="ml-auto flex items-center gap-3">
-            {[
-              { l: "Input", c: TOKEN_COLORS.input },
-              { l: "Cache Read", c: TOKEN_COLORS.cacheRead },
-              { l: "Cache Write", c: TOKEN_COLORS.cacheWrite },
-              { l: "Output", c: TOKEN_COLORS.output },
-            ].map(s => (
-              <span key={s.l} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: s.c }} />
-                {s.l}
-              </span>
-            ))}
+// ── 加载骨架：画像 / 时间线 / 排行三卡形态，不谎报结构；入场与内容卡同一
+// 阶梯节奏（display 翻转重放），加载即有形态而非空白 ─────────────────────────
+function PerfSkeleton() {
+  return (
+    <div className="space-y-4">
+      <section {...perfEntrance(0, "rounded-2xl bg-card p-5 ring-1 ring-foreground/[0.06]")}>
+        <div className="h-3.5 w-16 animate-pulse rounded bg-foreground/[0.07]" />
+        <div className="mt-3 h-8 w-28 animate-pulse rounded bg-foreground/[0.09]" />
+        <div className="mt-4 h-2 flex-1 animate-pulse rounded-full bg-foreground/[0.06]" />
+        <div className="mt-5 h-2.5 w-full animate-pulse rounded-full bg-foreground/[0.05]" />
+        <div className="mt-2.5 flex gap-3">
+          {Array.from({ length: 5 }, (_, i) => (
+            <div key={i} className="h-2.5 w-16 animate-pulse rounded bg-foreground/[0.06]" style={{ animationDelay: `${60 + i * 30}ms` }} />
+          ))}
+        </div>
+      </section>
+      <section {...perfEntrance(70, "rounded-2xl bg-card p-5 ring-1 ring-foreground/[0.06]")}>
+        <div className="h-3.5 w-20 animate-pulse rounded bg-foreground/[0.07]" />
+        <div className="mt-4 h-36 w-full animate-pulse rounded-xl bg-foreground/[0.04]" />
+      </section>
+      <section {...perfEntrance(140, "rounded-2xl bg-card p-5 ring-1 ring-foreground/[0.06]")}>
+        <div className="h-3.5 w-14 animate-pulse rounded bg-foreground/[0.07]" />
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="mt-3.5 flex items-center gap-3">
+            <div className="size-3 animate-pulse rounded-full bg-foreground/[0.06]" />
+            <div className="h-3 flex-1 animate-pulse rounded bg-foreground/[0.05]" style={{ animationDelay: `${i * 40}ms` }} />
+            <div className="h-3 w-24 animate-pulse rounded bg-foreground/[0.06]" />
           </div>
-        </div>
-        <div className="overflow-x-auto">
-          <svg viewBox={`0 0 ${W} ${p2H}`} width={W} height={p2H} className="block" style={{ minWidth: "100%" }}>
-            {(() => {
-              const tpadT = 16
-              const baseY = tpadT + chartH
-              const yT = (v: number) => tpadT + chartH - (v / tmax) * chartH
-              return (
-                <>
-                  {[0, 0.25, 0.5, 0.75, 1].map(f => {
-                    const v = tmax * f
-                    const y = baseY - f * chartH
-                    return (
-                      <g key={f}>
-                        <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={C.grid} strokeWidth={0.5} />
-                        <text x={padL - 4} y={y + 3} textAnchor="end" fontSize="9" className="fill-muted-foreground">{fmtTok(v)}</text>
-                      </g>
-                    )
-                  })}
-                  {sub.map((r, i) => {
-                    const inH = (tokIn[i] / tmax) * chartH
-                    const crH = (tokCr[i] / tmax) * chartH
-                    const cwH = (tokCw[i] / tmax) * chartH
-                    const outH = (tokOut[i] / tmax) * chartH
-                    const xs = x(i)
-                    const jump = onJumpToSubagent && r.agentSessionId
-                      ? () => onJumpToSubagent(r.agentSessionId!)
-                      : undefined
-                    return (
-                      <g key={`t${i}`} onClick={jump} style={jump ? { cursor: "pointer" } : undefined}>
-                        <title>{`#${i + 1} ${r.subagentType ?? r.subagentName ?? r.agentName ?? "?"}（${r.agentName ?? "?"}）\ntokens ${fmtTok(tokTot[i])} · 总耗时 ${fmtMs(wall[i] * 1000)}\n点击跳转 Turns 定位该 subagent`}</title>
-                        <rect x={xs} y={yT(tokIn[i])} width={barW} height={inH} fill={TOKEN_COLORS.input} />
-                        <rect x={xs} y={yT(tokIn[i] + tokCr[i])} width={barW} height={crH} fill={TOKEN_COLORS.cacheRead} />
-                        <rect x={xs} y={yT(tokIn[i] + tokCr[i] + tokCw[i])} width={barW} height={cwH} fill={TOKEN_COLORS.cacheWrite} />
-                        <rect x={xs} y={yT(tokIn[i] + tokCr[i] + tokCw[i] + tokOut[i])} width={barW} height={outH} fill={TOKEN_COLORS.output} />
-                        {tokTot[i] >= tmax * 0.06 && (
-                          <text x={xs + barW / 2} y={yT(tokTot[i]) - 3} textAnchor="middle" fontSize="8" fontWeight="700" className="fill-foreground">
-                            {fmtTok(tokTot[i])}
-                          </text>
-                        )}
-                      </g>
-                    )
-                  })}
-                  <AxisLabels sub={sub} x={x} barW={barW} baseY={baseY} onJumpToSubagent={onJumpToSubagent} keyPrefix="tlx" />
-                </>
-              )
-            })()}
-          </svg>
-        </div>
-      </div>
+        ))}
+      </section>
     </div>
   )
 }
-
-// ── Agent type breakdown ──────────────────────────────────────────────────────
-function AgentTable({ agentStats, totalTokens, totalCompute, totalLlm, totalTools }: {
-  agentStats: [string, { count: number; tokens: number; ms: number; llm: number; tools: number }][]
-  totalTokens: number; totalCompute: number; totalLlm: number; totalTools: number
-}) {
-  return (
-    <div>
-      <h4 className="text-sm font-semibold text-muted-foreground mb-1.5">Agent Type Breakdown</h4>
-      <div className="text-[10px] text-muted-foreground mb-2">Duration = Σ latencyMs（原始,可超总墙钟——并行/推导爆表所致,非墙钟口径）</div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-muted-foreground border-b text-right">
-              <th className="text-left py-1.5 px-2 font-medium">Agent</th>
-              <th className="py-1.5 px-2 font-medium">Runs</th>
-              <th className="py-1.5 px-2 font-medium">Tokens</th>
-              <th className="py-1.5 px-2 font-medium">%</th>
-              <th className="py-1.5 px-2 font-medium">Duration</th>
-              <th className="py-1.5 px-2 font-medium">LLM Calls</th>
-              <th className="py-1.5 px-2 font-medium">Tool Calls</th>
-            </tr>
-          </thead>
-          <tbody className="tabular-nums">
-            {agentStats.map(([agent, s]) => (
-              <tr key={agent} className="border-b border-border/40 hover:bg-muted/20">
-                <td className="py-1.5 px-2 text-left">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm mr-1.5 align-middle" style={{ background: agentColor(agent) }} />
-                  <code className="text-[11px]">{agent}</code>
-                </td>
-                <td className="py-1.5 px-2 text-right">{s.count}</td>
-                <td className="py-1.5 px-2 text-right">{fmtTok(s.tokens)}</td>
-                <td className="py-1.5 px-2 text-right">{(s.tokens / Math.max(totalTokens, 1) * 100).toFixed(1)}%</td>
-                <td className="py-1.5 px-2 text-right">{fmtMs(s.ms)}</td>
-                <td className="py-1.5 px-2 text-right">{s.llm.toLocaleString()}</td>
-                <td className="py-1.5 px-2 text-right">{s.tools.toLocaleString()}</td>
-              </tr>
-            ))}
-            <tr className="font-semibold border-t-2">
-              <td className="py-1.5 px-2 text-left">合计</td>
-              <td className="py-1.5 px-2 text-right">{agentStats.reduce((a, [, s]) => a + s.count, 0)}</td>
-              <td className="py-1.5 px-2 text-right">{fmtTok(totalTokens)}</td>
-              <td className="py-1.5 px-2 text-right">100.0%</td>
-              <td className="py-1.5 px-2 text-right">{fmtMs(totalCompute)}</td>
-              <td className="py-1.5 px-2 text-right">{totalLlm.toLocaleString()}</td>
-              <td className="py-1.5 px-2 text-right">{totalTools.toLocaleString()}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-// ── Task detail ───────────────────────────────────────────────────────────────
-function TaskDetail({ model }: { model: PerfModel }) {
-  const { sub, slices, t0 } = model
-  return (
-    <div>
-      <h4 className="text-sm font-semibold text-muted-foreground mb-1.5">Task Detail</h4>
-      <div className="text-[10px] text-muted-foreground mb-2">总耗时 = start→next 切片 · LLM 耗时 = min(latency, slice)（逐任务钳制）· LLM 外 = 总-LLM · Offset = 距首个子任务的相对时间</div>
-      <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-        <table className="w-full text-xs">
-          <thead className="sticky top-0 bg-card">
-            <tr className="text-muted-foreground border-b text-right">
-              <th className="text-left py-1.5 px-2 font-medium">#</th>
-              <th className="text-left py-1.5 px-2 font-medium">Agent</th>
-              <th className="py-1.5 px-2 font-medium">+Offset</th>
-              <th className="py-1.5 px-2 font-medium">总耗时</th>
-              <th className="py-1.5 px-2 font-medium">LLM 耗时</th>
-              <th className="py-1.5 px-2 font-medium">LLM 外</th>
-              <th className="py-1.5 px-2 font-medium">Tokens</th>
-              <th className="py-1.5 px-2 font-medium">In</th>
-              <th className="py-1.5 px-2 font-medium">CacheR</th>
-              <th className="py-1.5 px-2 font-medium">CacheW</th>
-              <th className="py-1.5 px-2 font-medium">Out</th>
-              <th className="py-1.5 px-2 font-medium">LLM</th>
-              <th className="py-1.5 px-2 font-medium">Tools</th>
-              <th className="py-1.5 px-2 font-medium">Err</th>
-            </tr>
-          </thead>
-          <tbody className="tabular-nums">
-            {sub.map((r, i) => (
-              <tr key={r.executionId} className="border-b border-border/40 hover:bg-muted/20">
-                <td className="py-1 px-2 text-left">{i + 1}</td>
-                <td className="py-1 px-2 text-left"><code className="text-[10px]">{r.agentName ?? "—"}</code></td>
-                <td className="py-1 px-2 text-right text-muted-foreground">{fmtOffset(t0, r.createdAt)}</td>
-                <td className="py-1 px-2 text-right font-semibold text-rose-600">{fmtMs(slices[i])}</td>
-                <td className="py-1 px-2 text-right text-indigo-600">{fmtMs(Math.min(r.latencyMs, slices[i]))}</td>
-                <td className="py-1 px-2 text-right text-amber-600">{fmtMs(Math.max(0, slices[i] - r.latencyMs))}</td>
-                <td className="py-1 px-2 text-right">{fmtTok(r.tokens)}</td>
-                <td className="py-1 px-2 text-right">{fmtTok(r.inputTokens)}</td>
-                <td className="py-1 px-2 text-right">{fmtTok(r.cacheReadInputTokens)}</td>
-                <td className="py-1 px-2 text-right">{fmtTok(r.cacheCreationInputTokens)}</td>
-                <td className="py-1 px-2 text-right">{fmtTok(r.outputTokens)}</td>
-                <td className="py-1 px-2 text-right">{r.llmCallCount}</td>
-                <td className="py-1 px-2 text-right">{r.toolCallCount}</td>
-                <td className="py-1 px-2 text-right text-red-600">{r.toolCallErrorCount}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-// helper hook type alias for prop typing

@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { BookOpenIcon } from "lucide-react"
 import { useSkillContent } from "@/components/observe/use-skill-content"
+import type { ViewUrlFor } from "@/lib/observe/member-url"
 
 function truncateVisual(str: string, maxWidth: number): string {
   if (stringWidth(str) <= maxWidth) return str
@@ -52,6 +53,7 @@ interface SkillEventItem {
 interface SkillChartsProps {
   taskId?: string
   skillEvents: SkillEventItem[]
+  urlFor?: ViewUrlFor
 }
 
 function formatTokens(n: number): string {
@@ -191,9 +193,9 @@ function TokenUsageBySkillChart({ skillEvents }: SkillChartsProps) {
   )
 }
 
-function SkillsPerAgentChart({ taskId, skillEvents }: SkillChartsProps) {
+function SkillsPerAgentChart({ taskId, skillEvents, urlFor }: SkillChartsProps) {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null)
-  const sc = useSkillContent(taskId ?? "")
+  const sc = useSkillContent(taskId ?? "", urlFor)
 
   const data = useMemo(() => {
     const byAgent = new Map<string, Map<string, { calls: number; input: number; output: number; reasoning: number; cacheRead: number }>>()
@@ -423,7 +425,7 @@ function FailedSkillsChart({ skillEvents }: SkillChartsProps) {
   )
 }
 
-export function SkillCharts({ taskId, skillEvents }: SkillChartsProps) {
+export function SkillCharts({ taskId, skillEvents, urlFor }: SkillChartsProps) {
   if (skillEvents.length === 0) {
     return (
       <div className="flex items-center justify-center h-32 text-muted-foreground text-sm">
@@ -436,7 +438,7 @@ export function SkillCharts({ taskId, skillEvents }: SkillChartsProps) {
     <div className="space-y-4">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <TokenUsageBySkillChart skillEvents={skillEvents} />
-        <SkillsPerAgentChart taskId={taskId} skillEvents={skillEvents} />
+        <SkillsPerAgentChart taskId={taskId} skillEvents={skillEvents} urlFor={urlFor} />
       </div>
       <FailedSkillsChart skillEvents={skillEvents} />
     </div>
