@@ -247,7 +247,9 @@ export function RunCanvas({
         </div>
       </div>
 
-      <div className="run-glass absolute bottom-3 right-3 flex items-center rounded-xl">
+      {/* 缩放/适配工具条：左下角——右缘被侧栏玻璃面板占据（w-360 悬浮），
+          右下角会被盖住 */}
+      <div className="run-glass absolute bottom-3 left-3 flex items-center rounded-xl">
         <button
           type="button"
           title="缩小（Ctrl + 滚轮）"
