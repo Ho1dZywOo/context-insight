@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ArrowLeftIcon, LoaderIcon, AlertTriangleIcon, SparklesIcon, SettingsIcon, TargetIcon, FlaskConicalIcon, BotIcon, ShareIcon, PlayIcon, RefreshCwIcon } from 'lucide-react';
+import { sessionViewUrlFor, type ViewUrlFor } from '@/lib/observe/member-url';
 import { BRAND_NAME, BAY_NAME } from '@/lib/branding';
 import { VERSION_DISPLAY } from '@/lib/version';
 import { loadProviderConfig } from '@/lib/ai-provider-config';
@@ -43,24 +44,11 @@ function bandHex(score: number | null | undefined, verdict?: string | null): str
   return '#ef4444';
 }
 
-/** 任务控制台（HUD）视觉语言：网格底纹 / 角标框 / 数据芯片 / 分数色光晕。
+/** 评分卡视觉语言：数据芯片 / 分数色光晕 / 维度卡悬浮。
     亮色克制、暗色发光（.dark 由 globals.css @custom-variant 定义） */
 function HudStyles() {
   return (
     <style>{`
-      .hud-grid {
-        background-image:
-          repeating-linear-gradient(0deg, color-mix(in srgb, currentColor 3.5%, transparent) 0 1px, transparent 1px 26px),
-          repeating-linear-gradient(90deg, color-mix(in srgb, currentColor 3.5%, transparent) 0 1px, transparent 1px 26px);
-      }
-      .dark .hud-grid {
-        background-image:
-          repeating-linear-gradient(0deg, color-mix(in srgb, currentColor 7%, transparent) 0 1px, transparent 1px 26px),
-          repeating-linear-gradient(90deg, color-mix(in srgb, currentColor 7%, transparent) 0 1px, transparent 1px 26px);
-      }
-      .hud-corner { position: absolute; width: 9px; height: 9px; border: 0 solid var(--acc); opacity: .6; pointer-events: none; }
-      .hud-corner-tl { top: 6px; left: 6px; border-top-width: 1.5px; border-left-width: 1.5px; }
-      .hud-corner-br { bottom: 6px; right: 6px; border-bottom-width: 1.5px; border-right-width: 1.5px; }
       .hud-chip {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 10px; letter-spacing: .02em; white-space: nowrap;
@@ -288,8 +276,8 @@ function SubItemRow({ taskId, item, onJumpToTurn, onAdjudicate, adjBusy }: {
               return (
                 <Link
                   key={i}
-                  href={`/session/${encodeURIComponent(taskId)}${e.turnIndex != null ? `?errorTurn=${e.turnIndex}` : ''}`}
-                  title={e.label ? `${e.label}（点击跳转会话${e.turnIndex != null ? ` §${e.turnIndex}` : ''}）` : '跳转会话'}
+                  href={`/run/solo:${encodeURIComponent(taskId)}?tab=turns`}
+                  title={e.label ? `${e.label}（点击跳转工作台 Turns）` : '跳转工作台'}
                   className={chipClass}
                 >
                   {inner}
@@ -363,11 +351,9 @@ function DimensionCard({ taskId, dim, onJumpToTurn, onAdjudicate, adjBusy }: {
   return (
     <Card
       size="sm"
-      className={`dim-card relative overflow-hidden ${na ? 'opacity-80' : ''}`}
+      className={`@container dim-card relative overflow-hidden ${na ? 'opacity-80' : ''}`}
       style={{ '--acc': acc } as React.CSSProperties}
     >
-      <span aria-hidden className="hud-corner hud-corner-tl" />
-      <span aria-hidden className="hud-corner hud-corner-br" />
       <span aria-hidden className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-full" style={{ background: acc, boxShadow: `0 0 8px ${acc}66` }} />
       <CardHeader className="py-2.5">
         <div className="flex items-center gap-2 flex-wrap">
@@ -387,8 +373,8 @@ function DimensionCard({ taskId, dim, onJumpToTurn, onAdjudicate, adjBusy }: {
         </div>
       </CardHeader>
       <CardContent className="px-2.5 pb-2.5 space-y-1">
-        {/* 密度：有效项两列；不适用项折叠成一行（"这维为什么缺信息"一行说清，不逐项占行） */}
-        <div className="grid gap-x-4 gap-y-0 lg:grid-cols-2">
+        {/* 密度：有效项两列（容器查询——按卡片自身宽决定，三列布局的窄卡不再硬挤两列）；不适用项折叠成一行（"这维为什么缺信息"一行说清，不逐项占行） */}
+        <div className="grid gap-x-4 gap-y-0 @[520px]:grid-cols-2">
           {dim.items.filter(i => i.status !== 'not-applicable').map(item => <SubItemRow key={item.itemId} taskId={taskId} item={item} onJumpToTurn={onJumpToTurn} onAdjudicate={onAdjudicate} adjBusy={adjBusy} />)}
         </div>
         {(() => {
@@ -424,7 +410,8 @@ function DimensionCard({ taskId, dim, onJumpToTurn, onAdjudicate, adjBusy }: {
   );
 }
 
-export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpToTurn }: { taskId: string; framework?: string; embedded?: boolean; onJumpToTurn?: (turnIndex: number) => void }) {
+export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpToTurn, urlFor }: { taskId: string; framework?: string; embedded?: boolean; onJumpToTurn?: (turnIndex: number) => void; urlFor?: ViewUrlFor }) {
+  const buildUrl = urlFor ?? sessionViewUrlFor;
   const [card, setCard] = useState<Scorecard | null>(null);
   const [state, setState] = useState<'loading' | 'ok' | '404' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
@@ -457,12 +444,12 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     setBusy('det');
     try {
       const res = force
-        ? await fetch(`/api/observe/session/scorecard`, {
+        ? await fetch(buildUrl('scorecard'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ taskId, framework }),
           })
-        : await fetch(`/api/observe/session/scorecard?taskId=${encodeURIComponent(taskId)}${framework ? `&framework=${encodeURIComponent(framework)}` : ''}`);
+        : await fetch(buildUrl(`scorecard?taskId=${encodeURIComponent(taskId)}${framework ? `&framework=${encodeURIComponent(framework)}` : ''}`));
       if (res.status === 404) { if (!stale()) setState('404'); return null; }
       const data = await res.json();
       if (!res.ok) { if (!stale()) { setError(data.error ?? `HTTP ${res.status}`); setState('error'); } return null; }
@@ -477,7 +464,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     } finally {
       if (!stale()) setBusy('none');
     }
-  }, [taskId, framework]);
+  }, [taskId, framework, buildUrl]);
 
   // setState 放微任务：避免 effect 体内同步 setState（仓库既有模式）
   useEffect(() => {
@@ -501,7 +488,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
       const stale = () => runTokenRef.current !== token;
       (async () => {
         try {
-          const res = await fetch('/api/observe/session/scorecard/semantic', {
+          const res = await fetch(buildUrl('scorecard/semantic'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -553,7 +540,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
         }
       })();
     });
-  }, [taskId, framework]);
+  }, [taskId, framework, buildUrl]);
 
   // 评审运行中（mate/llm 长窗口）配置变更不触发重算：fetchCard 会抢占 busy
   //（运行横幅消失、按钮解禁），评审 done 事件随后用旧 profile 的卡覆盖回来
@@ -565,7 +552,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
   const adjudicate = useCallback(async (itemId: string, e: Evidence, confirmed: 'problem' | 'fine') => {
     setAdjBusy(true);
     try {
-      const res = await fetch('/api/observe/session/scorecard/adjudicate', {
+      const res = await fetch(buildUrl('scorecard/adjudicate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, framework, itemId, turnIndex: e.turnIndex, label: e.label, confirmed }),
@@ -578,12 +565,12 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     } finally {
       setAdjBusy(false);
     }
-  }, [taskId, framework]);
+  }, [taskId, framework, buildUrl]);
 
   // Mate Agent：探测本机可用工具（claude/opencode）
   const fetchMateTools = useCallback(async () => {
     try {
-      const res = await fetch('/api/observe/session/mate-agent');
+      const res = await fetch(buildUrl('mate-agent'));
       const data = await res.json() as { tools?: string[] };
       const avail = data.tools ?? [];
       setMateTools(avail);
@@ -599,19 +586,19 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
   // 上报评分卡快照到数据湖（实验记录 notes）：覆盖写——旧 scorecard 记录整类替换
   // 为当前快照（历史仍在 git 提交里），总分算式/模板/评审工具/耗时齐带，不动本地卡。
   // 框架定记录位：-proxy 行报捕获位、原生行报 native 位。库里已有快照时先弹确认
-  const lakeNotesUrl = useCallback(() => {
+  const lakeNotes = useCallback((body?: Record<string, unknown>): Promise<Response> => {
     const recording = framework?.endsWith('-proxy') ? 'capture' : framework ? 'native' : '';
-    return `/lake_viewer/api/runs/${encodeURIComponent(taskId)}/notes${recording ? `?recording=${recording}` : ''}`;
+    return fetch('/api/ingest/lake', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'lake-notes', sid: taskId, ...(recording ? { recording } : {}), ...(body ?? {}) }),
+    });
   }, [taskId, framework]);
 
   const doReportToLake = useCallback(async () => {
     setBusy('det');
     try {
-      const res = await fetch(lakeNotesUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: 'scorecard' }),
-      });
+      const res = await lakeNotes({ kind: 'scorecard' });
       const data = await res.json() as { error?: string; records?: unknown[] };
       if (!res.ok) {
         // 上传失败不打成整页「评分失败」：评分本身完好，降级为可重试的提示
@@ -626,14 +613,14 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     } finally {
       setBusy('none');
     }
-  }, [lakeNotesUrl]);
+  }, [lakeNotes]);
 
   const reportToLake = useCallback(async () => {
     setNotice(null);
     setError(null);
     setBusy('det');
     try {
-      const res = await fetch(lakeNotesUrl());
+      const res = await lakeNotes();
       const data = await res.json() as { error?: string; records?: Array<{ type?: string; totalScore?: number | null; completedAt?: string }> };
       if (!res.ok) {
         setNotice(`上报 ${BAY_NAME} 失败：${data.error ?? `HTTP ${res.status}`}——本地评分卡不受影响，稍后重试上传即可。`);
@@ -650,7 +637,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     } finally {
       setBusy('none');
     }
-  }, [lakeNotesUrl, doReportToLake]);
+  }, [lakeNotes, doReportToLake]);
 
   const runMate = useCallback(async () => {
     const token = runTokenRef.current;
@@ -660,7 +647,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     setBusy('mate');
     setMateProgress({ done: 0, total: 5, current: '评分中', startedAt: Date.now() });
     try {
-      const res = await fetch('/api/observe/session/mate-agent', {
+      const res = await fetch(buildUrl('mate-agent'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, framework, tool: mateTool }),
@@ -714,7 +701,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     } finally {
       if (!stale()) { setBusy('none'); setMateProgress(null); }
     }
-  }, [taskId, framework, mateTool]);
+  }, [taskId, framework, mateTool, buildUrl]);
 
   const body = (
     <>
@@ -807,13 +794,12 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
               </CardContent>
             </Card>
           ) : (
-            <Card size="sm" className="relative overflow-hidden">
-              <div aria-hidden className="hud-grid absolute inset-0 pointer-events-none text-foreground" />
-              <CardContent className="relative py-5 px-5">
+            <Card size="sm">
+              <CardContent className="py-5 px-5">
                 <div className="flex items-center gap-8 flex-wrap">
                   <div className="flex items-baseline gap-3">
                     <span
-                      className="num-glow font-mono text-6xl font-bold tabular-nums leading-none"
+                      className="num-glow text-6xl font-bold tracking-tight tabular-nums leading-none"
                       style={{ color: bandHex(card.framework.totalScore, card.framework.veto?.triggered ? 'violation' : null) }}
                     >
                       {card.framework.totalScore != null ? Math.round(card.framework.totalScore * 100) : '—'}
@@ -884,18 +870,20 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
             const half = Math.ceil(card.dimensions.length / 2);
             const colA = card.dimensions.slice(0, half);
             const colB = card.dimensions.slice(half);
-            // 默认 stretch：雷达卡随行高拉伸到与维度列等高，图在卡内垂直居中
+            // 默认 stretch：雷达卡随行高拉伸到与维度列等高，图在卡内垂直居中。
+            // 断点用容器查询（@[900px]）——面板宽而非视口宽决定三列时机，窄窗口
+            // 不再误落单列（雷达被拉成全宽巨图、维度卡被挤到长滚动底部）
             return (
-              <div className="grid gap-3 xl:grid-cols-3">
+              <div className="grid gap-3 @[900px]:grid-cols-3">
                 <div className="flex flex-col justify-center min-w-0">
                   <Card size="sm" className="dim-card relative overflow-hidden" style={{ '--acc': card.framework.veto?.triggered ? '#ef4444' : '#3b82f6' } as React.CSSProperties}>
-                    <span aria-hidden className="hud-corner hud-corner-tl" />
-                    <span aria-hidden className="hud-corner hud-corner-br" />
                     <CardHeader className="py-2.5">
                       <CardTitle className="text-sm">六维能力图</CardTitle>
                     </CardHeader>
                     <CardContent className="px-2 pb-2 flex justify-center">
-                      <DimensionRadar dimensions={card.dimensions} />
+                      <div className="w-full max-w-[420px]">
+                        <DimensionRadar dimensions={card.dimensions} />
+                      </div>
                     </CardContent>
                   </Card>
                 </div>
@@ -932,7 +920,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <BenchReportDialog open={showBenchReport} onOpenChange={setShowBenchReport} taskId={taskId} framework={framework} onSaved={() => {
+      <BenchReportDialog open={showBenchReport} onOpenChange={setShowBenchReport} taskId={taskId} framework={framework} urlFor={urlFor} onSaved={() => {
         // 填报是读时覆盖：GET 刷新即生效，不整卡重算（不动评审卡）；未跑评审时提醒
         void fetchCard().then(c => {
           if (c && !c.review) {
@@ -948,7 +936,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
   const setBaseline = useCallback(async () => {
     setBusy('det');
     try {
-      const res = await fetch('/api/observe/session/scorecard/baseline', {
+      const res = await fetch(buildUrl('scorecard/baseline'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, framework }),
@@ -961,7 +949,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     } finally {
       setBusy('none');
     }
-  }, [taskId, framework]);
+  }, [taskId, framework, buildUrl]);
 
   const actions = (
     <div className="flex items-center gap-1.5">
@@ -1038,8 +1026,8 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
 
   if (embedded) {
     return (
-      <div className="space-y-4 p-4 h-full overflow-y-auto">
-        <div className="flex items-center justify-end gap-2">
+      <div className="@container space-y-4 animate-in fade-in slide-in-from-bottom-2 fill-mode-backwards duration-300 [animation-timing-function:cubic-bezier(0.32,0.72,0,1)]">
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
           {actions}
         </div>
         {state === 'error' && error && (
@@ -1051,15 +1039,15 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-background">
+    <div className="@container flex flex-col min-h-screen bg-background">
       <div className="shrink-0 border-b px-4 py-3">
         <div className="flex items-center gap-3 flex-wrap">
           <Link
-            href={`/session/${encodeURIComponent(taskId)}`}
+            href={`/run/solo:${encodeURIComponent(taskId)}`}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-sm font-medium text-muted-foreground hover:bg-accent/30 transition-colors"
           >
             <ArrowLeftIcon className="size-4" />
-            返回 Session
+            返回 Run
           </Link>
           <div className="flex items-center gap-1.5">
             <span className="text-2xl font-bold tracking-tight text-foreground">{BRAND_NAME}</span>

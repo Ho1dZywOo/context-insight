@@ -16,14 +16,17 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { LoaderIcon } from 'lucide-react';
+import { sessionViewUrlFor, type ViewUrlFor } from '@/lib/observe/member-url';
 
-export function BenchReportDialog({ open, onOpenChange, taskId, framework, onSaved }: {
+export function BenchReportDialog({ open, onOpenChange, taskId, framework, urlFor, onSaved }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   taskId: string;
   framework?: string;
+  urlFor?: ViewUrlFor;
   onSaved?: () => void;
 }) {
+  const buildUrl = urlFor ?? sessionViewUrlFor;
   const [score, setScore] = useState('');
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
@@ -36,7 +39,7 @@ export function BenchReportDialog({ open, onOpenChange, taskId, framework, onSav
     setLoading(true);
     setConfirming(false);
     try {
-      const res = await fetch(`/api/observe/session/scorecard/bench-report?taskId=${encodeURIComponent(taskId)}${framework ? `&framework=${encodeURIComponent(framework)}` : ''}`);
+      const res = await fetch(buildUrl(`scorecard/bench-report?taskId=${encodeURIComponent(taskId)}${framework ? `&framework=${encodeURIComponent(framework)}` : ''}`));
       const data = await res.json() as { score?: number | null; note?: string | null; error?: string };
       if (!res.ok) { setError(data.error ?? `HTTP ${res.status}`); return; }
       setScore(data.score != null ? String(data.score) : '');
@@ -48,7 +51,7 @@ export function BenchReportDialog({ open, onOpenChange, taskId, framework, onSav
     } finally {
       setLoading(false);
     }
-  }, [taskId, framework]);
+  }, [taskId, framework, buildUrl]);
 
   useEffect(() => {
     if (open) queueMicrotask(() => { void load(); });
@@ -67,7 +70,7 @@ export function BenchReportDialog({ open, onOpenChange, taskId, framework, onSav
     }
     setSaving(true);
     try {
-      const res = await fetch('/api/observe/session/scorecard/bench-report', {
+      const res = await fetch(buildUrl('scorecard/bench-report'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, framework, score: v, note: note.trim() || undefined }),
@@ -82,7 +85,7 @@ export function BenchReportDialog({ open, onOpenChange, taskId, framework, onSav
     } finally {
       setSaving(false);
     }
-  }, [taskId, score, note, onOpenChange, onSaved, hadExisting, confirming]);
+  }, [taskId, framework, score, note, onOpenChange, onSaved, hadExisting, confirming, buildUrl]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
