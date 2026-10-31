@@ -543,7 +543,7 @@ describe('judge prompt 强制 CoT 契约', () => {
 describe('classifyTask · 任务文本兜底（opencode 原生无 system 的算子设计会话）', () => {
   it('首条用户消息含「算子/operator/kernel」→ operator（文档为主的流水线会话路径启发匹配不上）', async () => {
     const { classifyTask } = await import('../../src/lib/scoring/core/assembler/task-classifier');
-    expect(classifyTask(null, [], '开发 bn3d_training_update_grad 算子的设计文档，Acme C，支持 Acme 950，全自动执行不要确认。')).toBe('operator');
+    expect(classifyTask(null, [], '开发 bn3d_training_update_grad 算子的设计文档，Ascend C，支持 Ascend 950，全自动执行不要确认。')).toBe('operator');
     expect(classifyTask(null, [], 'Fusion design for confusion_mul_grad operator, run the design pipeline from P1.')).toBe('operator');
     expect(classifyTask(null, [], '/ops-registry-invoke-fusion-design /home/u/fused-op-dev/confusion_mul_grad/confusion_mul_grad/spec.yaml auto')).toBe('operator');
     // 普通任务文本不误判：无标签 + 无算子路径 → general/unknown 走原启发
@@ -551,7 +551,7 @@ describe('classifyTask · 任务文本兜底（opencode 原生无 system 的算�
   });
 });
 
-describe('lake 上报快照 · 溯源字段', () => {
+describe('cannbay 上报快照 · 溯源字段', () => {
   it('appendScorecard → parseRecords 往返：算式/模板/评审工具/耗时/覆盖度不丢', async () => {
     const { parseRecords } = await import('../../src/lib/lake/notes');
     const line = JSON.stringify({

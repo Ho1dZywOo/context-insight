@@ -101,7 +101,7 @@ describe('折算：百分制 → 0-10（连续，不吸档）', () => {
   });
 });
 
-const route = await import('../../src/app/api/observe/session/scorecard/bench-report/route');
+const route = await import('@/lib/observe/session-handlers/scorecard-bench-report');
 
 describe('端到端：填报 → 重算 → D3 基准测试评分', { timeout: 60_000 }, () => {
 

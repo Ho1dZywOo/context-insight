@@ -181,53 +181,76 @@ describe("runSiftAuditStreaming (via makeStreamingAuditResponse)", () => {
   })
 })
 
-describe("computePercent（全局批计数进度模型）", () => {
-  // 回归场景：步骤类 24 批 + 禁令/条件性各 3 批。旧模型（3 类平均）在快类完成后
-  // 进度高位僵住；新模型按全局完成批数/总批数推进。
-  const mk = (over: Partial<Record<"精筛" | "headline" | "条件性" | "禁令" | "步骤", { done?: boolean; k?: number; total?: number }>>) => {
-    const base = { done: false, k: 0, total: 0 }
-    return {
-      "精筛": { ...base, ...over["精筛"] },
-      "headline": { ...base, ...over["headline"] },
-      "条件性": { ...base, ...over["条件性"] },
-      "禁令": { ...base, ...over["禁令"] },
-      "步骤": { ...base, ...over["步骤"] },
+describe("SiftProgressModel（完成行驱动进度模型）", () => {
+  it("开始行不虚增进度（并行波一次性全发不算推进）", async () => {
+    const { SiftProgressModel } = await import("@/lib/sift-runner")
+    const m = new SiftProgressModel(8)
+    for (let k = 1; k <= 7; k++) m.onLine(`[精筛] 批 ${k}/7 判定 10 条…`)
+    expect(m.percent()).toBeLessThanOrEqual(10)
+  })
+
+  it("完成行才入账；精筛 + headline（rich 吞标签后的裸批行）合计不超 15%", async () => {
+    const { SiftProgressModel } = await import("@/lib/sift-runner")
+    const m = new SiftProgressModel(8)
+    for (let k = 1; k <= 7; k++) m.onLine(`[精筛] 批 ${k}/7 完成 ⏱ 5s`)
+    for (let k = 1; k <= 7; k++) m.onLine(`批 ${k}/7 完成 ⏱ 8s`)
+    expect(m.percent()).toBeGreaterThan(3)
+    expect(m.percent()).toBeLessThanOrEqual(15)
+  })
+
+  it("真实时间线：判定段跨切片累计、全程单调、收口不冒进（旧锯齿 95→23→95 回归锁）", async () => {
+    const { SiftProgressModel } = await import("@/lib/sift-runner")
+    const m = new SiftProgressModel(8)
+    const pcts: number[] = []
+    const step = (l: string): void => {
+      m.onLine(l)
+      pcts.push(m.percent())
     }
-  }
-
-  it("快类完成、慢类推进 → 进度持续前进（不再高位僵住）", async () => {
-    const { computePercent } = await import("@/lib/sift-runner")
-    // 禁令/条件性各 3 批全完成；步骤 24 批跑到第 12 批
-    const st = mk({ "禁令": { done: true, total: 3 }, "条件性": { done: true, total: 3 }, "步骤": { k: 12, total: 24 } })
-    // 全局：完成 3+3+12=18 / 总 30 → 判定段 60% → 15 + 80*0.6 = 63
-    expect(computePercent(st, true, 1, 1)).toBe(63)
+    for (let k = 1; k <= 7; k++) step(`[精筛] 批 ${k}/7 判定 10 条…`)
+    for (let k = 1; k <= 7; k++) step(`[精筛] 批 ${k}/7 完成 ⏱ 5s`)
+    for (let k = 1; k <= 7; k++) step(`批 ${k}/7 判定 10 条…`)
+    for (let k = 1; k <= 7; k++) step(`批 ${k}/7 完成 ⏱ 8s`)
+    expect(m.percent()).toBeLessThanOrEqual(15)
+    for (let s = 1; s <= 8; s++) {
+      step(`对账 transcript ${s}/8: member-${s}.jsonl`)
+      step(`[条件性] 判定 3 条…`)
+      for (let k = 1; k <= 3; k++) step(`[禁令] 批 ${k}/3 判定 10 条…`)
+      for (let k = 1; k <= 3; k++) step(`[步骤] 批 ${k}/3 判定 10 条…`)
+      step(`[条件性] 完成 ⏱ 23s`)
+      for (let k = 1; k <= 3; k++) step(`[禁令] 批 ${k}/3 完成 ⏱ 9s`)
+      for (let k = 1; k <= 3; k++) step(`[步骤] 批 ${k}/3 完成 ⏱ 19s`)
+      for (let k = 1; k <= 2; k++) step(`[控制流] 批 ${k}/2 判定 10 条…`)
+      for (let k = 1; k <= 2; k++) step(`[控制流] 批 ${k}/2 完成 ⏱ 10s`)
+    }
+    for (let i = 1; i < pcts.length; i++) expect(pcts[i]).toBeGreaterThanOrEqual(pcts[i - 1])
+    expect(m.percent()).toBeGreaterThan(80)
+    expect(m.percent()).toBeLessThanOrEqual(95)
   })
 
-  it("全部判定完成 → 恰好 95（读报告段由 result=100 收尾，无静默段）", async () => {
-    const { computePercent } = await import("@/lib/sift-runner")
-    const st = mk({ "禁令": { done: true, total: 3 }, "条件性": { done: true, total: 3 }, "步骤": { done: true, total: 24 } })
-    expect(computePercent(st, true, 1, 1)).toBe(95)
+  it("缓存命中精筛（滤除/无候选，无批行）→ 零成本收口", async () => {
+    const { SiftProgressModel } = await import("@/lib/sift-runner")
+    const m = new SiftProgressModel(1)
+    m.onLine("[精筛] 滤除 3 条")
+    m.onLine("[条件性] 判定 3 条…")
+    expect(m.describe()).toBe("判定 0/9 批")
+    m.onLine("[条件性] 完成 ⏱ 23s")
+    expect(m.describe()).toBe("判定 1/9 批")
   })
 
-  it("未见过 total 的类不虚增分母（步骤类还没输出批号时）", async () => {
-    const { computePercent } = await import("@/lib/sift-runner")
-    const st = mk({ "精筛": { done: true }, "条件性": { done: true, total: 3 } })
-    // 只有条件性贡献 3/3 → 判定段满 → 15+80=95
-    expect(computePercent(st, true, 1, 1)).toBe(95)
-  })
-
-  it("百分比上限 95（判定段未完成时不冒进到 96+）", async () => {
-    const { computePercent } = await import("@/lib/sift-runner")
-    const st = mk({ "精筛": { done: true, total: 1 }, "headline": { done: true, total: 1 }, "禁令": { done: true, total: 3 }, "条件性": { done: true, total: 3 }, "步骤": { k: 23, total: 24 } })
-    // 全局 29/30 ≈ 0.967 → 15+77.3=92（< 95 上限，正常）
-    expect(computePercent(st, true, 1, 1)).toBeLessThanOrEqual(95)
+  it("describe：多切片带 transcript 序号", async () => {
+    const { SiftProgressModel } = await import("@/lib/sift-runner")
+    const m = new SiftProgressModel(8)
+    m.onLine("对账 transcript 3/8: x.jsonl")
+    m.onLine("[禁令] 批 1/3 判定 10 条…")
+    m.onLine("[禁令] 批 1/3 完成 ⏱ 9s")
+    expect(m.describe()).toBe("判定 1/72 批 · transcript 3/8")
   })
 })
 
 describe("多 slice（--kind skill 切片）进度", () => {
-  it("新 transcript 开始时进度回落（3 类状态按 slice 重置，不残留上一片的 done）", async () => {
-    // 真实场景：skill 被切成 2 个 slice（小 1-1 + 大 1-2）。旧 bug：slice 1 全部完成
-    // （3 类 done）后 slice 2 开始，stages 残留 → 全局批计数虚满 → 一上来就 95%。
+  it("新 transcript 开始时进度不回落（跨切片累计；旧模型回落 95→23 的锯齿回归锁）", async () => {
+    // 真实场景：skill 被切成 2 个 slice（小 1-1 + 大 1-2）。旧 bug：slice 1 三类完成后
+    // 状态虚满 → 一上来就 95%，slice 2 重置又砸回 23%。新模型完成行跨切片累计、单调不减。
     spawnMock.mockImplementation(happyImpl([
       "对账 transcript 1/2: tmpX-skill-1-1.jsonl",
       "  [精筛] 无候选",
@@ -249,15 +272,13 @@ describe("多 slice（--kind skill 切片）进度", () => {
     const progressPcts = events
       .filter((e: { stage: string }) => e.stage === "progress")
       .map((e: { percent: number }) => e.percent)
-    // slice 1 结束：单 slice 内 3 类各 1/1 完成 → 判定段满 → 95（上限）
+    // slice 1 结束：只完成 1/2 切片 → 远未到头（旧模型三类 done 即虚满 95%）
     const atSlice1End = progressPcts[7]
-    expect(atSlice1End).toBe(95)
-    // slice 2 批输出后：3 类已重置（slice 1 的 done 不残留）→ 全局 2/12 批 → 15+80*2/12 ≈ 28
+    expect(atSlice1End).toBeGreaterThan(3)
+    expect(atSlice1End).toBeLessThan(50)
+    // slice 2 开始 + 批号揭示（分母外推修正）→ 不回落
     const atSlice2Start = progressPcts[progressPcts.length - 1]
-    expect(atSlice2Start).toBeLessThan(50)
-    expect(atSlice2Start).toBeGreaterThan(15) // 判定段已开始
-    // 回归锁定：旧 bug（slice 状态残留）时 slice 2 开始即 95
-    expect(atSlice2Start).toBeLessThan(95)
+    expect(atSlice2Start).toBeGreaterThanOrEqual(atSlice1End)
   })
 })
 

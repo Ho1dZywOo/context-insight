@@ -23,7 +23,7 @@ import { sessionDurationMs, computeLlmActiveMs } from '../../src/lib/session-dur
 
 const prisma = new PrismaClient();
 const dataRoute = await import('../../src/app/api/observe/data/route.ts');
-const sessionRoute = await import('../../src/app/api/observe/session/route.ts');
+const sessionRoute = await import('@/lib/observe/session-handlers/detail');
 const statsRoute = await import('../../src/app/api/observe/stats/route.ts');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'session-duration-it-'));

@@ -96,7 +96,7 @@ async function importCapture(sid: string, proxy: boolean): Promise<{ root: ApiAg
 }
 
 async function fetchRoot(sid: string): Promise<ApiAgent> {
-  const { GET } = await import('@/app/api/observe/session/route');
+  const { GET } = await import('@/lib/observe/session-handlers/detail');
   const apiRes = await GET(new NextRequest(`http://localhost/api/observe/session?taskId=${sid}`));
   expect(apiRes.status).toBe(200);
   const data = (await apiRes.json()) as { agents: ApiAgent[] };

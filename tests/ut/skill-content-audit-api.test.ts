@@ -8,7 +8,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { prisma } from '../setup';
-import { GET, type SkillContentAuditItem } from '@/app/api/observe/session/skill-content-audit/route';
+import { GET, type SkillContentAuditItem } from '@/lib/observe/session-handlers/skill-content-audit';
 
 const createdSessionIds: string[] = [];
 

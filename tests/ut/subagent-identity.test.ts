@@ -16,8 +16,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { prisma } from '../setup';
-import { GET as turnsListGet } from '@/app/api/observe/session/turns/route';
-import { GET as turnDetailGet, __clearTurnDetailCaches } from '@/app/api/observe/session/turns/[turnId]/route';
+import { GET as turnsListGet } from '@/lib/observe/session-handlers/turns';
+import { GET as turnDetailGet, __clearTurnDetailCaches } from '@/lib/observe/session-handlers/turn-detail';
 import { isBackgroundDispatch } from '@/lib/subagent-identity';
 
 const TASK_PROXY = 'sub-identity-it-proxy';

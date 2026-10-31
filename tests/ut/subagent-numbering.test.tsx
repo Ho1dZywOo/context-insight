@@ -11,14 +11,37 @@
 // 同名 subagent 统一编号 IT：
 //   ① 纯函数——按组首 turn 时间先后编号（非数据序）、多 agentName 独立计数、
 //      0-token 组也参与（Turn 页无图可画也有身份）、root 不编号、匿名组可寻址
-//   ② 一致性——同一 turns 喂 TurnTimeline 与 ContextTracker，两处 "general #N"
+//   ② 一致性——同一 turns 喂会话块（泳道）与 ContextTracker，两处 "general #N"
 //      指向同一 subagentSessionId（修复前 Context 图例按 peak 降序、Turn 页无编号）
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createElement } from 'react'
+import { createElement, act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { buildSubagentNumbers, subagentGroupKey } from '@/lib/subagent-numbering'
-import { TurnTimeline } from '@/components/observe/TurnTimeline'
+import { SessionBlock, type TurnsNodeSession } from '@/components/run/RunTurnsNodes'
 import { ContextTracker } from '@/components/observe/ContextTracker'
+
+// 单会话块（run Turns 节点 / 离线查看器共用的轮次列表单元）最小 session 载体
+function soloSession(taskId: string): TurnsNodeSession {
+  return {
+    taskId,
+    label: taskId,
+    role: 'execute',
+    attemptOrdinal: 1,
+    ref: {
+      taskId,
+      framework: '',
+      rowId: '',
+      turns: 0,
+      totalTokens: 0,
+      durationMs: null,
+      label: taskId,
+      startTime: null,
+      endTime: null,
+      cacheReadTokens: null,
+    },
+  }
+}
 
 interface TurnFixture {
   turnId: string
@@ -136,8 +159,32 @@ describe('buildSubagentNumbers：时间序统一编号', () => {
   })
 })
 
-// ② 一致性：同一份数据，TurnTimeline lane 徽标与 ContextTracker 图例的
-// "general #1" 必须是同一个 subagentSessionId（sub-b，时间最早者）
+// ② 一致性：同一份数据，会话块泳道徽标与 ContextTracker 组详情的
+// "general #1" 必须是同一个 subagentSessionId（sub-b，时间最早者）。
+// Context 的编号名在组详情渐进披露层（chevron 展开），须客户端渲染交互后断言
+let root: Root | null = null
+afterEach(() => {
+  if (root) { act(() => { root!.unmount() }); root = null }
+  document.body.innerHTML = ''
+})
+
+async function mountContextDetail(turns: TurnFixture[], legend: string): Promise<string> {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  await act(async () => {
+    root!.render(createElement(ContextTracker, { turns, sessionModel: null }))
+  })
+  await act(async () => { await new Promise(r => setTimeout(r, 20)) })
+  const label = container.querySelector(`[data-legend="${legend}"]`) as HTMLElement | null
+  expect(label, `图例 ${legend} 应存在`).toBeTruthy()
+  const detailBtn = label!.parentElement!.querySelector('button') as HTMLButtonElement | null
+  expect(detailBtn).toBeTruthy()
+  await act(async () => { detailBtn!.click() })
+  await act(async () => { await new Promise(r => setTimeout(r, 20)) })
+  return container.textContent ?? ''
+}
+
 const T0 = '2026-09-15T10:00:00Z'
 const sharedTurns: TurnFixture[] = [
   makeTurn({ turnId: 'r0', turnIndex: 0, createdAt: T0, role: 'user', agentName: 'build' }),
@@ -160,31 +207,30 @@ const sharedBridges = (['sub-b', 'sub-a', 'sub-c'] as const).map((sid, i) => ({
   subagentLatencyMs: 1000,
 }))
 
-describe('TurnTimeline ↔ ContextTracker 编号一致', () => {
-  it('两处 "general #1" 同指时间最早的 sub-b，#2/#3 依次对应', () => {
-    const timelineHtml = renderToStaticMarkup(createElement(TurnTimeline, {
-      turns: sharedTurns,
+describe('会话块泳道 ↔ ContextTracker 编号一致', () => {
+  it('两处 "general #1" 同指时间最早的 sub-b，#2/#3 依次对应', async () => {
+    const timelineHtml = renderToStaticMarkup(createElement(SessionBlock, {
+      session: soloSession('ses-shared'),
+      state: { turns: sharedTurns, total: sharedTurns.length, page: 1, loading: false },
       bridges: sharedBridges,
       selectedTurnId: null,
       onSelectTurn: () => {},
-    }))
-    const ctxHtml = renderToStaticMarkup(createElement(ContextTracker, {
-      turns: sharedTurns,
-      sessionModel: null,
+      onLoadMore: () => {},
     }))
 
     // 纯函数锚点：#1 = sub-b
     expect(buildSubagentNumbers(sharedTurns).get('sub-b')).toBe(1)
 
-    // TurnTimeline lane 徽标：三档编号都在，且 bridge（sub-b，列表首 lane）显示 #1
+    // 泳道徽标：三档编号都在，且 bridge（sub-b，列表首 lane）显示 #1
     expect(timelineHtml).toContain('general #1')
     expect(timelineHtml).toContain('general #2')
     expect(timelineHtml).toContain('general #3')
 
-    // ContextTracker 图例：同样三档编号
-    expect(ctxHtml).toContain('general #1')
-    expect(ctxHtml).toContain('general #2')
-    expect(ctxHtml).toContain('general #3')
+    // ContextTracker 组详情（general 类型 ×3 实例的切换胶囊）：同样三档编号
+    const ctxText = await mountContextDetail(sharedTurns, 'general')
+    expect(ctxText).toContain('general #1')
+    expect(ctxText).toContain('general #2')
+    expect(ctxText).toContain('general #3')
   })
 })
 
@@ -219,12 +265,14 @@ describe('唯一名 subagent 渲染无 #N 后缀', () => {
     subagentLatencyMs: 10000,
   }))
 
-  it('TurnTimeline 泳道 chip 显示裸名（Volta 而非 Volta #1）', () => {
-    const html = renderToStaticMarkup(createElement(TurnTimeline, {
-      turns: codexTurns,
+  it('泳道 chip 显示裸名（Volta 而非 Volta #1）', () => {
+    const html = renderToStaticMarkup(createElement(SessionBlock, {
+      session: soloSession('ses-codex'),
+      state: { turns: codexTurns, total: codexTurns.length, page: 1, loading: false },
       bridges: codexBridges,
       selectedTurnId: null,
       onSelectTurn: () => {},
+      onLoadMore: () => {},
     }))
     expect(html).toContain('Volta')
     expect(html).toContain('Franklin')
@@ -234,13 +282,12 @@ describe('唯一名 subagent 渲染无 #N 后缀', () => {
     expect(html).not.toContain('Avicenna #')
   })
 
-  it('ContextTracker 图例同样显示裸名', () => {
-    const html = renderToStaticMarkup(createElement(ContextTracker, {
-      turns: codexTurns,
-      sessionModel: null,
-    }))
-    expect(html).not.toContain('Volta #')
-    expect(html).not.toContain('Franklin #')
-    expect(html).not.toContain('Avicenna #')
+  it('ContextTracker 组详情同样显示裸名（无 #N 后缀）', async () => {
+    // 唯一名 = 单实例类型组，详情直开；若误给唯一名编号，详情胶囊即暴露
+    const text = await mountContextDetail(codexTurns, 'Volta')
+    expect(text).toContain('Volta')
+    expect(text).not.toContain('Volta #')
+    expect(text).not.toContain('Franklin #')
+    expect(text).not.toContain('Avicenna #')
   })
 })

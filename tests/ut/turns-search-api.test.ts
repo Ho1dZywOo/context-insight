@@ -9,7 +9,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { prisma } from '../setup';
-import { GET } from '@/app/api/observe/session/turns/search/route';
+import { GET } from '@/app/api/observe/run/[runId]/turns/search/route';
 
 const createdSessionIds: string[] = [];
 
@@ -46,9 +46,12 @@ afterEach(async () => {
 
 function makeRequest(taskId: string, keyword: string) {
   return new NextRequest(
-    `http://localhost/api/observe/session/turns/search?taskId=${encodeURIComponent(taskId)}&keyword=${encodeURIComponent(keyword)}&framework=claude-code`
+    `http://localhost/api/observe/run/solo:${encodeURIComponent(taskId)}/turns/search?keyword=${encodeURIComponent(keyword)}`
   );
 }
+
+const callSearch = (taskId: string, keyword: string) =>
+  GET(makeRequest(taskId, keyword), { params: Promise.resolve({ runId: `solo:${taskId}` }) });
 
 describe('turns search API — tool call args matching', () => {
   it('finds keyword present only in toolCall.argsJson (e.g. file_path)', async () => {
@@ -62,7 +65,7 @@ describe('turns search API — tool call args matching', () => {
       content: 'Let me read the design doc.',
     });
 
-    const res = await GET(makeRequest(taskId, 'DESIGN.md'));
+    const res = await callSearch(taskId, 'DESIGN.md');
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.items.length).toBe(1);
@@ -84,7 +87,7 @@ describe('turns search API — tool call args matching', () => {
       content: 'running ls',
     });
 
-    const res = await GET(makeRequest(taskId, 'DESIGN.md'));
+    const res = await callSearch(taskId, 'DESIGN.md');
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.items.length).toBe(0);
@@ -101,15 +104,15 @@ describe('turns search API — tool call args matching', () => {
       content: 'searching',
     });
 
-    const res = await GET(makeRequest(taskId, 'DESIGN.md'));
+    const res = await callSearch(taskId, 'DESIGN.md');
     const data = await res.json();
     expect(data.items.length).toBe(1);
     expect(data.items[0].matchField).toBe('toolResult');
   });
 
   it('returns 400 when keyword missing', async () => {
-    const req = new NextRequest('http://localhost/api/observe/session/turns/search?taskId=whatever');
-    const res = await GET(req);
+    const req = new NextRequest('http://localhost/api/observe/run/solo:whatever/turns/search');
+    const res = await GET(req, { params: Promise.resolve({ runId: 'solo:whatever' }) });
     expect(res.status).toBe(400);
   });
 });

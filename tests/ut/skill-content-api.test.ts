@@ -9,7 +9,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { prisma } from '../setup';
-import { GET } from '@/app/api/observe/session/skill-content/route';
+import { GET } from '@/lib/observe/session-handlers/skill-content';
 
 const createdSessionIds: string[] = [];
 

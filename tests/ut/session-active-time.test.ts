@@ -68,7 +68,7 @@ describe('GET /api/observe/session — Wall Clock 活跃/非活跃拆分', () =>
     expect(s).not.toBeNull()
     createdSessionIds.push(s!.id)
 
-    const { GET } = await import('@/app/api/observe/session/route')
+    const { GET } = await import('@/lib/observe/session-handlers/detail')
     const apiRes = await GET(new NextRequest(`http://localhost/api/observe/session?taskId=${sid}`))
     expect(apiRes.status).toBe(200)
     const data = await apiRes.json()
@@ -93,7 +93,7 @@ describe('GET /api/observe/session — Wall Clock 活跃/非活跃拆分', () =>
     expect(s).not.toBeNull()
     createdSessionIds.push(s!.id)
 
-    const { GET } = await import('@/app/api/observe/session/route')
+    const { GET } = await import('@/lib/observe/session-handlers/detail')
     const apiRes = await GET(new NextRequest(`http://localhost/api/observe/session?taskId=${sid}`))
     expect(apiRes.status).toBe(200)
     const data = await apiRes.json()
@@ -123,7 +123,7 @@ describe('GET /api/observe/session — Wall Clock 活跃/非活跃拆分', () =>
     expect(s).not.toBeNull()
     createdSessionIds.push(s!.id)
 
-    const { GET } = await import('@/app/api/observe/session/route')
+    const { GET } = await import('@/lib/observe/session-handlers/detail')
     const apiRes = await GET(new NextRequest(`http://localhost/api/observe/session?taskId=${sid}`))
     expect(apiRes.status).toBe(200)
     const data = await apiRes.json()

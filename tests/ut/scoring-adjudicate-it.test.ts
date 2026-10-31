@@ -54,12 +54,12 @@ afterAll(async () => {
 });
 
 const scorecardGet = async () => {
-  const { GET } = await import('../../src/app/api/observe/session/scorecard/route');
+  const { GET } = await import('@/lib/observe/session-handlers/scorecard');
   const res = await GET(new NextRequest(`http://localhost/api/observe/session/scorecard?taskId=${SID}`));
   return res.json();
 };
 const adjudicatePost = async (body: Record<string, unknown>) => {
-  const { POST } = await import('../../src/app/api/observe/session/scorecard/adjudicate/route');
+  const { POST } = await import('@/lib/observe/session-handlers/scorecard-adjudicate');
   const res = await POST(new NextRequest('http://localhost/api/observe/session/scorecard/adjudicate', {
     method: 'POST', body: JSON.stringify(body),
   }));
