@@ -9,7 +9,7 @@
 // Mate 评审 GUIDE 读取兜底 IT：
 //   现场（npm 安装）构建产物 .next/server/assets/GUIDE.<hash>.md 缺失
 //   （包不带 .next、首启现场构建，构建中断/损坏）时，五维评审曾整片
-//   ENOENT 失败（现场案例：node_modules/context-insight/.next/server/
+//   ENOENT 失败（现场案例：node_modules/cannbot-insight/.next/server/
 //   assets/GUIDE.05zsj0zhcfc4-.md 不存在）。src/ 随包发布——回落源文件，
 //   且兜底命中必须 logWarn 留痕（ctxi -f 重建的行动信号，不静默带病跑）。
 import { describe, it, expect, vi, beforeEach } from 'vitest'

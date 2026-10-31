@@ -7,9 +7,9 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // @vitest-environment happy-dom
-// Import Session browse 步「按文件名/session id 过滤」IT：原生会话目录（如
+// 统一导入向导 browse 步「按文件名/session id 过滤」IT：原生会话目录（如
 // ~/.codex/sessions/2026/10/08）一天几十个 rollout 文件，文件名内嵌 session
-// id——粘贴 id 片段即可定位目标文件。驱动真实 LocalFileImport 组件：进入
+// id——粘贴 id 片段即可定位目标文件。驱动真实 ImportDialog 组件：进入
 // browse 步 → 断言全量行 → 输入 id 片段过滤到目标行（含 N of M 计数与
 // importable 计数）→ 清空恢复 → 进入新目录过滤自动重置。
 
@@ -17,7 +17,7 @@ import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { LocalFileImport } from '@/components/LocalFileImport'
+import { ImportDialog } from '@/components/collection/ImportDialog'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -54,7 +54,7 @@ function codexDayDir(): MockEntry[] {
 }
 
 beforeAll(() => {
-  ;(globalThis as { fetch: typeof fetch }).fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  ;(globalThis as { fetch: typeof fetch }).fetch = ((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
     if (url.includes('/api/ingest/browse-directory')) {
       return Promise.resolve(new Response(JSON.stringify({
@@ -100,16 +100,14 @@ async function openBrowseStep(): Promise<void> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  await act(async () => { root!.render(createElement(LocalFileImport)) })
+  await act(async () => { root!.render(createElement(ImportDialog)) })
   await flush()
 
-  click(findButtonByText('Import Session')!)
+  click(findButtonByText('Import')!)
   await flush()
 
-  // JSONL (auto) 伞形源（claude/codex 内容自动识别）→ 快捷按钮「Codex 原生」
-  // 直达 sessions 根 → browse 步
-  click(findButtonByText('JSONL (auto)')!)
-  await flush()
+  // 默认来源=本地、格式=JSONL (auto) 伞形源（claude/codex 内容自动识别）
+  // → 快捷按钮「Codex 原生」直达 sessions 根 → browse 步
   click(findButtonByText('Codex 原生')!)
   await flush()
 
@@ -127,7 +125,7 @@ describe('Import Session browse 步：按文件名 / session id 过滤', () => {
 
     // 全量：2 目录/文件行 + 3 rollout + 1 txt = 5 行；3 个 importable
     expect(visibleRows()).toHaveLength(5)
-    expect(document.body.textContent).toContain('3 importable files found')
+    expect(document.body.textContent).toContain('3 importable files ·')
 
     // 粘贴 session id 片段（真实场景：从别处复制了 id 前几位）
     const filterInput = document.querySelector('input[placeholder*="Filter by file name or session ID"]') as HTMLInputElement
@@ -138,13 +136,13 @@ describe('Import Session browse 步：按文件名 / session id 过滤', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].textContent).toContain('rollout-2026-10-08T20-46-51-01a11b8d-5b5c-7d82-850a-70f466aad9e8.jsonl')
     expect(document.body.textContent).toContain('1 of 5 shown')
-    expect(document.body.textContent).toContain('1 of 3 importable files shown')
+    expect(document.body.textContent).toContain('1 of 3 importable files')
 
     // 清空恢复全量
     typeInto(filterInput, '')
     await flush()
     expect(visibleRows()).toHaveLength(5)
-    expect(document.body.textContent).toContain('3 importable files found')
+    expect(document.body.textContent).toContain('3 importable files ·')
   })
 
   it('大小写不敏感 + 无匹配空态提示', async () => {
@@ -160,6 +158,6 @@ describe('Import Session browse 步：按文件名 / session id 过滤', () => {
     await flush()
     expect(visibleRows()).toHaveLength(1) // 空态行
     expect(document.body.textContent).toContain('No entries match your filter')
-    expect(document.body.textContent).toContain('0 of 3 importable files shown')
+    expect(document.body.textContent).toContain('0 of 3 importable files')
   })
 })

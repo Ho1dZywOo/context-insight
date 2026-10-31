@@ -7,16 +7,16 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // @vitest-environment happy-dom
-// Import Session 会话选择步搜索 IT：SQLite (auto) 载入 sessions 后，选择表
+// 统一导入向导会话选择步搜索 IT：SQLite (auto) 载入 sessions 后，选择表
 // 上方提供 keyword / sessionID 过滤（firstQuery 或 id 子串、大小写不敏感），
 // 全选作用于当前过滤视图（与 lake 列表同款语义），空结果显示 no-match
-// 提示。驱动真实 LocalFileImport 组件走完 input → select 全链路。
+// 提示。驱动真实 ImportDialog 组件走完 input → select 全链路。
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { LocalFileImport } from '@/components/LocalFileImport'
+import { ImportDialog } from '@/components/collection/ImportDialog'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -76,17 +76,17 @@ async function openSelectStep(): Promise<HTMLInputElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  await act(async () => { root!.render(createElement(LocalFileImport)) })
+  await act(async () => { root!.render(createElement(ImportDialog)) })
   await flush()
 
-  await act(async () => { click(findButtonByText('Import Session')!) })
+  await act(async () => { click(findButtonByText('Import')!) })
   await flush()
   await act(async () => { click(findButtonByText('SQLite (auto)')!) })
   await flush()
   const pathInput = [...document.querySelectorAll('input')].find(i => i.placeholder?.includes('sessions.db')) as HTMLInputElement
   expect(pathInput, 'File Path 输入框未找到').toBeTruthy()
   setInputValue(pathInput, '/tmp/fake-sessions.db')
-  await act(async () => { click(findButtonByText('Load Sessions')!) })
+  await act(async () => { click(findButtonByText('Load')!) })
   await flush()
   expect(document.body.textContent).toContain('Select sessions to import')
 
@@ -95,7 +95,7 @@ async function openSelectStep(): Promise<HTMLInputElement> {
   return search
 }
 
-describe('Import Session 选择步搜索（keyword / sessionID）', () => {
+describe('统一导入向导选择步搜索（keyword / sessionID）', () => {
   it('keyword 过滤 firstQuery（大小写不敏感）+ 计数 N of M shown', async () => {
     const search = await openSelectStep()
     expect(document.body.textContent).toContain('Select all (3 sessions)')

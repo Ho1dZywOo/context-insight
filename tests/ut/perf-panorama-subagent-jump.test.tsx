@@ -1,18 +1,20 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
-// CANN Open Software License Agreement Version 2.0 (the "License).
+// This program is free software; you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
 // Please refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // @vitest-environment happy-dom
 
-// Perf 页柱子（subagent 执行段）↔ Turns 页对应 IT：
-//   ① 柱子/横轴标签带 <title>（subagent 名 + 明细 + 跳转提示）——横轴原本
-//      只有 #N 序号，56 根柱子无法与 Turns 的 subagent 对应
-//   ② 点击柱子 → onJumpToSubagent(agentSessionId)，page 侧定位该 subagent
-//      首个 turn 并高亮 lane
+// Perf 时间线条子（subagent 执行段）↔ Turns 对应 IT（run 视角）：
+//   ① 执行时间线卡渲染子代理条（data-bar = executionId，泳道图自 Overview 迁入）
+//   ② 双击条子 → onOpenTurn（该 subagent 会话首轮 turnId）——定位出口
+//      唯一收敛到 turnId，由装配层接 Turns 深链管线
+//   ③ 热点排行：行内定位角标与轮次行点击走同一 onOpenTurn 出口
+//      （行属性 data-lane-row——与时间线卡的 data-lane 泳道容器区分）
+
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -36,6 +38,7 @@ const SUB_EXEC = {
   isSubagent: true,
   subagentName: '探索',
   agentSessionId: 'ses_sub_jump_1',
+  member: { taskId: 'm-jump', label: '成员甲' },
   depth: 1,
   tokens: 5000,
   inputTokens: 4000,
@@ -43,6 +46,9 @@ const SUB_EXEC = {
   reasoningTokens: 200,
   cacheReadInputTokens: 3000,
   cacheCreationInputTokens: 0,
+  maxSingleCallTokens: 2000,
+  skillLoadCount: 0,
+  firstPrompt: '探索任务',
   cost: 0,
   latencyMs: 120_000,
   toolCallCount: 2,
@@ -52,44 +58,87 @@ const SUB_EXEC = {
   createdAt: '2026-09-15T10:00:00Z',
 }
 
-describe('PerfPanorama subagent 柱子 → Turns 对应', () => {
-  it('柱子带 title（名字+明细+提示）；点击触发 onJumpToSubagent(agentSessionId)', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      const json = (data: unknown) => Promise.resolve(new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }))
-      if (url.includes('/api/observe/executions')) return json({ items: [SUB_EXEC] })
-      if (url.includes('/api/observe/session/turns')) return json({ items: [] })
-      if (url.includes('/api/observe/session/bridges')) return json({ items: [] })
-      return json({})
-    }))
+const TURNS = [{
+  turnId: 'turn-sub-jump', turnIndex: 0, role: 'assistant', agentName: 'general', isSubagent: true,
+  subagentName: '探索', subagentSessionId: 'ses_sub_jump_1',
+  member: { taskId: 'm-jump', label: '成员甲' }, contentSummary: null,
+  createdAt: '2026-09-15T10:00:30Z',
+  totalTokens: 500, inputTokens: 300, outputTokens: 150, reasoningTokens: 50,
+  cacheReadTokens: 100, cacheWriteTokens: 20, contextWindowPct: null, latencyMs: 1500,
+  model: 'glm-5.3', toolCalls: [],
+}]
 
-    const jumped: string[] = []
-    container = document.createElement('div')
-    document.body.appendChild(container)
-    root = createRoot(container)
+const ENDPOINTS = {
+  executions: '/perf-jump/executions',
+  turns: '/perf-jump/turns',
+  bridges: '/perf-jump/bridges',
+}
+
+async function renderPanorama(onOpenTurn?: (turnId: string) => void) {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    const json = (data: unknown) => Promise.resolve(new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }))
+    if (url.includes('/perf-jump/executions')) return json({ items: [SUB_EXEC] })
+    if (url.includes('/perf-jump/turns')) return json({ items: TURNS })
+    if (url.includes('/perf-jump/bridges')) return json({ items: [] })
+    return json({})
+  }))
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  await act(async () => {
+    root!.render(createElement(PerfPanorama, { endpoints: ENDPOINTS, onOpenTurn }))
+  })
+  await act(async () => { })
+}
+
+describe('PerfPanorama 时间线条子 → Turns 对应（run 视角）', () => {
+  it('时间线卡渲染子代理条；双击条子与热点行定位 → onOpenTurn(会话首轮)', async () => {
+    const opened: string[] = []
+    await renderPanorama(turnId => { opened.push(turnId) })
+
+    // ① 执行时间线卡：标题 + 子代理条（data-bar = executionId）
+    expect(container!.textContent).toContain('Agent Swimlane (1 · 子代理 1)')
+    const bar = container!.querySelector('[data-bar="exec-sub-1"]')
+    expect(bar).toBeTruthy()
+
+    // ② 双击条子 → onOpenTurn（该 subagent 会话首轮 turnId）
     await act(async () => {
-      root!.render(createElement(PerfPanorama, {
-        taskId: 'perf-jump-test',
-        onJumpToSubagent: (sid) => { jumped.push(sid) },
-      }))
+      bar!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     })
-    await act(async () => { })
+    expect(opened).toEqual(['turn-sub-jump'])
 
-    // ① Duration 图柱子的 title：subagent 名 + 跳转提示
-    const titles = [...container.querySelectorAll('svg title')].map(t => t.textContent ?? '')
-    const barTitle = titles.find(t => t.includes('探索') && t.includes('点击跳转'))
-    expect(barTitle).toBeTruthy()
-    expect(barTitle).toContain('general')
-
-    // ② 点击柱子 → 回调带 agentSessionId
-    const barGroup = [...container.querySelectorAll('svg g')].find(g => {
-      const t = g.querySelector('title')
-      return t?.textContent?.includes('探索') && (t.textContent?.includes('总耗时') || t.textContent?.includes('tokens'))
-    })
-    expect(barGroup).toBeTruthy()
+    // ③ 热点排行行内定位角标 → 同一出口（data-lane-row 区别于时间线 data-lane）
+    const laneRow = container!.querySelector('[data-lane-row="ses_sub_jump_1"]')
+    expect(laneRow).toBeTruthy()
+    expect(laneRow!.textContent).toContain('子代理 · 成员甲')
+    const locateBtn = laneRow!.querySelector('[title="在 Turns 时间线定位该单元"]')
+    expect(locateBtn).toBeTruthy()
     await act(async () => {
-      barGroup!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      locateBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    expect(jumped).toEqual(['ses_sub_jump_1'])
+    expect(opened).toEqual(['turn-sub-jump', 'turn-sub-jump'])
+  })
+
+  it('热点行展开 → 轮次行点击 → onOpenTurn(该轮 turnId)；展开内含执行切片', async () => {
+    const opened: string[] = []
+    await renderPanorama(turnId => { opened.push(turnId) })
+
+    const laneRow = container!.querySelector('[data-lane-row="ses_sub_jump_1"]')!
+    await act(async () => {
+      laneRow.querySelector('[role="button"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    // 展开面板：轮次 + 执行切片（#1 全局序号与画像墙钟同口径）
+    const panelText = laneRow.textContent ?? ''
+    expect(panelText).toContain('轮次 · 1')
+    expect(panelText).toContain('执行切片 · 1')
+    expect(panelText).toContain('#1')
+
+    const turnRow = laneRow.querySelector('[data-turn="turn-sub-jump"]')!
+    expect(turnRow).toBeTruthy()
+    await act(async () => {
+      turnRow.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(opened).toEqual(['turn-sub-jump'])
   })
 })

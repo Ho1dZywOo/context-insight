@@ -10,8 +10,7 @@
 // 数据仓同 sid 双记录导入 UI IT：sid@recording 复合键只用于选择集与状态
 // 更新定位，真实 sid 一律流入消费路径——
 //   ① 双记录条目（capture + native）勾选导入 → 导入中列表 label 匹配
-//      importedPreviews（按真实 sid），显示导入结果的 firstQuery 而非裸
-//      复合键；recording 标记可见（·capture / ·native）
+//      importedPreviews（按真实 sid），recording 标记可见（·capture / ·native）
 //   ② handleDone 写入 ImportHistory：taskId = 真实 sid（无 @ 后缀——
 //      delete-session/dbMeta 消费方按裸 sid 查行）、filePath 目录形态按
 //      记录类（capture=<sid> / native=<sid>.native）
@@ -21,7 +20,7 @@ import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { LocalFileImport } from '@/components/LocalFileImport'
+import { ImportDialog } from '@/components/collection/ImportDialog'
 import { BAY_NAME } from '@/lib/branding'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -117,12 +116,12 @@ async function openLakeTable(): Promise<void> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  await act(async () => { root!.render(createElement(LocalFileImport)) })
+  await act(async () => { root!.render(createElement(ImportDialog)) })
   await flush(150)
-  await aclick(findButtonByText('Import Session'))
+  await aclick(findButtonByText('Import'))
   await flush(150)
-  // 点 lake 源按钮即触发 handleOpenLake（拉列表）→ 范式选择步；
-  // 范式按钮文本带会话计数（如 "dual-it2"），用包含匹配
+  // 点数据仓源按钮即触发 handleOpenLake（并行拉会话列表 + bundle 清单）→
+  // 目录选择步；范式按钮文本带会话计数（如 "dual-it2"），用包含匹配
   await aclick(findButtonByText(BAY_NAME, true))
   await flush(250)
   await aclick(findButtonByText('dual-it'))

@@ -7,17 +7,18 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // @vitest-environment happy-dom
-// Import Session · JSONL 目录浏览时间列 IT：browse 步新增 Modified 时间列 +
-// 排序箭头——默认降序（最新在前，方便按时间找会话捕获文件），点击箭头切升序。
-// 驱动真实 LocalFileImport 走 input → browse 全链路（mock browse-directory
-// 返回乱序 mtime 的 entries），断言 DOM 行序随排序方向翻转、目录恒置顶、
-// mtime 渲染为本地时间文本；另直测 sortDirEntries 两个方向的纯排序语义。
+// 统一导入向导 · JSONL 目录浏览时间列 IT：browse 步 Modified 时间列 + 排序
+// 箭头——默认降序（最新在前，方便按时间找会话捕获文件），点击箭头切升序。
+// 驱动真实 ImportDialog 走 input → browse 全链路（mock browse-directory 返回
+// 乱序 mtime 的 entries），断言 DOM 行序随排序方向翻转、目录恒置顶、mtime
+// 渲染为本地时间文本；另直测 sortDirEntries 两个方向的纯排序语义。
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { LocalFileImport, sortDirEntries } from '@/components/LocalFileImport'
+import { ImportDialog } from '@/components/collection/ImportDialog'
+import { sortDirEntries, type DirEntry } from '@/components/ingest/browse'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -82,11 +83,11 @@ async function renderAndGoBrowse() {
   document.body.appendChild(container)
   await act(async () => {
     root = createRoot(container)
-    root.render(createElement(LocalFileImport))
+    root.render(createElement(ImportDialog))
   })
   await flush()
-  // 打开 Import Session 对话框（默认 sourceType=claude-jsonl）
-  await act(async () => { click(findButtonByText('Import Session')!) })
+  // 打开统一导入向导（默认来源=本地，格式=JSONL 伞形）
+  await act(async () => { click(findButtonByText('Import')!) })
   await flush()
   const browse = findButtonByText('Browse')
   expect(browse, 'Browse 按钮未找到').toBeTruthy()
@@ -94,7 +95,7 @@ async function renderAndGoBrowse() {
   await flush()
 }
 
-describe('Import Session · 目录浏览时间列排序', () => {
+describe('统一导入向导 · 目录浏览时间列排序', () => {
   it('默认降序（最新在前）+ 目录置顶；Modified 表头带降序箭头；mtime 渲染为时间文本', async () => {
     await renderAndGoBrowse()
     expect(modifiedHeader()).toBeTruthy()
@@ -117,7 +118,7 @@ describe('Import Session · 目录浏览时间列排序', () => {
   })
 
   it('sortDirEntries 纯排序语义：两方向 + 目录置顶 + mtime 缺失兜底 + 同时间按名', () => {
-    const mk = (name: string, isDir: boolean, mtime?: number | null) =>
+    const mk = (name: string, isDir: boolean, mtime?: number | null): DirEntry =>
       ({ name, fullPath: `/${name}`, isDir, size: 0, mtime, isImportableFile: !isDir, importableType: isDir ? null : 'claude-jsonl' })
     const entries = [mk('z-new', false, 300), mk('a-dir', true, 999), mk('m-old', false, 100), mk('legacy', false, undefined)]
     expect(sortDirEntries(entries, false).map(e => e.name)).toEqual(['a-dir', 'z-new', 'm-old', 'legacy'])

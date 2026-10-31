@@ -60,6 +60,8 @@ function wireProps(overrides: Record<string, unknown> = {}) {
     systemOverheadTokens: 0,
     systemPrompt: 'You are Claude Code.',
     fullContext: { tools: [], memoryFiles: MEMORY_TEXT, skills: SKILLS_TEXT },
+    // 阅读优先默认折叠（正文/工具调用是阅读主体）——wire 契约测试显式展开
+    defaultExpanded: true,
     ...overrides,
   };
 }

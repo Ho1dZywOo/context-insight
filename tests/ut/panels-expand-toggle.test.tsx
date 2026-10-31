@@ -8,9 +8,9 @@
 
 // @vitest-environment happy-dom
 
-// 展开收起交互统一的全面板覆盖（bug 修复 IT）：LLM Output / Tool Calls / Wire Rounds
-// 面板的行空白处点击不触发展开，仅行尾三角（▶/▼）可触发。与 context-expand-toggle
-// 共同构成「三角唯一触发点」契约的完整覆盖。
+// 展开收起交互统一的全面板覆盖（bug 修复 IT）：Llm Output（thinking 段）/
+// Tool Calls / Wire Rounds 面板的行空白处点击不触发展开，仅行尾三角（▶/▼）
+// 可触发。与 context-expand-toggle 共同构成「三角唯一触发点」契约的完整覆盖。
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement, type ReactElement } from 'react';
@@ -77,36 +77,32 @@ describe('LlmOutputView 展开收起交互', () => {
     return renderSync(createElement(LlmOutputView, {
       content: `<thinking>${THINKING_TAIL}</thinking>Final answer`,
       contentJson: null,
-      contentSummary: null,
       outputTokens: 100,
       reasoningTokens: 50,
     } as never));
   }
 
-  it('面板头：空白点击不收起，三角点击收起/展开；三角在行尾', () => {
+  it('正文常驻（整卡折叠已退役），三角唯一 = thinking 段，位于行尾', () => {
     const c = renderOutput();
-    const tri = toggles(c)[0];
-    expect(tri).toBeDefined();
-    expect(isRowEnd(tri)).toBe(true);
-
-    // 小输出默认展开（≤2000t 且内容 ≤6000 字符）
+    const tris = toggles(c);
+    expect(tris.length).toBe(1);
+    expect(isRowEnd(tris[0])).toBe(true);
     expect(c.textContent).toContain('thinking');
-    click(rowOf(tri)); // 行空白处
-    expect(c.textContent).toContain('thinking');
-    click(tri); // 三角 → 收起
-    expect(c.textContent).not.toContain('thinking');
-    click(tri); // 再点 → 展开
-    expect(c.textContent).toContain('thinking');
+    // 正文常驻可读（不再有整卡折叠态）
+    expect(c.textContent).toContain('Final answer');
   });
 
-  it('thinking 段：空白点击不展开，三角点击展开全文', () => {
-    const c = renderOutput(); // 面板默认展开
+  it('thinking 段：默认展开，空白点击不收起，三角点击收起/再展开', () => {
+    const c = renderOutput();
     const thinkTri = toggleByRowText(c, 'thinking');
 
-    expect(c.textContent).not.toContain(THINKING_TAIL);
+    // 输出默认展开：thinking 正文随开
+    expect(c.textContent).toContain(THINKING_TAIL);
     click(rowOf(thinkTri)); // 行空白处
+    expect(c.textContent).toContain(THINKING_TAIL);
+    click(thinkTri); // 三角收起
     expect(c.textContent).not.toContain(THINKING_TAIL);
-    click(thinkTri); // 三角
+    click(thinkTri); // 三角再展开
     expect(c.textContent).toContain(THINKING_TAIL);
   });
 });

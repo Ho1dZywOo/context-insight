@@ -183,7 +183,7 @@ afterAll(async () => {
 
 describe('listParadigms', () => {
   it('范式汇总：运行数（不含 baseline）/ baseline 标记 / 排序', async () => {
-    const { listParadigms } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listParadigms } = await import('../../../src/lib/collection/lake-view/runs');
     const items = await listParadigms();
     const names = items.map(p => p.name);
     expect(names).toContain('elementwise');
@@ -207,7 +207,7 @@ describe('listParadigms', () => {
 
 describe('listRuns（混合口径 join）', () => {
   it('elementwise：已导入行指标来自本地库，未导入行降级，baseline 行在列', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'elementwise' });
     expect(r.insightReachable).toBe(true);
     expect(r.baselineSid).toBe('ele-base9999');
@@ -220,7 +220,7 @@ describe('listRuns（混合口径 join）', () => {
     expect(aaaa?.totalTokens).toBe(120_000);
     expect(aaaa?.startTimeApprox).toBe(false);
     expect(aaaa?.model).toBe('test-model-a'); // 已导入取 DB Session.model
-    expect(aaaa?.insightUrl).toBe('/session/ele-aaaa1111?framework=claude-code');
+    expect(aaaa?.insightUrl).toBe('/run/solo:ele-aaaa1111?framework=claude-code');
     // 首个 commit 无「内容描述」标签 → null；第二个 commit 带 标签 → 解析出描述/作者
     expect(aaaa?.description).toBeNull();
     expect(aaaa?.author).toBeNull();
@@ -242,7 +242,7 @@ describe('listRuns（混合口径 join）', () => {
   });
 
   it('质量分 + vs baseline delta（评分卡缓存 seed 数据驱动）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'elementwise' });
     const aaaa = r.items.find(x => x.sid === 'ele-aaaa1111');
     expect(aaaa?.totalScore).toBe(82.5);
@@ -252,7 +252,7 @@ describe('listRuns（混合口径 join）', () => {
   });
 
   it('无 baseline 范式：delta 为空但分数照常', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'contraction' });
     expect(r.baselineSid).toBeNull();
     const con = r.items.find(x => x.sid === 'con-bbbb2222');
@@ -262,7 +262,7 @@ describe('listRuns（混合口径 join）', () => {
   });
 
   it('筛选：opGen / scored / imported / q / framework', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const all = await listRuns({ paradigm: 'elementwise' });
     expect(all.facets.frameworks).toEqual(['claude-code', 'opencode']);
 
@@ -274,13 +274,13 @@ describe('listRuns（混合口径 join）', () => {
   });
 
   it('时间范围筛选（本地库 startTime 口径）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'elementwise', from: '2026-08-15', to: '2026-09-15' });
     expect(r.items.map(x => x.sid).sort()).toEqual(['ele-base9999', 'ele-cccc3333']);
   });
 
   it('时间范围筛选：时区口径不漂移（UTC Z 凌晨的运行归对本地的天）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     // 测试库 startTime 落库为 UTC：2026-08-01T02:05Z = 北京时间 08-01 10:05
     const r = await listRuns({ paradigm: 'elementwise', from: '2026-09-16', to: '2026-09-16' });
     expect(r.items.map(x => x.sid)).toEqual([]);
@@ -290,7 +290,7 @@ describe('listRuns（混合口径 join）', () => {
   });
 
   it('时间范围筛选：tz 参数显式定时区（与服务器本地时区无关，review #190172825）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     // 同一时刻 2026-08-01T02:05Z：+08 用户眼里是 08-01 10:05；-05 用户眼里是
     // 07-31 22:05——两种时区各自「当天」都命中、对方「当天」不命中
     const plus8 = await listRuns({ paradigm: 'elementwise', from: '2026-08-01', to: '2026-08-01', tz: '+08:00' });
@@ -304,7 +304,7 @@ describe('listRuns（混合口径 join）', () => {
 
 describe('listRuns（混格式开始时间排序）', () => {
   it('UTC "Z" 与 "+08:00" 混排按 epoch 比较（字符串比较会错序）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'mixfmt' });
     // mix-zed0001（库内 → '2026-08-01T02:05:00.000Z' = 10:05+08）新于
     // mix-plus001（meta '09:30+08:00' = 01:30Z）；字符串比较 'T09…' > 'T02…'
@@ -315,7 +315,7 @@ describe('listRuns（混格式开始时间排序）', () => {
 
 describe('listRuns（同 sid 双记录）', () => {
   it('native 位：sid 无后缀、meta 字段全量、开始时间取快照（回归：meta 读不出导致 工具未知/时间为上传时刻）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'dualrec' });
     expect(r.total).toBe(2);
 
@@ -339,7 +339,7 @@ describe('listRuns（同 sid 双记录）', () => {
 
 describe('listRuns（同 sid 双记录 DB 消歧）', () => {
   it('两行都已导入：按 framework 各取本行指标/模型/URL，不再串行（review 回归）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'dualdb' });
 
     const nat = r.items.find(x => x.sid === 'dual2-bbbb2222' && x.recording === 'native');
@@ -347,17 +347,17 @@ describe('listRuns（同 sid 双记录 DB 消歧）', () => {
     expect(nat?.model).toBe('nat-model');
     expect(nat?.totalTokens).toBe(222_000);
     expect(nat?.durationMs).toBe(40 * 60_000);
-    expect(nat?.insightUrl).toBe('/session/dual2-bbbb2222?framework=opencode');
+    expect(nat?.insightUrl).toBe('/run/solo:dual2-bbbb2222?framework=opencode');
 
     const cap = r.items.find(x => x.sid === 'dual2-bbbb2222' && x.recording === 'capture');
     expect(cap?.imported).toBe(true);
     expect(cap?.model).toBe('cap-model');
     expect(cap?.totalTokens).toBe(111_000);
-    expect(cap?.insightUrl).toBe('/session/dual2-bbbb2222?framework=claude-code-proxy');
+    expect(cap?.insightUrl).toBe('/run/solo:dual2-bbbb2222?framework=claude-code-proxy');
   });
 
   it('只导 native：capture 行不被单行回落误标为已导入（review 回归）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'dualdb' });
     const nat = r.items.find(x => x.sid === 'half-dddd4444' && x.recording === 'native');
     expect(nat?.imported).toBe(true);
@@ -368,7 +368,7 @@ describe('listRuns（同 sid 双记录 DB 消歧）', () => {
   });
 
   it('单行存量漂移：lake framework 与 DB 行不一致仍命中（兼容回归）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'dualdb' });
     const fb = r.items.find(x => x.sid === 'fb-cccc3333');
     expect(fb?.imported).toBe(true);
@@ -377,21 +377,18 @@ describe('listRuns（同 sid 双记录 DB 消歧）', () => {
   });
 });
 
-describe('sessionHref / sessionQuery（深链单点契约）', () => {
-  it('站内相对路径与 API 查询串：taskId 编码、framework 缺省无参', async () => {
-    const { sessionHref, sessionQuery } = await import('../../../src/lib/shared/session-link');
-    expect(sessionHref('abc 123', 'claude-code'))
-      .toBe('/session/abc%20123?framework=claude-code');
-    expect(sessionHref('xyz', null)).toBe('/session/xyz');
-    expect(sessionQuery('abc 123', 'opencode-proxy'))
-      .toBe('taskId=abc%20123&framework=opencode-proxy');
-    expect(sessionQuery('xyz', null)).toBe('taskId=xyz');
+describe('insightSessionUrl', () => {
+  it('run 工作台深链（solo run 形态）：sid 编码、framework 缺省无参', async () => {
+    const { insightSessionUrl } = await import('../../../src/lib/collection/lake-view/runs');
+    expect(insightSessionUrl('abc 123', 'claude-code'))
+      .toBe('/run/solo:abc%20123?framework=claude-code');
+    expect(insightSessionUrl('xyz', null)).toBe('/run/solo:xyz');
   });
 });
 
 describe('listRuns（耗时列活跃口径）', () => {
   it('已导入行按 turns 聚类现算活跃时长（非墙钟）；未导入行优先 meta activeMs 快照', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'activetime' });
     expect(r.total).toBe(2);
     const bySid = new Map(r.items.map(x => [x.sid, x]));
@@ -413,7 +410,7 @@ describe('listRuns（耗时列活跃口径）', () => {
   });
 
   it('已导入但无 turns（存量夹具）→ 活跃不可算：activeKnown=false，durationMs 回落墙钟（渲染 — / wall）', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'elementwise' });
     const aaaa = r.items.find(x => x.sid === 'ele-aaaa1111');
     expect(aaaa?.imported).toBe(true);

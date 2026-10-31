@@ -45,9 +45,9 @@ describe('guardBrowserOrigin 纯函数矩阵', () => {
     expect(d).toEqual({ allow: true });
   });
 
-  it('lake_viewer API 路径在守卫范围内', () => {
+  it('lake_viewer 旧 API 前缀已随路由收敛退役：不匹配守卫前缀（刀4 删除路由）', () => {
     const d = guardBrowserOrigin({ pathname: '/lake_viewer/api/lake-status', origin: 'https://evil.com', referer: null, host: HOST });
-    expect(d.allow).toBe(false);
+    expect(d).toEqual({ allow: true });
   });
 
   it('/api 裸路径同样在守卫范围内', () => {
@@ -127,9 +127,9 @@ describe('proxy 入口直调 IT', () => {
     expect(res.headers.get('x-middleware-next')).toBe('1');
   });
 
-  it('matcher 覆盖两个 API 前缀（/api 与 /lake_viewer/api）', () => {
+  it('matcher 只覆盖 /api 前缀（lake_viewer API 路由已删除）', () => {
     expect(proxyConfig.matcher).toContain('/api/:path*');
-    expect(proxyConfig.matcher).toContain('/lake_viewer/api/:path*');
+    expect(proxyConfig.matcher).not.toContain('/lake_viewer/api/:path*');
   });
 });
 
