@@ -2,23 +2,28 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
 // This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// Please refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { useState, useEffect, useRef } from "react"
-import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
+// LLM 输出块（Turn 详情叙事舞台的上半）：正文与 thinking 共用统一文本块
+// 语法（detail-blocks），thinking 只以字色区分（紫色标签 + muted 正文），
+// 不再有独立的引用条形态。段头是方位词 + 发丝线 + copy（唯一整段操作）；
+// 异常 finish（截断/审查/拒答）是唯一随标签直出的信号；纯工具轮标签
+// 常驻 + 构成注记。旧独立模式（自带外框/整卡折叠/预览徽标）已随详情页
+// Player 化退役——本组件唯一消费方是 TurnDetail 舞台卡。
+import { useState, useEffect, useRef, useMemo, memo } from "react"
 import { CopyButton } from "./CopyButton"
+import { ExpandableText } from "./ExpandableText"
 import { BashEscapeView, parseBashEscape } from "./BashEscapeView"
+import { MarkdownLite } from "./MarkdownLite"
+import { BLOCK, BLOCK_ROW, BLOCK_SUB, BLOCK_TRI } from "./detail-blocks"
 import { highlightKeyword, type TurnHighlight } from "@/lib/shared/highlight"
-import { stripThinkingAndReminder } from "@/lib/shared/text-strip"
 
 interface LlmOutputViewProps {
   content: string | null
   contentJson: string | null
-  contentSummary: string | null
   outputTokens: number
   reasoningTokens?: number
   role?: string | null
@@ -87,10 +92,11 @@ function parseContentSections(content: string | null, contentJson: string | null
   return sections
 }
 
-export function LlmOutputView({
+// memo：走查高频路径上（缓存命中 + revalidate 双渲染）props 全等时整树
+// 跳过——正文/代码块是详情页最重的渲染面。props 均为原始值或稳定引用
+export const LlmOutputView = memo(function LlmOutputView({
   content,
   contentJson,
-  contentSummary,
   outputTokens,
   reasoningTokens,
   role,
@@ -98,17 +104,20 @@ export function LlmOutputView({
   toolCallCount,
   finishReason,
 }: LlmOutputViewProps) {
-  const [isThinkingExpanded, setIsThinkingExpanded] = useState(false)
+  // 输出默认展开：正文常驻、thinking 块也随开（LLM Output 是打开详情的
+  // 第一阅读主体，与 LLM Input 默认折叠成对）
+  const [isThinkingExpanded, setIsThinkingExpanded] = useState(true)
   const [prevKw, setPrevKw] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
-  const sections = parseContentSections(content, contentJson)
+  // 走查高频路径（缓存命中 + revalidate 双渲染）下 content 不变则不重解析
+  const sections = useMemo(() => parseContentSections(content, contentJson), [content, contentJson])
   // 异常完成原因显式化（正常类 stop/tool_calls/end_turn/tool_use 不标——
-  // Overview 的 finish: 小字足够，加徽标是噪音）：截断/审查/拒答类的输出
-  // 不完整或为空，静默吞掉会被读成"突然结束/没输出"。两套线缆约定都认
-  //（OpenAI 'length'/'content_filter'；Claude 透传 'max_tokens'/'refusal'，
-  // claude-emitter 原样透传 stop_reason，scoring collect 同款判定）。
-  // 两档：有部分文本只挂徽标（正文可见）；全空的再加强制展开 + 解释文案
+  // 加徽标是噪音）：截断/审查/拒答类的输出不完整或为空，静默吞掉会被读
+  // 成"突然结束/没输出"。两套线缆约定都认（OpenAI 'length'/'content_filter'；
+  // Claude 透传 'max_tokens'/'refusal'，claude-emitter 原样透传 stop_reason，
+  // scoring collect 同款判定）。两档：有部分文本只挂徽标（正文可见）；
+  // 全空的再加强制展开 + 解释文案
   const ABNORMAL_FINISH: Record<string, { label: string; emptyNote: string }> = {
     length: { label: "⛔ max_tokens 截断", emptyNote: `本轮输出被 max_tokens 上限截断（stopReason = ${finishReason}）：{TOKENS}t 输出已消耗，但没有文本落盘（content 为空）。该轮不是正常收尾——若需完整结果，请提高该 agent 的输出上限或缩小单轮任务后重试。` },
     max_tokens: { label: "⛔ max_tokens 截断", emptyNote: `本轮输出被 max_tokens 上限截断（stopReason = ${finishReason}）：{TOKENS}t 输出已消耗，但没有文本落盘（content 为空）。该轮不是正常收尾——若需完整结果，请提高该 agent 的输出上限或缩小单轮任务后重试。` },
@@ -117,24 +126,31 @@ export function LlmOutputView({
   }
   const abnormal = finishReason != null ? ABNORMAL_FINISH[finishReason] : undefined
   const abnormalEmpty = abnormal != null && sections.every(s => !s.content.trim())
-  // 短输出默认展开（直接可读）；长输出默认折叠（标题行 + token 数概览，
-  // 点击展开）。与 LLM Input 的两级折叠习惯一致。全空异常轮强制展开——解释
-  // 必须直接可见，不能再让用户点一层才看到"为什么是空的"
-  const [isExpanded, setIsExpanded] = useState(
-    abnormalEmpty || ((outputTokens ?? 0) <= 2000 && (content?.length ?? 0) <= 6000)
-  )
 
-  // Trace-search jump: when the highlight keyword changes, auto-expand so the
-  // highlighted match is visible. Uses the render-phase prop-change pattern
-  // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
-  // instead of setState-in-effect.
+  // Scroll the first highlighted match into view.
+  useEffect(() => {
+    if (!highlight?.keyword) return
+    const t = setTimeout(() => {
+      rootRef.current?.querySelector("mark")?.scrollIntoView({ behavior: "smooth", block: "center" })
+    }, 60)
+    return () => clearTimeout(t)
+  }, [highlight])
+
+  // 纯工具轮：正文/思考皆空但输出存在（工具调用即输出主体）——输出块
+  // 不整体消失，标签常驻让「输出」概念在所有构成下可见
+  const toolOnly = sections.length === 0 && (toolCallCount ?? 0) > 0
+
+  if (!content && !contentJson && !abnormalEmpty && !toolOnly) return null
+
+  // Trace-search jump: when the highlight keyword changes, auto-expand the
+  // thinking block carrying the match. Uses the render-phase prop-change
+  // pattern instead of setState-in-effect.
   const currentKw = highlight?.keyword ?? null
   if (currentKw !== prevKw) {
     setPrevKw(currentKw)
     if (currentKw && highlight) {
       const isContentMatch = !highlight.matchField || highlight.matchField === "content" || highlight.matchField === "contentSummary"
       if (isContentMatch) {
-        setIsExpanded(true)
         const lower = currentKw.trim().toLowerCase()
         if (sections.some(s => s.type === "thinking" && s.content.toLowerCase().includes(lower))) {
           setIsThinkingExpanded(true)
@@ -142,28 +158,6 @@ export function LlmOutputView({
       }
     }
   }
-
-  // Scroll the first highlighted match into view once expanded.
-  useEffect(() => {
-    if (!highlight?.keyword || !isExpanded) return
-    const t = setTimeout(() => {
-      rootRef.current?.querySelector("mark")?.scrollIntoView({ behavior: "smooth", block: "center" })
-    }, 60)
-    return () => clearTimeout(t)
-  }, [highlight, isExpanded])
-
-  if (!content && !contentJson && !abnormalEmpty) return null
-
-  // 折叠态预览优先展示正文（text section）开头：thinking 块会吃掉 200 字符
-  // 摘要预算（contentSummary 生成于 ingest 期），导致预览全是思考过程、
-  // 正文一字不见，被误读为"output 没展示"。thinking 有独立折叠块与 token 徽标。
-  // 剥离与 ingest 同口径：user turn 的 <system-reminder> 前缀同样不进预览。
-  const textPreview = stripThinkingAndReminder(sections.find(s => s.type === "text")?.content ?? null)
-  const summary = (textPreview
-    ? (textPreview.length > 200 ? textPreview.substring(0, 200) + "..." : textPreview)
-    : null)
-    ?? contentSummary
-    ?? (content ? (content.length > 200 ? content.substring(0, 200) + "..." : content) : null)
 
   const HEADER_LABELS: Record<string, string> = {
     user: "User Input",
@@ -174,97 +168,81 @@ export function LlmOutputView({
   const headerLabel = HEADER_LABELS[role ?? ""] ?? "Content"
 
   return (
-    <div ref={rootRef} className="border rounded-lg">
-      <div className="w-full flex items-center justify-between px-3 py-2">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="font-medium">{headerLabel}</span>
-          {abnormal ? (
-            <Badge variant="red">{abnormal.label}</Badge>
-          ) : finishReason ? (
-            <Badge variant="outline">finish: {finishReason}</Badge>
-          ) : null}
-          {summary && (
-            <span className="text-muted-foreground truncate max-w-[400px]">{summary}</span>
-          )}
-          {((outputTokens + (reasoningTokens ?? 0)) > 0) && (
-            <Badge variant="outline">
-              {(reasoningTokens ?? 0) > 0
-                ? `${formatTokenCount(reasoningTokens ?? 0)}t reasoning + ${formatTokenCount(outputTokens)}t output`
-                : `${formatTokenCount(outputTokens)} tokens`
-              }
-            </Badge>
-          )}
-        </div>
-        <span
-          role="button"
-          tabIndex={0}
-          className="shrink-0 px-2 py-1 -mr-2 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/50 cursor-pointer select-none"
-          onClick={() => setIsExpanded(!isExpanded)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setIsExpanded(!isExpanded) }}
-        >
-          {isExpanded ? "▼" : "▶"}
-        </span>
+    <div ref={rootRef}>
+      {/* 段头：方位词 + 发丝线。异常 finish 是唯一随标签直出的信号；整段
+          copy 已退役——复制下沉到各文本块（thinking 块行内 + 文本块角标） */}
+      <div className="flex items-center gap-2.5 px-4 pt-3.5 pb-1">
+        <span className="text-xs font-medium text-muted-foreground">{headerLabel}</span>
+        {abnormal && (
+          <span className="text-xs font-medium text-red-600 dark:text-red-400" title={`stopReason = ${finishReason}`}>{abnormal.label}</span>
+        )}
+        <div className="h-px flex-1 bg-foreground/[0.08]" />
       </div>
-
-      {isExpanded && abnormalEmpty && abnormal && (
-        <div className="border-t px-3 py-3 text-sm text-red-600 dark:text-red-400">
+      {abnormal && abnormalEmpty && (
+        <div className="px-4 pb-2 text-xs leading-relaxed text-red-600 dark:text-red-400">
           {abnormal.emptyNote.replace("{TOKENS}", formatTokenCount(outputTokens))}
         </div>
       )}
-
-      {isExpanded && sections.length > 0 && (
-        <div className="border-t px-3 py-2 space-y-3">
+      {toolOnly && (
+        <div className="px-4 pb-2.5 text-xs text-muted-foreground">
+          本轮无正文——输出为下方 {toolCallCount} 个工具调用
+        </div>
+      )}
+      {sections.length > 0 && (
+        <div className="space-y-2 px-4 pb-3.5">
           {sections.map((section, index) => {
             // shell 转义显示糖：有关键字高亮时退回普通渲染，保住 <mark> 跳转
             const bashEscape = parseBashEscape(section.content)
             if (section.type === "thinking") {
               return (
-                <div key={index} className="border rounded-md">
-                  <div className="w-full flex items-center gap-2 px-2 py-1.5 text-sm">
-                    <Badge variant="purple">thinking</Badge>
+                <div key={index} className={BLOCK}>
+                  <div className={BLOCK_ROW}>
+                    <span className="text-xs font-medium text-purple-600 dark:text-purple-400">thinking</span>
                     {(reasoningTokens ?? 0) > 0 && (
-                      <span className="text-muted-foreground text-xs">{formatTokenCount(reasoningTokens ?? 0)}t</span>
+                      <span className="text-xs text-muted-foreground tabular-nums">{formatTokenCount(reasoningTokens ?? 0)}t</span>
                     )}
-                    <CopyButton text={section.content} className="ml-auto size-4 text-muted-foreground hover:text-foreground" />
+                    <span className="flex-1" />
+                    <CopyButton text={section.content} className="size-4 text-muted-foreground hover:text-foreground shrink-0" />
                     <span
                       role="button"
                       tabIndex={0}
-                      className="shrink-0 px-2 py-1 -mr-2 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/50 cursor-pointer select-none"
+                      className={BLOCK_TRI}
                       onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setIsThinkingExpanded(!isThinkingExpanded) }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setIsThinkingExpanded(!isThinkingExpanded) }}
                     >
                       {isThinkingExpanded ? "▼" : "▶"}
                     </span>
                   </div>
                   {isThinkingExpanded && (
-                    <div className="px-2 pb-2 text-sm whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto bg-purple-50/30 dark:bg-purple-500/5">
-                      {highlightKeyword(section.content, highlight?.keyword)}
+                    <div className={BLOCK_SUB}>
+                      <ExpandableText clampPx={400} className="text-sm whitespace-pre-wrap break-words text-muted-foreground">
+                        {highlightKeyword(section.content, highlight?.keyword)}
+                      </ExpandableText>
                     </div>
                   )}
                 </div>
               )
             }
-
             return (
-              <div key={index} className="border rounded-md overflow-hidden">
-                <div className="flex items-center gap-2 px-2 py-1.5 bg-emerald-50/30 dark:bg-emerald-500/5">
-                  <Badge variant="green">text</Badge>
-                  {outputTokens > 0 && (
-                    // usage 的 output 不分块：带工具调用时参数 token 计入
-                    // outputTokens，记在 text 头上会像"token 去哪了"——注明构成
-                    <span className="text-muted-foreground text-xs">
-                      {formatTokenCount(outputTokens)}t{(toolCallCount ?? 0) > 0 ? ` · 含 ${toolCallCount} 个工具调用参数` : ""}
-                    </span>
-                  )}
-                  <CopyButton text={section.content} className="ml-auto size-4 text-muted-foreground hover:text-foreground" />
-                </div>
-                <div className="px-2 pb-2 text-sm max-h-[600px] overflow-y-auto">
-                  {!highlight?.keyword && bashEscape ? (
-                    <BashEscapeView esc={bashEscape} />
-                  ) : (
-                    <div className="whitespace-pre-wrap break-words">{highlightKeyword(section.content, highlight?.keyword)}</div>
-                  )}
-                </div>
+              <div key={index} className={`${BLOCK} group/copy relative px-3.5 py-3 text-sm`}>
+                {/* 块级 copy：hover 显形角标（文本块无行头，复制意图出现时才
+                    可见，多块输出不堆图标）；能力与 thinking 块/输入消息行同源 */}
+                <span className="absolute right-1 top-1.5 rounded opacity-0 transition-opacity group-hover/copy:opacity-100">
+                  <CopyButton text={section.content} />
+                </span>
+                {!highlight?.keyword && bashEscape ? (
+                  <BashEscapeView esc={bashEscape} />
+                ) : highlight?.keyword ? (
+                  // 关键字命中态退回纯文本：<mark> 跳转依赖文本节点，markdown
+                  // 结构化渲染会把命中词拆进不同节点（BashEscapeView 同款退路）
+                  <ExpandableText clampPx={600} className="whitespace-pre-wrap break-words">
+                    {highlightKeyword(section.content, highlight?.keyword)}
+                  </ExpandableText>
+                ) : (
+                  <ExpandableText clampPx={600}>
+                    <MarkdownLite text={section.content} />
+                  </ExpandableText>
+                )}
               </div>
             )
           })}
@@ -272,4 +250,4 @@ export function LlmOutputView({
       )}
     </div>
   )
-}
+})

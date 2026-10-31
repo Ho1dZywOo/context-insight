@@ -19,7 +19,7 @@ interface ToolCallEntry {
   isSkillRelated?: boolean
 }
 
-interface InputMessage {
+export interface InputMessage {
   role: string
   content: string | null
   tokenCount?: number
@@ -55,9 +55,11 @@ interface LlmContextViewProps {
   fullContext?: {
     tools: Array<{ name: string; description: string }>
   } | null
+  /** Dialog 等显式打开场景传 true：面板默认展开，免再点一次收纳条三角 */
+  defaultExpanded?: boolean
 }
 
-function parseInputMessages(json: string | null): InputMessage[] {
+export function parseInputMessages(json: string | null): InputMessage[] {
   if (!json) return []
   try {
     const parsed = JSON.parse(json)
@@ -68,12 +70,6 @@ function parseInputMessages(json: string | null): InputMessage[] {
   }
 }
 
-function truncate(text: string | null, maxLen: number): string | null {
-  if (!text) return null
-  if (text.length <= maxLen) return text
-  return text.substring(0, maxLen) + "..."
-}
-
 function formatTokenCount(n: number): string {
   if (n === 0) return ""
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
@@ -82,7 +78,7 @@ function formatTokenCount(n: number): string {
 
 // Estimate tokens from character count (rough heuristic for mixed CJK/English)
 // ~1 token per ~3.5 characters for typical LLM tokenization
-function estimateTokensFromChars(charLen: number): number {
+export function estimateTokensFromChars(charLen: number): number {
   return Math.round(charLen / 3.5)
 }
 
@@ -94,16 +90,18 @@ export function LlmContextView({
   systemOverheadTokens,
   systemPrompt,
   fullContext,
+  defaultExpanded = false,
 }: LlmContextViewProps) {
   const messages = parseInputMessages(inputMessagesJson)
   const totalVisibleTokens = messages.reduce((s, m) => s + (m.tokenCount ?? estimateTokensFromChars(m.content?.length ?? 0)), 0)
-  // 两级折叠的默认态：LLM Input 面板整体默认展开（外层 ▼ 按钮）；
-  // 长输入的消息列表默认折叠为最近几条（"显示全部 N 条"按钮）。
-  // key=turnId（TurnDetail）保证切换 turn 时回到这两个默认态。
+  // 两级折叠的默认态：LLM Input 面板整体默认折叠为摘要收纳条（「N messages,
+  // X tokens (Y% context)」+ 窗口占比条）——正文/工具调用是阅读主体，上下文
+  // 构成是调试时才展开的第二层；点击展开后长输入的消息列表仍默认折叠为
+  // 最近几条。key=turnId（TurnDetail）保证切换 turn 时回到这两个默认态。
   const RECENT_WINDOW = 3
   const showRecentOnly = messages.length > RECENT_WINDOW + 2
 
-  const [isExpanded, setIsExpanded] = useState(true)
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded)
   const [showAllMessages, setShowAllMessages] = useState(!showRecentOnly)
   const [expandedToolResults, setExpandedToolResults] = useState<Set<string>>(new Set())
   // 消息体默认全部折叠（点击标题行展开）—— 用户扫一眼 role/token 构成，
@@ -162,13 +160,6 @@ export function LlmContextView({
     assistant: "bg-emerald-500",
     tool_result: "bg-teal-500",
     tool: "bg-gray-400",
-  }
-  const ROLE_TEXT_COLOR: Record<string, string> = {
-    system: "text-purple-600 dark:text-purple-400",
-    user: "text-blue-600 dark:text-blue-400",
-    assistant: "text-emerald-600 dark:text-emerald-400",
-    tool_result: "text-teal-600 dark:text-teal-400",
-    tool: "text-gray-600",
   }
 
   return (
