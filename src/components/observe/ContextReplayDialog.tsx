@@ -11,46 +11,15 @@ import { useState, useMemo, useEffect, useRef } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { buildSubagentNumbers } from "@/lib/subagent-numbering"
+import { buildRunActors, subagentBaseNameOf, type RunActor } from "@/components/observe/run-actor"
+import type { TurnRowItem } from "@/components/observe/ContextTracker"
+import { contextAgentKeyOf, contextColorMapOf, contextLegendKeyOf } from "@/components/observe/context-legend"
 import {
   Dialog,
   DialogContent,
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
-
-interface TurnRowItem {
-  turnId: string
-  turnIndex: number
-  role: string
-  contentSummary: string | null
-  agentName: string | null
-  isSubagent: boolean
-  subagentName: string | null
-  subagentSessionId: string | null
-  parentExecutionId: string | null
-  totalTokens: number
-  inputTokens: number
-  outputTokens: number
-  reasoningTokens: number
-  cacheReadTokens: number
-  cacheWriteTokens: number
-  contextWindowPct: number | null
-  latencyMs: number
-  createdAt: string | null
-  completedAt: string | null
-  model: string | null
-  toolCalls: Array<{ toolCallId: string; toolName: string; state: string; durationMs: number }>
-  skillEvents: Array<{ skillName: string; eventType: string; success: boolean }>
-}
-
-const AGENT_COLORS: Record<string, string> = {
-  build: "#3b82f6",
-  general: "#10b981",
-  "acme-kernel-architect": "#f97316",
-  "acme-kernel-developer": "#8b5cf6",
-}
-const DEFAULT_AGENT_COLOR = "#6b7280"
 
 function formatTokenCount(n: number): string {
   if (n === 0) return "0"
@@ -63,10 +32,15 @@ interface AgentTimeline {
   sessionId: string
   agentName: string
   isRoot: boolean
+  /** root 道名（run 视图成员短名，与泳道/ContextTracker 同源；单会话 null） */
+  memberLabel: string | null
+  /** 子代理类型（命名/配色键 = `subagentType ?? agentName`，与泳道图例一致） */
+  subagentType: string | null
   color: string
-  spawnTurn: number
-  deathTurn: number
+  spawnStep: number
+  deathStep: number
   points: Array<{
+    step: number
     turnIndex: number
     inputTokens: number
     contextWindowPct: number | null
@@ -74,67 +48,98 @@ interface AgentTimeline {
   }>
 }
 
-function computeTimelines(turns: TurnRowItem[]): AgentTimeline[] {
+/** 回放步进轴：run 视图（member 归因在场）按合并时间序全局排名——各成员
+ *  turnIndex 空间互不相通，同 index 撞步会把多成员轮混进同一帧；session/
+ *  export 路径保持 turnIndex 旧口径（无归因即单会话，两轴天然同构） */
+function computeStepOf(turns: TurnRowItem[]): Map<string, number> {
+  const m = new Map<string, number>()
+  if (!turns.some(t => t.member != null)) {
+    for (const t of turns) m.set(t.turnId, t.turnIndex)
+    return m
+  }
+  const tsOf = (t: TurnRowItem) => (t.createdAt ? new Date(t.createdAt).getTime() : 0)
+  const sorted = [...turns].sort(
+    (a, b) => (tsOf(a) - tsOf(b)) || (a.turnIndex - b.turnIndex) || a.turnId.localeCompare(b.turnId),
+  )
+  sorted.forEach((t, i) => m.set(t.turnId, i))
+  return m
+}
+
+function computeTimelines(turns: TurnRowItem[], stepOf: Map<string, number>): AgentTimeline[] {
   const sessionMap = new Map<string, TurnRowItem[]>()
   for (const t of turns) {
     if ((t.inputTokens + t.cacheReadTokens) <= 0) continue
-    const sid = t.isSubagent ? (t.subagentSessionId ?? `anon-${t.turnIndex}`) : "root"
+    const sid = contextAgentKeyOf(t)
     if (!sessionMap.has(sid)) sessionMap.set(sid, [])
     sessionMap.get(sid)!.push(t)
   }
 
+  // 类型配色：黄金角度序列（context-legend 单一源）——键序规范排序与
+  // ContextTracker 图例/曲线同源，回放与趋势图同色
+  const colorMap = (() => {
+    const seen = new Map<string, { sessionId: string; agentName: string; isRoot: boolean; subagentType: string | null }>()
+    for (const t of turns) {
+      const sid = contextAgentKeyOf(t)
+      if (!seen.has(sid)) {
+        seen.set(sid, {
+          sessionId: sid,
+          agentName: t.agentName ?? "?",
+          isRoot: !t.isSubagent,
+          subagentType: t.isSubagent ? t.subagentType ?? null : null,
+        })
+      }
+    }
+    return contextColorMapOf([...seen.values()])
+  })()
+
+  const stepOfTurn = (t: TurnRowItem) => stepOf.get(t.turnId) ?? t.turnIndex
   const timelines: AgentTimeline[] = []
 
   for (const [sid, agentTurns] of sessionMap) {
     const agentName = agentTurns[0].agentName ?? "?"
-    const isRoot = sid === "root"
-    const color = AGENT_COLORS[agentName] ?? DEFAULT_AGENT_COLOR
-    const spawnTurn = agentTurns[0].turnIndex
-    const deathTurn = agentTurns[agentTurns.length - 1].turnIndex
+    const isRoot = !agentTurns[0].isSubagent
+    const memberLabel = agentTurns[0].member?.label ?? null
+    const subagentType = isRoot ? null : agentTurns[0].subagentType ?? null
+    const color = colorMap.get(contextLegendKeyOf({ sessionId: sid, agentName, isRoot, subagentType })) ?? "#94a3b8"
+    const spawnStep = stepOfTurn(agentTurns[0])
+    const deathStep = stepOfTurn(agentTurns[agentTurns.length - 1])
     const points = agentTurns.map(t => ({
+      step: stepOfTurn(t),
       turnIndex: t.turnIndex,
       inputTokens: t.inputTokens + t.cacheReadTokens,
       contextWindowPct: t.contextWindowPct,
       timestamp: t.createdAt,
     }))
-    timelines.push({ sessionId: sid, agentName, isRoot, color, spawnTurn, deathTurn, points })
+    timelines.push({ sessionId: sid, agentName, isRoot, memberLabel, subagentType, color, spawnStep, deathStep, points })
   }
 
   timelines.sort((a, b) => {
     if (a.isRoot !== b.isRoot) return a.isRoot ? -1 : 1
-    return a.spawnTurn - b.spawnTurn
+    return a.spawnStep - b.spawnStep
   })
 
   return timelines
 }
 
-function displayLabel(s: AgentTimeline, numbers: Map<string, number>): string {
-  if (s.isRoot) return s.agentName
-  const aname = s.agentName === "acme-kernel-architect" ? "acme-arch" : s.agentName === "acme-kernel-developer" ? "acme-dev" : s.agentName
-  const num = numbers.get(s.sessionId)
-  return num !== undefined ? `${aname} #${num}` : aname
+function displayLabel(s: AgentTimeline, actors: Map<string, RunActor>): string {
+  // 命名单一源（run-actor）：道名与趋势卡/图例同源；目录缺项兜底
+  return actors.get(s.sessionId)?.displayName
+    ?? (s.isRoot ? s.memberLabel ?? s.agentName : subagentBaseNameOf(s))
 }
 
 interface ContextReplayDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   turns: TurnRowItem[]
-  sessionModel: string | null
+  /** 各 agent 上限最大值（ContextTracker 单源传入，不再逐模型拉 config） */
+  contextWindowLimit: number
 }
 
-export function ContextReplayDialog({ open, onOpenChange, turns, sessionModel }: ContextReplayDialogProps) {
-  const [contextWindowLimit, setContextWindowLimit] = useState(200000)
-
-  useEffect(() => {
-    if (!open) return
-    fetch(`/api/config/context-windows?model=${encodeURIComponent(sessionModel ?? "")}`)
-      .then(r => r.json())
-      .then(data => setContextWindowLimit(data.limit ?? 200000))
-      .catch(() => setContextWindowLimit(200000))
-  }, [sessionModel, open])
-
-  const timelines = useMemo(() => computeTimelines(turns), [turns])
-  const subagentNumbers = useMemo(() => buildSubagentNumbers(turns), [turns])
+export function ContextReplayDialog({ open, onOpenChange, turns, contextWindowLimit }: ContextReplayDialogProps) {
+  const stepOf = useMemo(() => computeStepOf(turns), [turns])
+  const timelines = useMemo(() => computeTimelines(turns, stepOf), [turns, stepOf])
+  // 命名单一源（run-actor）：回放道名与趋势卡/图例同源，别名表不再拷贝
+  const actors = useMemo(() => buildRunActors(turns), [turns])
 
   if (!open || timelines.length === 0) return null
 
@@ -152,7 +157,8 @@ export function ContextReplayDialog({ open, onOpenChange, turns, sessionModel }:
           timelines={timelines}
           turns={turns}
           contextWindowLimit={contextWindowLimit}
-          subagentNumbers={subagentNumbers}
+          actors={actors}
+          stepOf={stepOf}
         />
       </DialogContent>
     </Dialog>
@@ -171,20 +177,26 @@ function ContextReplayPlayer({
   timelines,
   turns,
   contextWindowLimit,
-  subagentNumbers,
+  actors,
+  stepOf,
 }: {
   timelines: AgentTimeline[]
   turns: TurnRowItem[]
   contextWindowLimit: number
-  subagentNumbers: Map<string, number>
+  actors: Map<string, RunActor>
+  stepOf: Map<string, number>
 }) {
-  const maxTurnIndex = Math.max(...turns.map(t => t.turnIndex), 0)
+  const maxStep = Math.max(...turns.map(t => stepOf.get(t.turnId) ?? t.turnIndex), 0)
   const [currentTurn, setCurrentTurn] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
-  const [hoverPoint, setHoverPoint] = useState<{ sessionId: string; turnIndex: number; inputTokens: number } | null>(null)
+  const [hoverPoint, setHoverPoint] = useState<{ sessionId: string; step: number; turnIndex: number; inputTokens: number } | null>(null)
   const animRef = useRef<number | null>(null)
   const lastTickRef = useRef<number>(0)
+  // 步进值镜像：RAF 回调里读最新帧（回调异步，规避 effect 体内同步 setState
+  // 的级联渲染——lint set-state-in-effect）
+  const currentTurnRef = useRef(currentTurn)
+  useEffect(() => { currentTurnRef.current = currentTurn }, [currentTurn])
 
   useEffect(() => {
     if (!isPlaying) {
@@ -200,7 +212,13 @@ function ContextReplayPlayer({
     function tick(now: number) {
       if (now - lastTickRef.current >= delay) {
         lastTickRef.current = now
-        setCurrentTurn(prev => prev + 1)
+        const next = currentTurnRef.current + 1
+        setCurrentTurn(Math.min(next, maxStep))
+        // 步进到末帧即停（原独立 effect 里的同步 setState 触发级联渲染）
+        if (next >= maxStep) {
+          setIsPlaying(false)
+          return
+        }
       }
       animRef.current = requestAnimationFrame(tick)
     }
@@ -214,16 +232,10 @@ function ContextReplayPlayer({
         animRef.current = null
       }
     }
-  }, [isPlaying, speed])
-
-  useEffect(() => {
-    if (currentTurn >= maxTurnIndex && isPlaying) {
-      setIsPlaying(false)
-    }
-  }, [currentTurn, maxTurnIndex, isPlaying])
+  }, [isPlaying, speed, maxStep])
 
   function handlePlay() {
-    if (currentTurn >= maxTurnIndex) {
+    if (currentTurn >= maxStep) {
       setCurrentTurn(0)
     }
     setIsPlaying(true)
@@ -249,8 +261,8 @@ function ContextReplayPlayer({
 
   const currentTurnPoints = useMemo(() => {
     return timelines.map(tl => {
-      const visible = tl.points.filter(p => p.turnIndex <= currentTurn)
-      const isAlive = currentTurn <= tl.deathTurn || tl.isRoot
+      const visible = tl.points.filter(p => p.step <= currentTurn)
+      const isAlive = currentTurn <= tl.deathStep || tl.isRoot
       return { ...tl, visiblePoints: visible, isAlive }
     })
   }, [timelines, currentTurn])
@@ -261,9 +273,9 @@ function ContextReplayPlayer({
     contextWindowLimit * 1.1
   )
 
-  function toX(turnIdx: number): number {
-    if (maxTurnIndex === 0) return PADDING_LEFT + plotWidth / 2
-    return PADDING_LEFT + (turnIdx / maxTurnIndex) * plotWidth
+  function toX(step: number): number {
+    if (maxStep === 0) return PADDING_LEFT + plotWidth / 2
+    return PADDING_LEFT + (step / maxStep) * plotWidth
   }
   function toY(tokens: number): number {
     return PADDING_TOP + plotHeight - (tokens / yMax) * plotHeight
@@ -275,9 +287,9 @@ function ContextReplayPlayer({
     yTicks.push({ value: v, y: toY(v), label: formatTokenCount(v) })
   }
 
-  const xStep = maxTurnIndex <= 20 ? 1 : maxTurnIndex <= 50 ? 5 : maxTurnIndex <= 100 ? 10 : maxTurnIndex <= 200 ? 20 : 50
+  const xStep = maxStep <= 20 ? 1 : maxStep <= 50 ? 5 : maxStep <= 100 ? 10 : maxStep <= 200 ? 20 : 50
   const xTicks: Array<{ value: number; x: number; label: string }> = []
-  for (let v = 0; v <= maxTurnIndex; v += xStep) {
+  for (let v = 0; v <= maxStep; v += xStep) {
     xTicks.push({ value: v, x: toX(v), label: `${v}` })
   }
 
@@ -285,9 +297,9 @@ function ContextReplayPlayer({
   const scanX = toX(currentTurn)
 
   const currentTurnData = useMemo(() => {
-    const turnRows = turns.filter(t => t.turnIndex === currentTurn)
+    const turnRows = turns.filter(t => (stepOf.get(t.turnId) ?? t.turnIndex) === currentTurn)
     return turnRows
-  }, [turns, currentTurn])
+  }, [turns, stepOf, currentTurn])
 
   return (
     <div className="space-y-2">
@@ -329,14 +341,14 @@ function ContextReplayPlayer({
             const pts = tl.visiblePoints
             if (pts.length === 0) return null
 
-            const label = displayLabel(tl, subagentNumbers)
-            const isDead = !tl.isAlive && currentTurn > tl.deathTurn
+            const label = displayLabel(tl, actors)
+            const isDead = !tl.isAlive && currentTurn > tl.deathStep
             const activeColor = isDead ? "#9ca3af" : tl.color
             const strokeW = tl.isRoot ? 2.5 : 1.5
             const opacity = isDead ? 0.4 : 1
             const dashArray = isDead ? "4 2" : undefined
 
-            const polyline = pts.map(p => `${toX(p.turnIndex)},${toY(p.inputTokens)}`).join(" ")
+            const polyline = pts.map(p => `${toX(p.step)},${toY(p.inputTokens)}`).join(" ")
 
             return (
               <g key={tl.sessionId} opacity={opacity}>
@@ -350,14 +362,14 @@ function ContextReplayPlayer({
                 />
                 {pts.map(p => (
                   <circle
-                    key={`${tl.sessionId}-${p.turnIndex}`}
-                    cx={toX(p.turnIndex)}
+                    key={`${tl.sessionId}-${p.step}`}
+                    cx={toX(p.step)}
                     cy={toY(p.inputTokens)}
                     r={tl.isRoot ? 3 : 2}
                     fill={activeColor}
                     stroke="white"
                     strokeWidth={1}
-                    onMouseEnter={() => setHoverPoint({ sessionId: tl.sessionId, turnIndex: p.turnIndex, inputTokens: p.inputTokens })}
+                    onMouseEnter={() => setHoverPoint({ sessionId: tl.sessionId, step: p.step, turnIndex: p.turnIndex, inputTokens: p.inputTokens })}
                     onMouseLeave={() => setHoverPoint(null)}
                   >
                     <title>{label} #{p.turnIndex} | {formatTokenCount(p.inputTokens)} | {(p.contextWindowPct ?? 0).toFixed(1)}%</title>
@@ -367,7 +379,7 @@ function ContextReplayPlayer({
                 {!tl.isRoot && pts.length > 0 && (
                   <g>
                     <circle
-                      cx={toX(tl.spawnTurn)}
+                      cx={toX(tl.spawnStep)}
                       cy={toY(pts[0].inputTokens)}
                       r={5}
                       fill="#10b981"
@@ -375,7 +387,7 @@ function ContextReplayPlayer({
                       strokeWidth={1.5}
                     />
                     <text
-                      x={toX(tl.spawnTurn) + 8}
+                      x={toX(tl.spawnStep) + 8}
                       y={toY(pts[0].inputTokens) - 2}
                       fontSize={8}
                       fill="#10b981"
@@ -389,7 +401,7 @@ function ContextReplayPlayer({
                 {!tl.isRoot && isDead && tl.points.length > 0 && (
                   <g>
                     <circle
-                      cx={toX(tl.deathTurn)}
+                      cx={toX(tl.deathStep)}
                       cy={toY(tl.points[tl.points.length - 1].inputTokens)}
                       r={5}
                       fill="#ef4444"
@@ -397,7 +409,7 @@ function ContextReplayPlayer({
                       strokeWidth={1.5}
                     />
                     <text
-                      x={toX(tl.deathTurn) + 8}
+                      x={toX(tl.deathStep) + 8}
                       y={toY(tl.points[tl.points.length - 1].inputTokens) - 2}
                       fontSize={8}
                       fill="#ef4444"
@@ -425,7 +437,7 @@ function ContextReplayPlayer({
           {hoverPoint && (
             <g>
               <circle
-                cx={toX(hoverPoint.turnIndex)}
+                cx={toX(hoverPoint.step)}
                 cy={toY(hoverPoint.inputTokens)}
                 r={6}
                 fill="none"
@@ -433,7 +445,7 @@ function ContextReplayPlayer({
                 strokeWidth={2}
               />
               <rect
-                x={toX(hoverPoint.turnIndex) + 10}
+                x={toX(hoverPoint.step) + 10}
                 y={toY(hoverPoint.inputTokens) - 14}
                 width={120}
                 height={22}
@@ -443,7 +455,7 @@ function ContextReplayPlayer({
                 strokeWidth={1}
               />
               <text
-                x={toX(hoverPoint.turnIndex) + 16}
+                x={toX(hoverPoint.step) + 16}
                 y={toY(hoverPoint.inputTokens)}
                 fontSize={9}
                 fill="#1f2937"
@@ -490,12 +502,12 @@ function ContextReplayPlayer({
 
         <div className="flex-1 flex items-center gap-2">
           <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-            Turn {currentTurn}/{maxTurnIndex}
+            Turn {currentTurn}/{maxStep}
           </span>
           <input
             type="range"
             min={0}
-            max={maxTurnIndex}
+            max={maxStep}
             value={currentTurn}
             onChange={(e) => {
               setIsPlaying(false)
@@ -509,8 +521,8 @@ function ContextReplayPlayer({
       <div className="flex flex-wrap gap-1.5 items-center border-t pt-2 max-h-[80px] overflow-y-auto">
         <span className="text-xs text-muted-foreground shrink-0">Agents ({timelines.length}):</span>
         {currentTurnPoints.map(tl => {
-          const label = displayLabel(tl, subagentNumbers)
-          const isDead = !tl.isAlive && currentTurn > tl.deathTurn
+          const label = displayLabel(tl, actors)
+          const isDead = !tl.isAlive && currentTurn > tl.deathStep
           const hasTokens = tl.visiblePoints.length > 0
           return (
             <div key={tl.sessionId} className="flex items-center gap-1 text-xs">
@@ -529,7 +541,7 @@ function ContextReplayPlayer({
               {!tl.isRoot && !isDead && tl.visiblePoints.length > 0 && (
                 <Badge variant="green" className="text-xs">🟢 active</Badge>
               )}
-              {!tl.isRoot && !isDead && tl.visiblePoints.length === 0 && currentTurn < tl.spawnTurn && (
+              {!tl.isRoot && !isDead && tl.visiblePoints.length === 0 && currentTurn < tl.spawnStep && (
                 <Badge variant="outline" className="text-xs">waiting</Badge>
               )}
             </div>
@@ -549,14 +561,14 @@ function ContextReplayPlayer({
             <span className="font-medium">Turn #{currentTurn}</span>
             {currentTurnData.map(t => (
               <Badge key={t.turnId} variant={t.isSubagent ? "orange" : "blue"} className="text-xs">
-                {t.isSubagent ? (t.subagentName ?? t.agentName ?? "sub") : (t.agentName ?? "root")}
+                {t.isSubagent ? (t.subagentType ?? t.agentName ?? "sub") : (t.agentName ?? "root")}
               </Badge>
             ))}
           </div>
           <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
             {currentTurnData.map(t => (
               <span key={t.turnId}>
-                {t.agentName ?? "?"}: {formatTokenCount(t.inputTokens)} input
+                {t.isSubagent ? (t.subagentType ?? t.agentName ?? "?") : (t.agentName ?? "?")}: {formatTokenCount(t.inputTokens)} input
                 {t.contextWindowPct != null && t.contextWindowPct > 0 && ` (${t.contextWindowPct.toFixed(1)}%)`}
               </span>
             ))}
