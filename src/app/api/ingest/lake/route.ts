@@ -7,7 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { listLakeOverview, importLakeSession, uploadLakeSessionWithNative, GovernanceError, listParadigmDirs } from '@/lib/lake';
+import { listLakeOverview, listLakeSessions, importLakeSession, uploadLakeSessionWithNative, GovernanceError, listParadigmDirs } from '@/lib/lake';
 import { prewarmLfsBinary } from '@/lib/lake/lfs-setup';
 import { resolveNativeCounterpart } from '@/lib/ingest/native-counterpart';
 import { agentFrameworkOf } from '@/lib/shared/session-format';
@@ -18,6 +18,8 @@ import { listRemoteDirs } from '@/lib/lake/mirror';
 import type { LakeRemoteInput } from '@/lib/lake-config';
 import { prisma } from '@/lib/db';
 import { logError, logWarn } from '@/lib/logger';
+import { putScorecard, readRecords, NotesConflictError, type SessionLoc } from '@/lib/lake/notes';
+import { getScorecard } from '@/app/lake_viewer/_lib/insight-data';
 
 export const maxDuration = 300;
 
@@ -134,6 +136,48 @@ export async function POST(request: NextRequest) {
     // 正式操作时零等待
     if (remote.lfs) prewarmLfsBinary();
 
+    // lake-notes：会话级实验记录（notes）读写——评分卡「上报到数据湖」的统一切入
+    // 点（原 /lake_viewer/api/runs/[sid]/notes 语义平移至单源 /api/ingest/lake）。
+    // kind 缺省 = 读（上报前「先弹确认」取已有快照）；kind='scorecard' = 覆盖写
+    // 评分卡快照（快照取自本地 DB 当时刻值）。会话定位（paradigm/baseline/
+    // recording）权威来自数据仓布局（listLakeSessions），不信任请求体直传。
+    if (action === 'lake-notes') {
+      const { sid, recording, kind } = body as { sid?: string; recording?: string; kind?: string };
+      if (!sid) {
+        return NextResponse.json({ error: 'Missing sid' }, { status: 400 });
+      }
+      if (recording != null && recording !== 'capture' && recording !== 'native') {
+        return NextResponse.json({ error: `Invalid recording: "${recording}" (capture | native)` }, { status: 400 });
+      }
+      try {
+        const matches = listLakeSessions(remote).filter(x => x.sid === sid);
+        const s = (recording === 'capture' || recording === 'native'
+          ? matches.find(x => x.recording === recording)
+          : undefined) ?? matches.find(x => x.recording === 'capture') ?? matches[0];
+        if (!s || !s.paradigm) {
+          return NextResponse.json({ error: `Session not found in lake: "${sid}"` }, { status: 404 });
+        }
+        const loc: SessionLoc = { sid: s.sid, paradigm: s.paradigm, isBaseline: s.isBaseline, recording: s.recording };
+        if (kind === 'scorecard') {
+          // 真双记录（仓内两位并存）才传 recording 给取卡：快照必须取本记录行
+          // 的卡；单记录位（存量裸目录）不传——其 DB 行 framework 无 -proxy 后
+          // 缀，按 capture→-proxy 启发式查会永远落空，把已评分会话误判 409
+          const dual = matches.some(x => x.recording === 'capture') && matches.some(x => x.recording === 'native');
+          const card = await getScorecard(sid, undefined, dual ? (loc.recording === 'native' ? 'native' : 'capture') : undefined);
+          if (!card) return NextResponse.json({ error: '无评分卡（该会话未导入或未评分）' }, { status: 409 });
+          const records = await putScorecard(loc, card, remote);
+          return NextResponse.json({ sid, records });
+        }
+        const records = await readRecords(loc, remote);
+        return NextResponse.json({ sid, records });
+      } catch (err) {
+        if (err instanceof NotesConflictError) {
+          return NextResponse.json({ error: err.message }, { status: 409 });
+        }
+        return fail(err);
+      }
+    }
+
     if (action === 'list') {
       // sessions + 顶层目录（dirs）一次返回：导入对话框的范式下拉 + 会话表
       // 共享单轮 mirror fetch（原先 dirs/list 两路各 fetch 一次 ~1s×2）
@@ -233,7 +277,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ error: `Unknown action: "${action}". Supported: list, import, upload, bundle-list, bundle-upload, bundle-import, test, branches, dirs` }, { status: 400 });
+    return NextResponse.json({ error: `Unknown action: "${action}". Supported: list, import, upload, bundle-list, bundle-upload, bundle-import, lake-notes, test, branches, dirs` }, { status: 400 });
   } catch (err) {
     return fail(err);
   }
