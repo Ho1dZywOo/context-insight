@@ -38,6 +38,7 @@ import { summarizeToolCallErrors } from "@/lib/tool-call-errors"
 import { dispatchOnlySkillNames } from "@/lib/sift-audit"
 import { TrajectoryScoring } from "@/components/scoring/TrajectoryScoring"
 import { RunBadge } from "@/components/run/RunBadge"
+import { DEFAULT_CONTEXT_WINDOW_LIMIT } from "@/lib/shared/context-window"
 
 import { useSessionView, isKnownTab, type TabKey } from "@/app/session/[taskId]/session-view"
 
@@ -1072,7 +1073,7 @@ export default function SessionDetailPage({
     )
     if (nextTurn?.contextWindowPct != null) return nextTurn.contextWindowPct
     if (turn.contextWindowPct != null && turn.outputTokens > 0) {
-      const deltaPct = turn.outputTokens / 1000000 * 100
+      const deltaPct = turn.outputTokens / DEFAULT_CONTEXT_WINDOW_LIMIT * 100
       return turn.contextWindowPct + deltaPct
     }
     return null
@@ -1435,7 +1436,7 @@ export default function SessionDetailPage({
       inputMessagesTokens: selectedTurnDetail?.inputMessagesTokens ?? 0,
       contextWindowPct: selectedTurnDetail?.contextWindowPct ?? null,
       endContextWindowPct: computeEndPct(selectedTurnItem),
-      contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? 1000000,
+      contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
       systemOverheadTokens: selectedTurnDetail?.systemOverheadTokens ?? 0,
       systemPrompt: selectedTurnDetail?.systemPrompt ?? null,
       fullContext: selectedTurnDetail?.fullContext ?? null,
@@ -1463,7 +1464,7 @@ export default function SessionDetailPage({
         inputMessagesTokens: rootTurn?.inputMessagesTokens ?? 0,
         contextWindowPct: rootTurn?.contextWindowPct ?? null,
         endContextWindowPct: computeEndPct(rootTurn ?? null),
-        contextWindowLimit: rootTurn?.contextWindowLimit ?? 1000000,
+        contextWindowLimit: rootTurn?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
         systemOverheadTokens: 0,
         systemPrompt: null,
         fullContext: null,
@@ -1529,7 +1530,7 @@ export default function SessionDetailPage({
             inputMessagesTokens: 0,
             contextWindowPct: lastSubTurn?.contextWindowPct ?? null,
             endContextWindowPct: computeEndPct(lastSubTurn ?? null),
-            contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? 1000000,
+            contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
             systemOverheadTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
@@ -1550,7 +1551,7 @@ export default function SessionDetailPage({
           inputMessagesTokens: selectedTurnDetail.inputMessagesTokens ?? 0,
           contextWindowPct: selectedTurnDetail.contextWindowPct ?? null,
           endContextWindowPct: computeEndPct(selectedTurnItem),
-          contextWindowLimit: selectedTurnDetail.contextWindowLimit ?? 1000000,
+          contextWindowLimit: selectedTurnDetail.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
           systemOverheadTokens: selectedTurnDetail.systemOverheadTokens ?? 0,
           systemPrompt: selectedTurnDetail.systemPrompt ?? null,
           fullContext: selectedTurnDetail.fullContext ?? null,
