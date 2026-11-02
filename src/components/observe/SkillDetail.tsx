@@ -146,11 +146,15 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
 
     let timer: ReturnType<typeof setTimeout>
     let active = true
+    // 重试的 restart=1 只随首发请求，轮询归零：否则每轮都重启已失败的 job → 无限「提取中…」
+    let first = true
 
     const poll = async () => {
       try {
+        const restart = force && first ? "1" : "0"
+        first = false
         const r = await fetch(
-          (urlFor ?? sessionViewUrlFor)(`llm-workflow-extract?taskId=${encodeURIComponent(taskId)}&framework=${encodeURIComponent(framework ?? "")}&restart=${force ? "1" : "0"}`)
+          (urlFor ?? sessionViewUrlFor)(`llm-workflow-extract?taskId=${encodeURIComponent(taskId)}&framework=${encodeURIComponent(framework ?? "")}&restart=${restart}`)
         )
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const d = await r.json()
