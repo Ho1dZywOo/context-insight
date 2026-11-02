@@ -14,11 +14,11 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { VERSION_DISPLAY } from "@/lib/version"
-import { sessionQuery } from "@/lib/shared/session-link"
 import { CompareOverviewCards } from "@/components/compare/CompareOverviewCards"
 import { CompareTokenChart } from "@/components/compare/CompareTokenChart"
 import { CompareToolTable } from "@/components/compare/CompareToolTable"
 import { CompareTurns } from "@/components/compare/CompareTurns"
+import { soloRunIdOf } from "@/lib/run/identity"
 
 interface SessionData {
   taskId: string
@@ -107,7 +107,6 @@ function ComparePageContent() {
     if (idsParam) return idsParam.split(",").filter(Boolean)
     return sessionsParam.split(",").filter(Boolean)
   }, [idsParam, sessionsParam])
-  const isSessionIdMode = idsParam.length > 0
   const uniqueIds = useMemo(() => new Set(parsedIds), [parsedIds])
   const hasDuplicates = uniqueIds.size < parsedIds.length
   const paramError = hasDuplicates
@@ -130,9 +129,11 @@ function ComparePageContent() {
 
     async function fetchData() {
       try {
+        // run-first 刀J：compare 输入限定 solo run（taskId 维度）——成员详情投影
+        // 经 run 端点取（member-detail 转发，响应形状与 session 详情一致）
         const [resA, resB] = await Promise.all([
-          fetch(`/api/observe/session?${isSessionIdMode ? `sessionId=${parsedIds[0]}` : `taskId=${parsedIds[0]}`}`),
-          fetch(`/api/observe/session?${isSessionIdMode ? `sessionId=${parsedIds[1]}` : `taskId=${parsedIds[1]}`}`),
+          fetch(`/api/observe/run/${encodeURIComponent(soloRunIdOf(parsedIds[0]))}/member-detail`),
+          fetch(`/api/observe/run/${encodeURIComponent(soloRunIdOf(parsedIds[1]))}/member-detail`),
         ])
 
         if (!resA.ok || !resB.ok) {
@@ -160,11 +161,14 @@ function ComparePageContent() {
     async function fetchTurns() {
       setTurnsLoading(true)
       try {
-        const qA = sessionA ? sessionQuery(sessionA.taskId, sessionA.framework ?? 'unknown') : sessionQuery(parsedIds[0])
-        const qB = sessionB ? sessionQuery(sessionB.taskId, sessionB.framework ?? 'unknown') : sessionQuery(parsedIds[1])
+        // 对比轮次走同一 solo run 的成员富轮次（framework 由 scope 成员消歧行注入）
+        const memberTurnsUrl = (sid: string) =>
+          `/api/observe/run/${encodeURIComponent(soloRunIdOf(sid))}/member-turns?includeContent=true&skipOverhead=true&maxContentLen=0`
+        const sidA = sessionA?.taskId ?? parsedIds[0]
+        const sidB = sessionB?.taskId ?? parsedIds[1]
         const [turnsResA, turnsResB] = await Promise.all([
-          fetch(`/api/observe/session/turns?${qA}&includeContent=true&skipOverhead=true&maxContentLen=0`),
-          fetch(`/api/observe/session/turns?${qB}&includeContent=true&skipOverhead=true&maxContentLen=0`),
+          fetch(memberTurnsUrl(sidA)),
+          fetch(memberTurnsUrl(sidB)),
         ])
 
         if (!turnsResA.ok || !turnsResB.ok) {

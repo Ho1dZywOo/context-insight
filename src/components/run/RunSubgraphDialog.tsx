@@ -28,6 +28,7 @@ export function RunSubgraphDialog({
   rollbacks,
   entryKey,
   lens,
+  onLocateSession,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -36,6 +37,8 @@ export function RunSubgraphDialog({
   rollbacks: RollbackRecord[];
   entryKey: string | null;
   lens?: LensKey;
+  /** 成员会话定位（主图侧栏同款，工作台外壳收口；弹窗打开时由外壳先关闭弹窗） */
+  onLocateSession: (taskId: string) => void;
 }) {
   const entry = entryKey !== null ? nodesByKey.get(entryKey) ?? null : null;
   // 锁定入口代：只取该代生成器节点的子图视图
@@ -85,6 +88,7 @@ export function RunSubgraphDialog({
                   // 跨代跳转目标不在本代子图内 → 忽略（弹窗锁定入口代）
                   if (viewKeys.has(key)) selectInDialog(key);
                 }}
+                onLocateSession={onLocateSession}
                 onClose={() => selectInDialog(null)}
               />
             ) : (

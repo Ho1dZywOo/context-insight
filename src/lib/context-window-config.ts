@@ -8,6 +8,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { DEFAULT_CONTEXT_WINDOW_LIMIT } from '@/lib/shared/context-window';
 
 const DEFAULT_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-4o": 128000,
@@ -61,7 +62,10 @@ const DEFAULT_CONTEXT_WINDOWS: Record<string, number> = {
   "mistral-medium": 32768,
 };
 
-const FALLBACK_DEFAULT = 1000000;
+// 未知模型兜底 1M：GLM-5 系等新一代模型普遍 1M 上下文，旧 200k 兜底会
+// 把上下文水位普遍高估成濒满（饼图/水位条失真）。兜底值与 UI 侧水位估算
+// 共用单一来源（@/lib/shared/context-window）。
+const FALLBACK_DEFAULT = DEFAULT_CONTEXT_WINDOW_LIMIT;
 
 interface ContextWindowConfig {
   models?: Record<string, number>;

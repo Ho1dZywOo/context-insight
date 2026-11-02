@@ -130,6 +130,40 @@
        共享同一可视宽度——居中容器与品牌块不随滚动条出现/消失横向跳动 */
     scrollbar-gutter: stable;
   }
+  /* 滚动条全站统一：细胶囊 + 透明轨道 + 悬停加深（原生 overlay 滚动条的观感）。
+     WebKit/Blink 走伪元素三态（透明描边把 10px 命中区收成 ~4px 视觉宽度，
+     悬停加粗加深）；Firefox 走标准属性兜底（无悬停态，取中间明度）。
+     既有隐藏滚动条的规则（工具类 / inert）特异性或层级更高，不受影响 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--foreground) 30%, transparent) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background: color-mix(in oklab, var(--foreground) 22%, transparent);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    border-width: 2px;
+    background: color-mix(in oklab, var(--foreground) 42%, transparent);
+  }
+  ::-webkit-scrollbar-thumb:active {
+    background: color-mix(in oklab, var(--foreground) 58%, transparent);
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }
 
 /* Run 工作台（暗色画布）：点阵网格底已内嵌 SVG pattern（随 viewBox 矢量缩放，
@@ -224,10 +258,71 @@
   }
 }
 
+/* 被玻璃命中索引覆盖的左列（run 节点列表 / 离线查看器会话块）：inert
+   期间滚动条无服务对象，直接隐藏——浮层全幅盖到列缘，滚动条也不再从
+   圆角缺口探出尖角；退出浮层（inert 解除）即恢复 */
+[data-turn-list][inert],
+[data-export-turn-list][inert] {
+  scrollbar-width: none;
+}
+[data-turn-list][inert]::-webkit-scrollbar,
+[data-export-turn-list][inert]::-webkit-scrollbar {
+  display: none;
+}
+
 /* 滚动边缘渐隐：内容滚到玻璃面板上下缘时用 mask 溶解，替代硬分割线 */
 .run-scroll-fade {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+}
+
+/* ── Context 趋势图画布（Graph 相机模型同款）───────────────────
+    SVG 内容层配色走 CSS 变量（暗色模式随 .dark 切换，内容层零
+    backdrop-filter——材质红线不破） */
+:root {
+  --ctx-grid: #eef1f4;
+  --ctx-tick: #94a3b8;
+  --ctx-label-bg: #ffffff;
+}
+
+.dark {
+  --ctx-grid: rgba(148, 163, 184, 0.14);
+  --ctx-tick: #8b98a5;
+  --ctx-label-bg: #1c2530;
+}
+
+/* 曲线入场：pathLength 归一化的描画动画（一次性；组显隐切换重挂时重放，
+   与面积渐显同构成「数据生长」的入场叙事） */
+@keyframes ctx-line-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+.ctx-line-draw {
+  animation: ctx-line-draw 900ms var(--run-spring) both;
+}
+
+@keyframes ctx-area-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.ctx-area-in {
+  animation: ctx-area-in 700ms ease-out both;
+}
+
+/* 图例胶囊微交互：spring 缓动 + 按压回弹（工具条按钮同款手感） */
+.ctx-chip {
+  transition:
+    opacity 220ms var(--run-spring),
+    box-shadow 220ms var(--run-spring),
+    transform 220ms var(--run-spring);
+}
+
+.ctx-chip:active {
+  transform: scale(0.97);
 }
 
 /* 工具条按钮微交互：spring 缓动 + 按压回弹 + hover 发光内衬 */
@@ -247,6 +342,39 @@
 
 .run-tool-btn:active {
   transform: scale(0.98);
+}
+
+/* Turns 左列表揭示滚动：挂揭示类期间把 content-visibility 占位块展平为
+   真实布局——远距跳转（深链/跨 tab/搜索命中）的滚动目标按真实几何计算，
+   收尾摘类后恢复跳渲染（占位尺寸已被记住，恢复不引起跳动） */
+.turn-list-revealing .turn-rows {
+  content-visibility: visible;
+}
+
+/* Turns 命中索引玻璃浮层入场：自左缘轻移淡入（纯 transform/opacity，
+   基准缓动）——覆盖感而非换页 */
+@keyframes turns-hits-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px) scale(0.985);
+  }
+}
+
+.turns-hits-in {
+  animation: turns-hits-in 200ms var(--run-spring);
+}
+
+/* Turns 角色筛选条入场：首份成员数据落地时自上轻落淡入（纯
+   transform/opacity + 弹簧曲线）——列表头的从属控件，不做整块位移 */
+@keyframes role-filter-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.role-filter-in {
+  animation: role-filter-in 200ms var(--run-spring);
 }
 
 /* 数据仓令牌引导弹窗装饰动画（图标弹性入场 / 保存成功弹出） */
@@ -307,6 +435,17 @@
 
   .run-tool-btn,
   .run-tool-btn:active {
+    transition: none;
+    transform: none;
+  }
+
+  .ctx-line-draw,
+  .ctx-area-in {
+    animation: none;
+  }
+
+  .ctx-chip,
+  .ctx-chip:active {
     transition: none;
     transform: none;
   }
