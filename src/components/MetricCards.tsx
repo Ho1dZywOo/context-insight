@@ -7,13 +7,20 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
 interface MetricCardsProps {
   totalSessions: number;
+  /** 已导入 run 数（统一工作台首卡并列展示；0/未传 = 纯会话形态） */
+  runCount?: number;
+  /** join 到库的 run 成员会话数——Tokens/Cost/AvgDuration 为系统总口径
+   *  （独立会话 + run 成员），副行说明成员规模 */
+  runMemberSessions?: number;
   totalTokens: number;
   totalCost: number;
-  avgDurationMs: number;
+  /** Σ全量时长（独立会话 + run 成员）——总量口径，均值无信息量（用户决策） */
+  totalDurationMs: number;
   totalErrors?: number;
 }
 
@@ -27,13 +34,14 @@ function formatCost(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-function formatLatency(ms: number): string {
+export function formatLatency(ms: number): string {
+  if (ms >= 3_600_000) return `${(ms / 3_600_000).toFixed(1)}h`;
   if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}min`;
   if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
   return `${ms}ms`;
 }
 
-export function MetricCards({ totalSessions, totalTokens, totalCost, avgDurationMs, totalErrors }: MetricCardsProps) {
+export function MetricCards({ totalSessions, runCount, runMemberSessions, totalTokens, totalCost, totalDurationMs, totalErrors }: MetricCardsProps) {
   return (
     <div className={cn("grid gap-4", totalErrors !== undefined ? "grid-cols-5" : "grid-cols-4")}>
       <Card size="sm">
@@ -42,6 +50,12 @@ export function MetricCards({ totalSessions, totalTokens, totalCost, avgDuration
         </CardHeader>
         <CardContent>
           <p className="text-2xl font-bold">{totalSessions}</p>
+          {runCount != null && runCount > 0 && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              + {runCount} <Link href="/?kind=run" className="hover:underline">Runs</Link>
+              {runMemberSessions != null && runMemberSessions > 0 && ` · ${runMemberSessions} member sessions`}
+            </p>
+          )}
         </CardContent>
       </Card>
       <Card size="sm">
@@ -62,10 +76,10 @@ export function MetricCards({ totalSessions, totalTokens, totalCost, avgDuration
       </Card>
       <Card size="sm">
         <CardHeader>
-          <CardTitle>Avg Duration</CardTitle>
+          <CardTitle>Total Duration</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-2xl font-bold">{formatLatency(avgDurationMs)}</p>
+          <p className="text-2xl font-bold">{formatLatency(totalDurationMs)}</p>
         </CardContent>
       </Card>
       {totalErrors !== undefined && (

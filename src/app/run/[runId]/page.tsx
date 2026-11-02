@@ -15,26 +15,48 @@
 // 熄灭。侧栏两态：未选中 → Run 概览；选中 → 节点运行历史。子图不占顶层
 // 视图——生成器节点「子图 ▸」入口以弹窗展开，弹窗内按代际切换。
 
-import { useCallback, useEffect, useMemo, useState, use } from "react";
-import Link from "next/link";
-import { AppHeader } from "@/components/layout/AppHeader";
+import { useCallback, useEffect, useMemo, useRef, useState, use } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { RunCanvas } from "@/components/run/RunCanvas";
 import { RunNodeDetail } from "@/components/run/RunNodeDetail";
+import { RunOverviewTab } from "@/components/run/RunOverviewTab";
+import { RunTabBar, RUN_TABS, RUN_TABS_DEFAULT_VISIBLE } from "@/components/run/RunTabBar";
 import { RunRetryLedger } from "@/components/run/RunRetryLedger";
 import { RunSubgraphDialog } from "@/components/run/RunSubgraphDialog";
 import { RunTrace } from "@/components/run/RunTrace";
+import { RunTurnsTab } from "@/components/run/RunTurnsTab";
+import { RunContextTab } from "@/components/run/RunContextTab";
+import { RunPerfTab } from "@/components/run/RunPerfTab";
+import { RunSkillsTab } from "@/components/run/RunSkillsTab";
+import { RunFilesTab } from "@/components/run/RunFilesTab";
+import { RunAuditTab } from "@/components/run/audit/RunAuditTab";
+import { RunWireTab } from "@/components/run/RunWireTab";
+import { RunScoreTab } from "@/components/run/RunScoreTab";
+import { RunReplayTab } from "@/components/run/RunReplayTab";
+import { runMemberRowsOf, type RunMemberRow } from "@/lib/run/member-rows";
+import { normalizeRunIdParam } from "@/lib/run/identity";
+import { prefetchRunOverview } from "@/lib/run/overview-data";
 import { METRIC_EMPTY, METRIC_SCALE, REDUNDANCY_BANDS, RUN_COLORS, RUN_STATUS_META, WATER_CRITICAL_PCT, bandLabel } from "@/components/run/run-theme";
 import { LENS_META, type LensKey } from "@/lib/run/run-metrics";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { UploadBundleDialog } from "@/components/run/UploadBundleDialog";
-import { BAY_NAME } from "@/lib/branding";
-import { Loader2Icon, ArrowLeftIcon, UploadIcon } from "lucide-react";
+import { UploadDialog } from "@/components/collection/UploadDialog";
+import { BAY_NAME, BRAND_NAME } from "@/lib/branding";
+import { VERSION_DISPLAY } from "@/lib/version";
+import { assembleEmbeddedHtml, captureStylesheets, downloadHtml, fallbackDownload, gatherExportData } from "@/lib/observe/export-html";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import type { RunMemberIdentity, RunMemberStats } from "@/lib/collection/types";
 import type { RunViewModel } from "@/lib/run/view-model";
+import { useRunView, type RunTabKey } from "@/app/run/[runId]/run-view";
+import { Loader2Icon, ArrowLeftIcon, UploadIcon, FileTextIcon, GlobeIcon, RefreshCwIcon, WifiIcon, ActivityIcon, AlertTriangleIcon } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import Link from "next/link";
 
 interface RunDetailResponse {
   run: {
     runId: string;
+    /** 刀H：run-first 命名空间判别——solo = 无主 session 合成的单例 run */
+    kind?: "run" | "solo";
     name: string | null;
     status: string;
     exportDataComplete: boolean;
@@ -48,18 +70,74 @@ interface RunDetailResponse {
     } | null;
   };
   viewModel: RunViewModel;
+  /** Σ成员会话指标（join/聚合失败时 null，Overview 卡降级 —） */
+  memberStats?: RunMemberStats | null;
+  /** 成员身份名册（Overview 单元身份卡：Tool/proxy 逐成员判定） */
+  members?: RunMemberIdentity[] | null;
+  /** Σ成员代码统计（Overview 元信息卡 Code 行；无成员会话时 null） */
+  codeStats?: { additions: number; deletions: number; files: number } | null;
+  /** 成员工具调用/技能失败计数（同 session 页 Errors 口径；失败 null） */
+  totalErrors?: number | null;
 }
 
-const STATUS_VARIANT: Record<string, "green" | "red" | "orange" | "gray" | "slate" | "yellow"> = {
-  passed: "green",
-  failed: "red",
-  running: "orange",
-  pending: "gray",
-  carried: "slate",
-  unknown: "yellow",
-};
-
+/** 页面渲染表（刀A：Overview + Graph；刀B：+ Turns + Trace；刀C：+ Context + Perf；
+ *  刀D：+ Skills + Files；刀E：+ Audit；刀I3：+ Wire/Replay/Score（session 独有能力
+ *  经成员视图端点挂入；wire/replay 默认隐藏——调试视图，?a 展开对齐 session 页）。
+ *  导航 = RunTabBar（凹槽分段控件）：渲染表/高级门/组件单一源在此 */
 const LEGEND_STATUSES = ["passed", "failed", "running", "carried"] as const;
+
+/** 品牌区（单行导航栏左段）：渐变图标 + 双色字标 + 版本，点击回工作台
+ *  首页——加载态/错误态/加载后同一外壳共用，chrome 即时成型 */
+function BrandLockup() {
+  return (
+    <Link
+      href="/"
+      className="flex min-w-0 shrink-0 items-center gap-2 rounded-full py-0.5 pl-0.5 pr-3 transition-colors hover:bg-foreground/[0.04] dark:hover:bg-foreground/[0.08]"
+      title={`${BRAND_NAME} · 回到工作台`}
+    >
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_1px_4px_rgba(59,113,224,0.45)]">
+        <ActivityIcon className="size-4 text-white" strokeWidth={2.5} />
+      </span>
+      <span className="flex items-baseline gap-1 tracking-tight">
+        <span className="text-sm font-bold">Context</span>
+        <span className="text-sm font-semibold text-muted-foreground">Insight</span>
+      </span>
+      <span className="rounded-full bg-foreground/[0.05] px-1.5 py-px font-mono text-[9.5px] font-medium text-muted-foreground">{VERSION_DISPLAY}</span>
+    </Link>
+  );
+}
+
+/** 返回钮（导航行最左，与 tab 同行）：iOS 风圆头 chevron，工作台内有可回退
+ *  历史时亮出残影双 chevron（可达性反馈），悬停轻推、按压回缩——纯 CSS
+ *  transform/opacity，动效零 JS */
+function BackButton({ canBack, onBack }: { canBack: boolean; onBack: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onBack}
+      title="返回上一步"
+      className="group flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition hover:bg-foreground/[0.06] hover:text-foreground active:scale-90 dark:hover:bg-foreground/[0.12]"
+    >
+      <svg
+        viewBox="0 0 20 16"
+        className="h-4 w-5 shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:-translate-x-0.5"
+        aria-hidden
+      >
+        <path d="M8 2.5 3 8l5 5.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        <path
+          d="M15 2.5 10 8l5 5.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity={canBack ? 0.32 : 0}
+          className="transition-opacity duration-300"
+        />
+      </svg>
+    </button>
+  );
+}
 
 function RunOverview({ viewModel }: { viewModel: RunViewModel }) {
   const stats: { label: string; value: string }[] = [
@@ -123,7 +201,15 @@ function RunOverview({ viewModel }: { viewModel: RunViewModel }) {
 }
 
 export default function RunDetailPage({ params }: { params: Promise<{ runId: string }> }) {
-  const { runId } = use(params);
+  // 客户端导航的动态段可能保持 URL 编码形态（solo%3A…；SSR/直刷是解码形态）——
+  // 归一化单点，防 encodeURIComponent 双重编码把 solo run 判成不存在
+  const { runId: rawRunId } = use(params);
+  const runId = normalizeRunIdParam(rawRunId);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // 高级 tab 门（wire/replay）：?a 或 NEXT_PUBLIC_SHOW_ADVANCED_TABS（session 页同款）
+  const showAdvancedTabs = process.env.NEXT_PUBLIC_SHOW_ADVANCED_TABS === "true" || searchParams.has("a");
+  const visibleTabs = showAdvancedTabs ? RUN_TABS : RUN_TABS_DEFAULT_VISIBLE;
   const [data, setData] = useState<RunDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -133,11 +219,53 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   const [mode, setMode] = useState<"graph" | "trace" | "ledger">("graph");
   const [lens, setLens] = useState<LensKey>("status");
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [exportingMd, setExportingMd] = useState(false);
+  const [exportingHtml, setExportingHtml] = useState(false);
+  // tab/member 视图状态（URL 镜像单点，契约对齐 session-view）；goBack/canBack
+  // 为工作台内回退栈（navigate 前值入栈、select 不入栈）
+  const { view, navigate, select, goBack, canBack } = useRunView();
+  // 懒挂载护栏（design §6）：Turns/Trace 等自取数 tab 首次访问才挂载拉数，
+  // 此后保持挂载 hidden 切换（回切不丢状态）——避免 Overview 落地即全量拉取
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<RunTabKey>>(() => new Set([view.tab]));
+  if (!visitedTabs.has(view.tab)) {
+    setVisitedTabs(new Set([...visitedTabs, view.tab]));
+  }
   // 稳定回调：RunGraph memo 依赖 props 引用稳定（子图入口不随无关重渲染换引用）
   const openSubgraph = useCallback((key: string) => setSubgraphKey(key), []);
 
+  // 返回 = 回退上一个工作台动作（tab 切换 / turn 深链 / 成员钻取，逐步回退）；
+  // 栈空则离页——浏览器有来路回上页，直开深链（无来路）回工作台首页
+  const handleBack = useCallback(() => {
+    if (goBack()) return;
+    if (window.history.length > 1) router.back();
+    else router.push("/");
+  }, [goBack, router]);
+
+  // —— 定位收口（locate）——
+  // 「跳到 Turns 看某位置」的唯一入态是 turnId 深链管线：navigate({ tab:
+  //  "turns", turnId }) → RunTurnsTab 选中 → 详情归属 → 节点自动展开 → 行
+  // 居中揭示（既有机制）。粗粒度目标（会话等）不另建管线，先解析成轮再进
+  // 同一管线——解析器都收口在这一层（唯一同时持有 navigate 与 runId 的
+  // 外壳），后续新增定位入口（Overview/Trace/评分卡…）复用同一函数
+  const locateSession = useCallback(async (taskId: string) => {
+    // 会话 → 该会话首轮（时间线升序第 1 条）；pageSize=1 只取锚点
+    let firstTurn: string | null = null;
+    try {
+      const r = await fetch(`/api/observe/run/${encodeURIComponent(runId)}/turns?member=${encodeURIComponent(taskId)}&page=1&pageSize=1`);
+      if (r.ok) {
+        const d = (await r.json()) as { items?: Array<{ turnId: string }> };
+        firstTurn = d.items?.[0]?.turnId ?? null;
+      }
+    } catch { /* 取数失败兜底：仅切 tab */ }
+    // 无轮会话：切 Turns 清选中（列表兜底呈现「该成员无已入库轮次」）
+    navigate({ tab: "turns", turnId: firstTurn });
+  }, [runId, navigate]);
+
   useEffect(() => {
     let cancelled = false;
+    // Overview 面板预取与详情 fetch 同刻并行：面板五端点不等 run 详情往返
+    // （详情未到也能先拉数据，tab 挂载时命中缓存即刻渲染）
+    void prefetchRunOverview(runId);
     (async () => {
       try {
         const res = await fetch(`/api/observe/run/${encodeURIComponent(runId)}`);
@@ -159,34 +287,230 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
     () => new Map((data?.viewModel.nodes ?? []).map(n => [n.key, n])),
     [data],
   );
-  // 主图即工作台（子图为弹窗，不再是顶层视图）
-  const view = data?.viewModel.views[0] ?? null;
-  // 图数据缺失（导出侧未启用 graph 插件）：结构图/时间轴/账本三模式全部
-  // 依赖图数据，工作台降级为空态引导卡，隐藏模式切换与图例
-  const hasGraph = (view?.nodeKeys.length ?? 0) > 0;
+  // 主图即工作台（子图为弹窗，不再是顶层视图）；命名与 run-view 的 view（tab 状态）区分
+  const mainView = data?.viewModel.views[0] ?? null;
+  // 成员维度单点（Overview 成员表 / Turns/Trace 过滤 chips 同源）
+  const memberRows = useMemo(() => (data ? runMemberRowsOf(data.viewModel) : []), [data]);
   const selectedNode = selectedKey ? nodesByKey.get(selectedKey) ?? null : null;
+
+  // ── 刷新（session 页刷新能力在 run 工作台的对偶，刀J2 后补全）────────────
+  // solo = 增量刷新成员会话源；bundle = 逐个刷新有源的成员会话。自取数 tab 经
+  // refreshEpoch 重挂载重取（tab/member/turnId 都是 URL 镜像态，重挂后原位恢复）。
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshEpoch, setRefreshEpoch] = useState(0);
+  const refreshingRef = useRef(false);
+
+  const reloadRun = useCallback(async () => {
+    try {
+      // 自取数 tab 经 refreshEpoch 重挂载：先换新 promise，重挂的 Overview 消费
+      // 缓存即取到刷新后数据（fresh 覆盖旧 promise，随后 setData + epoch bump）
+      void prefetchRunOverview(runId, { fresh: true });
+      const res = await fetch(`/api/observe/run/${encodeURIComponent(runId)}`);
+      if (!res.ok) return;
+      setData(await res.json());
+      setRefreshEpoch(e => e + 1);
+    } catch {
+      /* 重载失败保留旧数据 */
+    }
+  }, [runId]);
+
+  const refreshMembers = useCallback(async (targets: RunMemberRow[], auto: boolean) => {
+    if (refreshingRef.current || targets.length === 0) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    try {
+      let added = 0, updated = 0, rebuilt = 0, ok = 0, fullRebuild = false;
+      const errors: string[] = [];
+      for (const m of targets) {
+        try {
+          const res = await fetch("/api/ingest/refresh-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId: m.taskId, framework: m.framework }),
+          });
+          const d = await res.json();
+          if (res.ok) {
+            ok++;
+            added += d.addedTurns ?? 0;
+            updated += d.updatedTurns ?? 0;
+            if (d.fullRebuild) { fullRebuild = true; rebuilt += d.rebuiltTurns ?? 0; }
+          } else {
+            errors.push(`${m.taskId}: ${d.error ?? `HTTP ${res.status}`}`);
+          }
+        } catch {
+          errors.push(`${m.taskId}: 网络错误`);
+        }
+      }
+      if (errors.length > 0 && !auto) {
+        toast.error("刷新失败", { description: errors[0] + (errors.length > 1 ? `（共 ${errors.length} 个成员失败）` : "") });
+      }
+      if (ok > 0) {
+        const msg = fullRebuild
+          ? `源回溯变化，全量重建 ${rebuilt} 轮`
+          : added > 0 ? `新增 ${added} 轮，更新 ${updated} 轮` : "已是最新";
+        toast.success(`${auto ? "自动同步" : "刷新完成"}: ${msg}`, { duration: 3000 });
+        await reloadRun();
+      }
+    } finally {
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }
+  }, [reloadRun]);
+
+  // 自动同步（solo + 原生 opencode 源）：5s 探针轮询——run 成员视图端点
+  // （刀J2 删除的 session 探针以平移层处理器复活），settled 且源有变化 →
+  // 增量导入 + 后台重载。只对原生 opencode 开启：其探针是 sqlite 计数（廉价）；
+  // claude 格式源（含 proxy 捕获）探针要整读文件，压缩后的 .7z 每 5s 全量读取
+  // 不可接受——那些会话走手动刷新。
+  const soloRow = data?.run.kind === "solo" ? memberRows[0] ?? null : null;
+  const autoSyncEligible = soloRow != null && soloRow.framework === "opencode" && !!soloRow.sourcePath;
+  // 浏览器标签页标题 = run 名（多 run 并开时以标签页区分上下文）；
+  // 卸载恢复原值，不影响其他页面
+  useEffect(() => {
+    if (!data?.run) return;
+    const prev = document.title;
+    document.title = `${data.run.name ?? data.run.runId} · ${BRAND_NAME}`;
+    return () => { document.title = prev; };
+  }, [data?.run]);
+  useEffect(() => {
+    if (!autoSyncEligible || soloRow == null) return;
+    // 基线是 effect 局部量：run 切换/数据重载后重开即重置（防跨 run 残留基线）
+    let initialized = false;
+    let lastMaxTime = -1;
+    let active = true;
+    const poll = async () => {
+      if (!active || refreshingRef.current) return;
+      try {
+        const res = await fetch(`/api/observe/run/${encodeURIComponent(runId)}/auto-refresh?member=${encodeURIComponent(soloRow.taskId)}`);
+        if (!res.ok || !active) return;
+        const d = await res.json();
+        if (!initialized) {
+          initialized = true;
+          lastMaxTime = d.maxTimeUpdated ?? -1;
+          return;
+        }
+        if (!d.settled) return;
+        const countChanged = d.countChanged === true;
+        const timeChanged = typeof d.maxTimeUpdated === "number" && d.maxTimeUpdated !== lastMaxTime;
+        if (countChanged || timeChanged) {
+          lastMaxTime = d.maxTimeUpdated ?? -1;
+          void refreshMembers([soloRow], true);
+        }
+      } catch {
+        /* 探针失败本次跳过，下轮重试 */
+      }
+    };
+    const t = setInterval(poll, 5000);
+    return () => { active = false; clearInterval(t); };
+  }, [runId, autoSyncEligible, soloRow, refreshMembers]);
 
   if (error) {
     return (
-      <div className="flex min-h-screen flex-col bg-background">
-        <main className="flex w-full max-w-7xl flex-col gap-6 px-6 py-8 mx-auto">
-          <AppHeader />
-          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-          <Link href="/runs" className="text-sm text-blue-600 dark:text-blue-400 hover:underline">
-            ← 返回 Runs
-          </Link>
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <main className="flex min-h-0 flex-1 flex-col gap-3 px-6 py-4">
+          {/* 错误态沿用加载后外壳：chrome 可用（返回/品牌），错误卡在面板区居中 */}
+          <div className="flex shrink-0 animate-in fade-in slide-in-from-top-2 duration-300 items-center gap-2">
+            <BrandLockup />
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 py-10">
+            <span className="flex size-10 items-center justify-center rounded-full bg-red-500/[0.08] dark:bg-red-500/[0.14]">
+              <AlertTriangleIcon className="size-5 text-red-500 dark:text-red-400" />
+            </span>
+            <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="gap-1" onClick={() => router.back()}>
+                <ArrowLeftIcon className="size-4" />
+                返回
+              </Button>
+              <Button size="sm" onClick={() => window.location.reload()}>重试</Button>
+            </div>
+          </div>
         </main>
       </div>
     );
   }
-  if (!data || !view) {
+  if (!data || !mainView) {
     return (
-      <div className="flex min-h-screen flex-col bg-background">
-        <main className="flex w-full max-w-7xl flex-col gap-6 px-6 py-8 mx-auto">
-          <AppHeader />
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2Icon className="size-4 animate-spin" /> 加载 Run…
-          </p>
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <main className="flex min-h-0 flex-1 flex-col gap-3 px-6 py-4">
+          {/* 加载态 = 与加载后同一页面外壳：chrome 即时成型（返回/品牌可用），
+              动作簇以等宽占位；导航与首卡按真实形状给骨架（三区结构 + 泳道），
+              加载完成只有内容区填充，无整页跳变 */}
+          <div className="flex shrink-0 animate-in fade-in slide-in-from-top-2 duration-300 items-center gap-2">
+            <BrandLockup />
+            <span className="flex-1" />
+            <div className="flex shrink-0 items-center gap-1.5" aria-hidden>
+              <div className="h-9 w-16 animate-pulse rounded-full bg-foreground/[0.04] dark:bg-foreground/[0.08]" />
+              <div className="h-9 w-36 animate-pulse rounded-full bg-foreground/[0.05] dark:bg-foreground/[0.09]" style={{ animationDelay: "120ms" }} />
+            </div>
+          </div>
+          {/* 导航骨架：返回钮真实在场（chrome 即时成型），凹槽轨道药丸按真实
+              tab 标签错落、逐项错峰 pulse——与真实导航同行同形，无落位跳变 */}
+          <div className="flex shrink-0 animate-in fade-in slide-in-from-top-1 fill-mode-backwards [animation-delay:60ms] items-center gap-2 duration-300">
+            <BackButton canBack={canBack} onBack={handleBack} />
+            <div className="min-w-0 flex-1">
+              <div className="mx-auto flex w-fit items-center gap-0.5 rounded-full bg-foreground/[0.04] p-1 dark:bg-foreground/[0.07]" aria-hidden>
+                {[56, 40, 56, 56, 68, 56, 56, 56, 40].map((w, i) => (
+                  <span
+                    key={i}
+                    className="h-8 animate-pulse rounded-full bg-foreground/[0.05] dark:bg-foreground/[0.09]"
+                    style={{ width: w, animationDelay: `${i * 60}ms` }}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+          {/* 首卡骨架：三区（身份/元信息网格/瓦片行），网格类与真实卡片一致 */}
+          <Card className="animate-in fade-in slide-in-from-bottom-4 duration-500 fill-mode-backwards overflow-hidden rounded-2xl ring-foreground/[0.06] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)]">
+            <CardContent className="px-5 pt-4 pb-4">
+              <div className="divide-y divide-foreground/[0.06]" aria-hidden>
+                <div className="pb-3.5">
+                  <div className="h-7 w-2/5 animate-pulse rounded-md bg-foreground/[0.08]" />
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <span className="h-5 w-20 animate-pulse rounded-full bg-foreground/[0.06]" />
+                    <span className="h-5 w-12 animate-pulse rounded-full bg-foreground/[0.06]" style={{ animationDelay: "80ms" }} />
+                    <span className="h-4 w-36 animate-pulse rounded bg-foreground/[0.05]" style={{ animationDelay: "160ms" }} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-x-4 gap-y-3 py-3.5">
+                  {[0, 1, 2, 3].map(i => (
+                    <div key={i}>
+                      <div className="h-2.5 w-8 animate-pulse rounded bg-foreground/[0.06]" />
+                      <div className="mt-1.5 h-3.5 w-24 animate-pulse rounded bg-foreground/[0.08]" style={{ animationDelay: `${i * 80 + 60}ms` }} />
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(104px,1fr))] gap-2 pt-3.5">
+                  {Array.from({ length: 9 }, (_, i) => (
+                    <div key={i} className="rounded-xl bg-foreground/[0.04] px-2.5 py-2 dark:bg-foreground/[0.07]">
+                      <div className="h-2.5 w-10 animate-pulse rounded bg-foreground/[0.07]" />
+                      <div className="mt-1.5 h-5 w-12 animate-pulse rounded bg-foreground/[0.09]" style={{ animationDelay: `${i * 70}ms` }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          {/* 列表骨架：双列并排（Skills / Tool Calls），形状与真实卡片一致 */}
+          <div className="grid gap-4 lg:grid-cols-2" aria-hidden>
+            {[0, 1].map(i => (
+              <Card key={i} size="sm" className="rounded-2xl ring-foreground/[0.06]">
+                <CardHeader>
+                  <CardTitle><span className="inline-block h-4 w-24 animate-pulse rounded bg-foreground/[0.08]" /></CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2.5">
+                  {Array.from({ length: 3 }, (_, j) => (
+                    <div key={j} className="flex items-center gap-3">
+                      <span className="size-2 shrink-0 animate-pulse rounded-full bg-foreground/[0.08]" style={{ animationDelay: `${i * 60 + j * 120}ms` }} />
+                      <span className="h-3.5 w-32 animate-pulse rounded-md bg-foreground/[0.08]" style={{ animationDelay: `${i * 60 + j * 120 + 80}ms` }} />
+                      <span className="ml-auto h-3.5 w-10 animate-pulse rounded-md bg-foreground/[0.08]" style={{ animationDelay: `${i * 60 + j * 120 + 160}ms` }} />
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          <span className="sr-only" role="status">加载 Run…</span>
         </main>
       </div>
     );
@@ -202,97 +526,310 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         .sort((a, b) => a.generation - b.generation)
         .map(n => ({ key: n.key, generation: n.generation, status: n.status }))
     : [];
-  // 页头成员会话计数（导入时口径）：已导入/引用 + 失败附注；悬停给完整明细
-  const s = run.import?.sessions;
-  const sessionStats = run.import && s
-    ? `成员会话：${s.imported + s.existing}/${s.total}`
-      + (s.failed > 0 ? ` · 失败 ${s.failed}` : "")
-    : null;
-  const sessionStatsTitle = run.import && s
-    ? `新导入 ${s.imported} · 已存在 ${s.existing}`
-      + (s.missingFile > 0 ? ` · 缺文件 ${s.missingFile}` : "")
-      + (s.failed > 0 ? ` · 失败 ${s.failed}` : "")
-      + ` · 引用 ${s.total}（不含 Bash 脚本成员）`
-      + (run.import.sourceDir ? ` · 源目录 ${run.import.sourceDir}` : "")
-    : "";
+
+  // 离线导出（solo run = 会话维度，与 compare 同口径）：MD 走 run 成员视图端点；
+  // HTML 经 export-html 装配（取数 run 端点、按 session 键存档，离线查看器零改动消费）
+  const soloMember = run.kind === "solo" ? memberRows[0] ?? null : null;
+  // 刷新目标：有源的成员会话（solo = 1 个；bundle = 全部有源成员）
+  const refreshTargets = memberRows.filter(m => m.sourcePath);
+  const refreshable = refreshTargets.length > 0;
+
+  async function handleExportMd() {
+    if (!soloMember || exportingMd) return;
+    setExportingMd(true);
+    try {
+      const res = await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}/export-md`);
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error("Export Markdown failed", { description: err.error ?? "Unknown error" });
+        return;
+      }
+      const blob = new Blob([await res.text()], { type: "text/markdown" });
+      fallbackDownload(blob, `session_${soloMember.taskId}.md`);
+      toast.success("Markdown exported", { description: `session_${soloMember.taskId}.md` });
+    } catch {
+      toast.error("Export Markdown failed", { description: "Network error" });
+    } finally {
+      setExportingMd(false);
+    }
+  }
+
+  async function handleExportHtml() {
+    if (!soloMember || exportingHtml) return;
+    setExportingHtml(true);
+    try {
+      const cssText = captureStylesheets();
+      const payload = await gatherExportData(run.runId, soloMember.taskId, soloMember.framework);
+      const bundleRes = await fetch("/export-view.js");
+      if (!bundleRes.ok) throw new Error("export-view.js 未构建，请先运行 npm run build:export-view");
+      const html = assembleEmbeddedHtml(
+        cssText,
+        await bundleRes.text(),
+        soloMember.taskId,
+        soloMember.framework,
+        payload,
+      );
+      downloadHtml(html, `session_${soloMember.taskId}.html`);
+      toast.success("HTML exported", { description: `session_${soloMember.taskId}.html — 嵌入式 SPA（离线可交互）` });
+    } catch (e) {
+      toast.error("Export HTML failed", { description: e instanceof Error ? e.message : "Unknown error" });
+    } finally {
+      setExportingHtml(false);
+    }
+  }
+
+  // 面板容器统一类：淡入切换（display none→flex 翻转即重放 CSS 动画，
+  // 每次切 tab 一个 200ms 淡入）
+  const tabPanelClass = (key: RunTabKey) => cn(
+    "min-h-0 flex-1 flex-col animate-in fade-in duration-200",
+    view.tab === key ? "flex" : "hidden",
+  );
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
-      <main className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
-        {/* 铺满布局：导航 / 标题行 / 警告固定高，工作台 flex-1 精确吃满剩余高度 */}
-        <div className="shrink-0">
-          <AppHeader />
-        </div>
-
-        <div className="flex shrink-0 flex-wrap items-center gap-3">
-          <Link href="/runs" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-            <ArrowLeftIcon className="size-4" /> Runs
-          </Link>
-          <h1 className="text-xl font-bold">{run.name ?? run.runId}</h1>
-          <Badge variant={STATUS_VARIANT[run.status] ?? "gray"}>{run.status}</Badge>
-          <span className="font-mono text-xs text-muted-foreground">{run.runId}</span>
-          {!run.exportDataComplete ? (
-            <Badge variant="yellow" className="text-xs">数据不完整</Badge>
-          ) : null}
-          {sessionStats ? (
-            <span className="text-xs text-muted-foreground" title={sessionStatsTitle}>
-              {sessionStats}
+      <main className="flex min-h-0 flex-1 flex-col gap-3 px-6 py-4">
+        {/* 全局 chrome（单行导航栏）：返回 + 品牌 + 同步 chip + 动作簇——
+            run 身份（名称/状态/类型/runId）由 Overview 首卡承载，导航栏只留
+            导航与操作；品牌区（渐变图标 + 字标 + 版本）点击回工作台首页 */}
+        <div className="flex shrink-0 animate-in fade-in slide-in-from-top-2 duration-300 items-center gap-2">
+          <BrandLockup />
+          <span className="flex-1" />
+          {/* 同步态 chip（仅活动时可见） */}
+          {refreshing ? (
+            <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-blue-500/[0.08] px-2.5 py-1 text-[11px] font-medium text-blue-600 dark:bg-blue-500/[0.14] dark:text-blue-400">
+              <Loader2Icon className="size-3 animate-spin" />
+              同步中…
+            </span>
+          ) : autoSyncEligible ? (
+            <span
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-500/[0.08] px-2.5 py-1 text-[11px] font-medium text-emerald-600 dark:bg-emerald-500/[0.14] dark:text-emerald-400"
+              title="源有新数据时自动增量导入"
+            >
+              <WifiIcon className="size-3" />
+              自动同步
             </span>
           ) : null}
-          <span className="flex-1" />
-          <Button
-            variant="outline"
-            size="sm"
-            className="ml-auto gap-1.5"
-            onClick={() => setUploadOpen(true)}
-          >
-            <UploadIcon className="size-3.5" />
-            上传到{BAY_NAME}
-          </Button>
+          {/* 动作簇：图标动作收进工具条药丸容器（刷新三态合一——自动同步
+              态也可手动立即刷新），上传为实心主操作药丸 */}
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex items-center gap-0.5 rounded-full bg-foreground/[0.04] p-1 dark:bg-foreground/[0.08]">
+              <button
+                type="button"
+                className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
+                onClick={() => { if (!refreshing && refreshable) void refreshMembers(refreshTargets, false) }}
+                disabled={refreshing || !refreshable}
+                title={refreshing ? "同步中…" : autoSyncEligible ? "自动同步已开启 · 点击立即刷新" : "立即刷新"}
+              >
+                {refreshing ? (
+                  <Loader2Icon className="size-3.5 animate-spin text-blue-500" />
+                ) : autoSyncEligible ? (
+                  <span className="relative flex size-3.5 items-center justify-center text-emerald-500 dark:text-emerald-400">
+                    <WifiIcon className="size-3.5" />
+                    <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-emerald-500" aria-hidden />
+                  </span>
+                ) : (
+                  <RefreshCwIcon className="size-3.5" />
+                )}
+              </button>
+              {soloMember ? (
+                <>
+                  <button
+                    type="button"
+                    className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
+                    onClick={handleExportMd}
+                    disabled={exportingMd}
+                    title="导出 Markdown"
+                  >
+                    {exportingMd ? <Loader2Icon className="size-3.5 animate-spin" /> : <FileTextIcon className="size-3.5" />}
+                  </button>
+                  <button
+                    type="button"
+                    className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
+                    onClick={handleExportHtml}
+                    disabled={exportingHtml}
+                    title="导出离线 HTML"
+                  >
+                    {exportingHtml ? <Loader2Icon className="size-3.5 animate-spin" /> : <GlobeIcon className="size-3.5" />}
+                  </button>
+                </>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-foreground px-3.5 text-xs font-medium text-background transition-opacity hover:opacity-85"
+              onClick={() => setUploadOpen(true)}
+            >
+              <UploadIcon className="size-3.5" />
+              上传到{BAY_NAME}
+            </button>
+          </div>
         </div>
 
-        <UploadBundleDialog
+        <UploadDialog
           open={uploadOpen}
           onOpenChange={setUploadOpen}
-          runId={run.runId}
-          runName={run.name}
+          kind="run"
+          target={{ runId: run.runId, runName: run.name }}
         />
 
         {viewModel.warnings.length > 0 ? (
-          <div className="shrink-0 rounded-md border border-yellow-500/40 bg-yellow-500/5 p-2 text-xs text-yellow-700 dark:text-yellow-400">
+          <div className="shrink-0 animate-in fade-in slide-in-from-bottom-2 duration-300 rounded-xl bg-amber-500/[0.08] px-3.5 py-2.5 text-xs leading-5 text-amber-700 dark:text-amber-400">
             {viewModel.warnings.slice(0, 5).map(w => <p key={w}>⚠ {w}</p>)}
           </div>
         ) : null}
 
-        {/* 工作台（铺满页宽）：toolbar（视图标题 / 模式与透镜 / 图例）+ 画布（结构
+        {/* 导航行：返回钮（回退上一个工作台动作，栈空离页回上页/首页）+
+            凹槽分段控件（居中凹槽轨道 + 浮起卡舌 + mask 边缘渐隐，12 tab
+            窄窗口不换行）；面板容器带 fade-in（display 翻转即重放） */}
+        <div className="flex shrink-0 animate-in fade-in slide-in-from-top-1 fill-mode-backwards [animation-delay:60ms] items-center gap-2 duration-300">
+          <BackButton canBack={canBack} onBack={handleBack} />
+          <RunTabBar
+            className="min-w-0 flex-1"
+            tabs={visibleTabs}
+            active={view.tab}
+            onSelect={key => navigate({ tab: key })}
+          />
+        </div>
+
+        {/* tab 内容全部保持挂载（hidden 切换，session 页同款）：切走再切回不丢
+            状态——Graph 的选中/缩放/透镜、Overview 的滚动位置都留在原处 */}
+        <div data-run-tab="overview" className={tabPanelClass("overview")}>
+          {data ? (
+            <RunOverviewTab
+              key={refreshEpoch}
+              runId={run.runId}
+              run={run}
+              viewModel={viewModel}
+              memberStats={data.memberStats ?? null}
+              totalErrors={data.totalErrors ?? null}
+              members={data.members ?? []}
+              codeStats={data.codeStats ?? null}
+              onOpenTurns={({ turnId, member }) => navigate({ tab: "turns", turnId: turnId ?? undefined, member: member ?? undefined })}
+              onOpenSkills={() => navigate({ tab: "skills" })}
+            />
+          ) : null}
+        </div>
+
+        {visitedTabs.has("turns") ? (
+          <div data-run-tab="turns" className={tabPanelClass("turns")}>
+            <RunTurnsTab
+              key={refreshEpoch}
+              runId={run.runId}
+              viewModel={viewModel}
+              turnId={view.turnId}
+              onSelectTurn={id => select({ turnId: id })}
+            />
+          </div>
+        ) : null}
+
+        {visitedTabs.has("context") ? (
+          <div data-run-tab="context" className={tabPanelClass("context")}>
+            <RunContextTab
+              key={refreshEpoch}
+              runId={run.runId}
+              onNavigateToTurn={(turnId, member) => navigate({ tab: "turns", turnId, member: member ?? undefined })}
+            />
+          </div>
+        ) : null}
+
+        {visitedTabs.has("audit") ? (
+          <div data-run-tab="audit" className={tabPanelClass("audit")}>
+            <RunAuditTab
+              key={refreshEpoch}
+              runId={run.runId}
+              members={memberRows}
+              onOpenTurn={(turnId, member) => navigate({ tab: "turns", turnId, member: member ?? undefined })}
+            />
+          </div>
+        ) : null}
+
+        {visitedTabs.has("perf") ? (
+          <div data-run-tab="perf" className={tabPanelClass("perf")}>
+            <RunPerfTab key={refreshEpoch} runId={run.runId} onOpenTurn={turnId => navigate({ tab: "turns", turnId })} />
+          </div>
+        ) : null}
+
+        {visitedTabs.has("skills") ? (
+          <div data-run-tab="skills" className={tabPanelClass("skills")}>
+            <RunSkillsTab
+              key={refreshEpoch}
+              runId={run.runId}
+              members={memberRows}
+              onOpenTurn={turnId => navigate({ tab: "turns", turnId })}
+            />
+          </div>
+        ) : null}
+
+        {visitedTabs.has("files") ? (
+          <div data-run-tab="files" className={tabPanelClass("files")}>
+            <RunFilesTab key={refreshEpoch} runId={run.runId} />
+          </div>
+        ) : null}
+
+        {visitedTabs.has("wire") ? (
+          <div data-run-tab="wire" className={tabPanelClass("wire")}>
+            <RunWireTab
+              key={refreshEpoch}
+              runId={run.runId}
+              members={memberRows}
+              member={view.member}
+              onMemberChange={m => navigate({ member: m })}
+            />
+          </div>
+        ) : null}
+
+        {visitedTabs.has("score") ? (
+          <div data-run-tab="score" className={tabPanelClass("score")}>
+            <RunScoreTab
+              key={refreshEpoch}
+              runId={run.runId}
+              members={memberRows}
+              member={view.member}
+              onMemberChange={m => navigate({ member: m })}
+              onOpenTurn={turnId => navigate({ tab: "turns", turnId })}
+            />
+          </div>
+        ) : null}
+
+        {visitedTabs.has("replay") ? (
+          <div data-run-tab="replay" className={tabPanelClass("replay")}>
+            <RunReplayTab
+              key={refreshEpoch}
+              runId={run.runId}
+              members={memberRows}
+              member={view.member}
+              onMemberChange={m => navigate({ member: m })}
+              onOpenTurn={turnId => navigate({ tab: "turns", turnId })}
+            />
+          </div>
+        ) : null}
+
+        {/* 工作台 = Graph tab（铺满页宽）：toolbar（视图标题 / 模式与透镜 / 图例）+ 画布（结构
             图或时间轴）+ 侧栏；子图经生成器节点「子图 ▸」入口以弹窗展开 */}
-        <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-xl border bg-white shadow-sm">
+        <div data-run-tab="graph" className={cn("flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-xl border bg-white shadow-sm animate-in fade-in duration-200", view.tab === "graph" ? "" : "hidden")}>
           <div className="flex h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-black/[0.08] bg-black/[0.015] px-3">
             <div className="flex min-w-0 items-center gap-2.5">
-              <span className="truncate px-1 text-xs font-medium text-[#57606a]" title={view.title}>
-                {view.title}
+              <span className="truncate px-1 text-xs font-medium text-[#57606a]" title={mainView.title}>
+                {mainView.title}
               </span>
-              {/* 视图模式：结构图（DAG）/ 时间轴（Trace 泳道）/ 账本（重试浪费）——共用选中与侧栏；
-                  无图数据时隐藏（三模式均不可用，切换无意义） */}
-              {hasGraph ? (
-                <div className="flex items-center rounded-md border border-black/10 bg-white p-0.5" role="group" aria-label="视图模式">
-                  {([["graph", "结构"], ["trace", "时间轴"], ["ledger", "账本"]] as const).map(([k, t]) => (
-                    <button
-                      key={k}
-                      type="button"
-                      aria-pressed={mode === k}
-                      onClick={() => setMode(k)}
-                      className={`rounded px-2 py-0.5 text-[11px] leading-5 transition-colors ${
-                        mode === k ? "bg-black/[0.07] font-medium text-[#1f2328]" : "text-[#57606a] hover:text-[#1f2328]"
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
+              {/* 视图模式：结构图（DAG）/ 时间轴（Trace 泳道）/ 账本（重试浪费）——共用选中与侧栏 */}
+              <div className="flex items-center rounded-md border border-black/10 bg-white p-0.5" role="group" aria-label="视图模式">
+                {([["graph", "结构"], ["trace", "时间轴"], ["ledger", "账本"]] as const).map(([k, t]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-pressed={mode === k}
+                    onClick={() => setMode(k)}
+                    className={`rounded px-2 py-0.5 text-[11px] leading-5 transition-colors ${
+                      mode === k ? "bg-black/[0.07] font-medium text-[#1f2328]" : "text-[#57606a] hover:text-[#1f2328]"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
               {/* 指标透镜（结构图模式）：切换节点着色维度——状态 / Token / 时长 / 轮次 / 缓存 */}
-              {mode === "graph" && hasGraph ? (
+              {mode === "graph" ? (
                 <div className="flex items-center rounded-md border border-black/10 bg-white p-0.5" role="group" aria-label="指标透镜">
                   {LENS_META.map(l => (
                     <button
@@ -311,7 +848,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
               ) : null}
             </div>
 
-            {hasGraph && mode === "graph" && lens === "status" ? (
+            {mode === "graph" && lens === "status" ? (
               <div className="hidden items-center gap-3.5 text-[11px] text-[#8c959f] lg:flex" aria-label="图例">
                 {LEGEND_STATUSES.map(s => (
                   <span key={s} className="inline-flex items-center gap-1.5">
@@ -333,7 +870,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
                   回滚
                 </span>
               </div>
-            ) : hasGraph && mode === "graph" ? (
+            ) : mode === "graph" ? (
               <div className="hidden items-center gap-2 text-[11px] text-[#8c959f] lg:flex" aria-label="图例">
                 <span>{LENS_META.find(l => l.key === lens)?.legend}</span>
                 {lens === "context" ? (
@@ -392,7 +929,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
                   无会话数据
                 </span>
               </div>
-            ) : hasGraph && mode === "trace" ? (
+            ) : mode === "trace" ? (
               <div className="hidden items-center gap-3.5 text-[11px] text-[#8c959f] lg:flex" aria-label="图例">
                 <span className="inline-flex items-center gap-1.5">
                   <svg width="20" height="10" viewBox="0 0 20 10" aria-hidden>
@@ -419,21 +956,9 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
 
           <div className="relative flex min-h-0 flex-1">
             <div className="flex min-w-0 flex-1">
-              {!hasGraph ? (
-                /* 空态引导卡：导出包无 graph 注解——就地说明原因与仍可用的
-                   信息，替代静默空画布（内容层，哑光材质不用玻璃） */
-                <div className="flex min-w-0 flex-1 items-center justify-center p-8">
-                  <div className="max-w-md rounded-2xl border border-dashed border-black/15 bg-black/[0.015] px-8 py-7 text-center">
-                    <p className="text-sm font-semibold text-[#1f2328]">该 Run 没有图数据</p>
-                    <p className="mt-2 text-xs leading-5 text-[#57606a]">
-                      导出包未包含 graph 节点定位字段，结构图、时间轴与重试账本不可用。
-                      Run 概览与成员会话信息仍可在右侧查看。
-                    </p>
-                  </div>
-                </div>
-              ) : mode === "graph" ? (
+              {mode === "graph" ? (
                 <RunCanvas
-                  view={view}
+                  view={mainView}
                   nodesByKey={nodesByKey}
                   selectedKey={selectedKey}
                   onSelectNode={setSelectedKey}
@@ -442,7 +967,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
                 />
               ) : mode === "trace" ? (
                 <RunTrace
-                  view={view}
+                  view={mainView}
                   nodesByKey={nodesByKey}
                   selectedKey={selectedKey}
                   onSelectNode={setSelectedKey}
@@ -465,6 +990,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
                   rollbacks={nodeRollbacks}
                   peers={peers}
                   onSelectNode={key => { setSelectedKey(key); }}
+                  onLocateSession={locateSession}
                   onClose={() => setSelectedKey(null)}
                 />
               ) : (
@@ -482,6 +1008,11 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
           rollbacks={viewModel.rollbacks}
           entryKey={subgraphKey}
           lens={lens}
+          onLocateSession={taskId => {
+            // 定位目标在 Turns（弹窗之外）——先关弹窗再跳，落地即可见
+            setSubgraphKey(null);
+            void locateSession(taskId);
+          }}
         />
       </main>
     </div>
