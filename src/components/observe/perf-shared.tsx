@@ -81,6 +81,16 @@ function fmtTok(n: number): string {
   return `${n}`
 }
 
+/** 「顺序/SEQUENCE」排序的序值：取泳道最早一轮的 turnIndex（Math.min，不依赖
+ *  turns 入序——API 顺序不保证按 turnIndex 升序，turns[0] 会失真）。空 turns
+ *  兜底为极大值排到末位（此前 `?? 0` 会把空泳道顶到最前）。注：turnIndex 是
+ *  会话内全局序（ingest 拼接 [main..., sub...] 的下标），跨成员会话各自从 0 起，
+ *  因此「顺序」仅在单一成员/子代理会话内部有严格可比性。 */
+export function laneOrderValue(turns: Array<{ turnIndex: number }>): number {
+  if (turns.length === 0) return Number.MAX_SAFE_INTEGER
+  return Math.min(...turns.map(t => t.turnIndex))
+}
+
 function categorizeTool(name: string): string {
   const n = name.toLowerCase()
   if (["read", "glob", "grep", "webfetch", "search", "list"].some(t => n.includes(t))) return "分析"
@@ -269,7 +279,7 @@ export function PerfTopTable({ subagents, onJumpToTurn, includeRoot }: {
   const [showAllSubagents, setShowAllSubagents] = useState(false)
 
   const getVal = (s: SubagentStat, key: SortKey): number =>
-    key === "ms" ? s.totalMs : key === "tokens" ? s.totalTokens : s.turns[0]?.turnIndex ?? 0
+    key === "ms" ? s.totalMs : key === "tokens" ? s.totalTokens : laneOrderValue(s.turns)
 
   const sorted = [...subagents].sort((a, b) => {
     if (sortKey === "order") return getVal(a, sortKey) - getVal(b, sortKey)
