@@ -99,13 +99,20 @@ export function RunsTable({
     const k = rowKey(r);
     setImporting(prev => new Set(prev).add(k));
     setImportErrors(prev => { const m = new Map(prev); m.delete(k); return m; });
-    const { error, insightUrl } = await onImport(r.sid, r.recording);
-    setImporting(prev => { const s = new Set(prev); s.delete(k); return s; });
-    if (error == null) {
-      if (insightUrl) window.location.href = insightUrl;
-    } else {
-      setImportErrors(prev => new Map(prev).set(k, error));
-      toast.error('导入失败', { description: error });
+    try {
+      const { error, insightUrl } = await onImport(r.sid, r.recording);
+      if (error == null) {
+        if (insightUrl) window.location.href = insightUrl;
+      } else {
+        setImportErrors(prev => new Map(prev).set(k, error));
+        toast.error('导入失败', { description: error });
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setImportErrors(prev => new Map(prev).set(k, msg));
+      toast.error('导入失败', { description: msg });
+    } finally {
+      setImporting(prev => { const s = new Set(prev); s.delete(k); return s; });
     }
   };
 

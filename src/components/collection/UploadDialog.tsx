@@ -80,16 +80,13 @@ interface UploadDialogProps {
 
 function formatTime(iso: string | null | undefined): string {
   if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    const month = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    const hour = String(d.getHours()).padStart(2, '0')
-    const minute = String(d.getMinutes()).padStart(2, '0')
-    return `${month}/${day} ${hour}:${minute}`
-  } catch {
-    return String(iso)
-  }
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso)
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hour = String(d.getHours()).padStart(2, '0')
+  const minute = String(d.getMinutes()).padStart(2, '0')
+  return `${month}/${day} ${hour}:${minute}`
 }
 
 // 提交信息组装：提交人（独立输入框唯一事实源）+ 内容描述（选填，空则省略
