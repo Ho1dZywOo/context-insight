@@ -14,7 +14,7 @@
 // 只列出已加载轮次里真实出现过的角色。
 
 import { cn } from "@/lib/utils";
-import { ROLE_DOT, classifyDisplayRole, type TurnsBlockTurn } from "@/components/run/RunTurnsNodes";
+import { ROLE_DOT, classifyDisplayRole, type TurnsBlockTurn } from "@/components/run/run-turns-display";
 
 /** 角色固定优先序（chip 排列；未登记角色按出现序追加在后） */
 export const ROLE_FILTER_ORDER: readonly string[] = [
