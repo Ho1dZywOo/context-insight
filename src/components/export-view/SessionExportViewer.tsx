@@ -19,6 +19,10 @@ import { toast } from "sonner"
 import { VERSION_DISPLAY } from "@/lib/version"
 import { BRAND_NAME, BAY_NAME } from "@/lib/branding"
 import { TurnDetail } from "@/components/observe/TurnDetail"
+// TODO(review-fix): 前向依赖标注——TurnDetailSkeleton、RunTurnsNodes(SessionBlock)、
+// RunTurnsSearch(TurnSearchField/TurnHitsPanel/useTurnsHitsFilter/TurnsSearchState)、
+// OverviewPanels、UploadDialog 由后续 UI 批次交付、暂未合入主线，本文件当前无法通过 typecheck。
+// 落地前须先合入对应后续批次，或将上述组件并入本批次。
 import { TurnDetailSkeleton } from "@/components/observe/TurnDetailSkeleton"
 import { SessionBlock } from "@/components/run/RunTurnsNodes"
 import { buildSubagentNumbers } from "@/lib/subagent-numbering"
