@@ -9,11 +9,10 @@
 "use client";
 
 // 节点运行历史侧栏（Run 工作台内）：竖轨时间线呈现逐次尝试
-// （状态/起止/验收/输出/成员会话链接）、carried/空占位语义、跨代全景、本节点
-// 触发的回滚。成员点击三态（design.md §7.2）：session 成员 → session 页；
-// process 成员 → 展开输出无跳转；空占位 → 灰态说明。
+// （状态/起止/验收/输出/成员会话定位）、carried/空占位语义、跨代全景、
+// 本节点触发的回滚。成员点击三态（design.md §7.2）：session 成员 → Turns
+// 时间线定位；process 成员 → 展开输出无跳转；空占位 → 灰态说明。
 
-import Link from "next/link";
 import type { AttemptRecord, NodeInstance, RollbackRecord, SessionMemberRef } from "@/lib/run/view-model";
 import type { RuleFinding } from "@/lib/run/model";
 import { nodeKeyOf } from "@/lib/run/view-model";
@@ -21,7 +20,7 @@ import type { NodeUsage } from "@/lib/run/run-metrics";
 import { bandLabel, redundancyColor, statusColor, statusLabel, TIME_COMPOSE } from "@/components/run/run-theme";
 import { RunFailureAttribution } from "@/components/run/RunFailureAttribution";
 import { attemptRangeOf, attemptSpanMs, compactTokens, formatDurationMs, nodeUsageOf, sessionSpanMs } from "@/lib/run/run-metrics";
-import { ChevronDownIcon, ExternalLinkIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
 const EXECUTION_STATE_TEXT: Record<NodeInstance["executionState"], string> = {
@@ -58,29 +57,31 @@ function StatusPill({ status, label }: { status: string; label?: string }) {
   );
 }
 
-/** 成员行：链接（session 成员 → session 页）+ 右侧用量胶囊；胶囊放不下时整体换行，
- *  不从链接/胶囊中间断词。角色词精简为 执行/验收，session id 展示前 8 位（完整
- *  id 在 title 悬浮与 href 中保留全量）。三态（design.md §7.2）：session → 链接；
- *  sessionId 未导入 → 灰链 + 「正文未导入」胶囊；无成员 → 灰态说明。 */
+
+/** 成员行：定位入口（session 成员 → Turns 时间线定位）+ 右侧用量胶囊；
+ *  胶囊放不下时整体换行，不从链接/胶囊中间断词。角色词精简为 执行/验收，
+ *  session id 展示前 8 位（完整 id 在 title 悬浮保留全量）。三态
+ *  （design.md §7.2）：session → 定位；sessionId 未导入 → 灰链 + 「正文
+ *  未导入」胶囊；无成员 → 灰态说明。 */
 function shortId(id: string): string {
   return id.length > 14 ? `${id.slice(0, 14)}…` : id;
 }
 
-function MemberLink({ member: memberRef }: { member: SessionMemberRef }) {
+function MemberLink({ member: memberRef, onLocateSession }: { member: SessionMemberRef; onLocateSession: (taskId: string) => void }) {
   const roleText = memberRef.role === "execute" ? "执行" : "验收";
   if (memberRef.session) {
     const s = memberRef.session;
     const d5 = s.ruleScores?.d5 ?? null;
     return (
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Link
-          href={`/session/${encodeURIComponent(s.taskId)}?framework=${encodeURIComponent(s.framework)}`}
-          title={s.taskId}
-          className="inline-flex min-w-0 items-center gap-1 text-xs text-[#8250df] hover:underline"
+        <button
+          type="button"
+          onClick={() => onLocateSession(s.taskId)}
+          title={`在 Turns 时间线定位该会话（${s.taskId}）`}
+          className="inline-flex min-w-0 cursor-pointer items-center gap-1 text-xs text-[#8250df] hover:underline"
         >
           {roleText}：{shortId(s.taskId)}
-          <ExternalLinkIcon className="size-3 shrink-0" />
-        </Link>
+        </button>
         <span
           className="ml-auto whitespace-nowrap rounded-full bg-black/[0.04] px-2 py-0.5 text-[10px] leading-4 tabular-nums text-[#8c959f]"
           title={`${s.turns} turns · ${s.totalTokens} tokens${s.contextPeakPct != null ? ` · 上下文峰值 ${Math.round(s.contextPeakPct)}%` : ""}${s.ruleScores ? ` · 综合分 效率 ${s.ruleScores.d4 ?? "—"} / 冗余 ${s.ruleScores.d5 ?? "—"}（1 = 没被扣分）` : ""}`}
@@ -154,7 +155,7 @@ function VerificationReport({ reason }: { reason: string }) {
   );
 }
 
-function AttemptTimelineItem({ attempt, isLast }: { attempt: AttemptRecord; isLast: boolean }) {
+function AttemptTimelineItem({ attempt, isLast, onLocateSession }: { attempt: AttemptRecord; isLast: boolean; onLocateSession: (taskId: string) => void }) {
   const c = statusColor(attempt.status);
   const reason = attempt.verification.reason ?? "";
   const long = reason.length > 80;
@@ -209,8 +210,8 @@ function AttemptTimelineItem({ attempt, isLast }: { attempt: AttemptRecord; isLa
           </pre>
         ) : null}
         <div className="mt-1.5 flex flex-col gap-1.5">
-          <MemberLink member={attempt.executeMember} />
-          {attempt.verifyMember ? <MemberLink member={attempt.verifyMember} /> : null}
+          <MemberLink member={attempt.executeMember} onLocateSession={onLocateSession} />
+          {attempt.verifyMember ? <MemberLink member={attempt.verifyMember} onLocateSession={onLocateSession} /> : null}
         </div>
       </div>
     </div>
@@ -380,12 +381,15 @@ export function RunNodeDetail({
   rollbacks,
   peers,
   onSelectNode,
+  onLocateSession,
   onClose,
 }: {
   node: NodeInstance;
   rollbacks: RollbackRecord[];
   peers: { key: string; generation: number; status: string }[];
   onSelectNode: (key: string) => void;
+  /** 成员会话定位：跳 Turns 时间线并落在该会话位置（工作台外壳收口） */
+  onLocateSession: (taskId: string) => void;
   onClose: () => void;
 }) {
   const usage = nodeUsageOf(node);
@@ -455,7 +459,7 @@ export function RunNodeDetail({
         ) : (
           <div className="flex flex-col">
             {node.attempts.map((a, i) => (
-              <AttemptTimelineItem key={a.ordinal} attempt={a} isLast={i === node.attempts.length - 1} />
+              <AttemptTimelineItem key={a.ordinal} attempt={a} isLast={i === node.attempts.length - 1} onLocateSession={onLocateSession} />
             ))}
           </div>
         )}
