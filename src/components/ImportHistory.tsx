@@ -33,6 +33,8 @@ export interface ImportHistoryEntry {
   sourceType?: string
   framework?: string | null
   version?: string | null
+  /** 资产类型（统一工作台）：缺省 = 会话（旧版条目）；run 条目删除只清历史，不走 delete-session */
+  kind?: "session" | "run"
 }
 
 const STORAGE_KEY = "context-import-history"
@@ -138,6 +140,13 @@ export function ImportHistory() {
 
   async function doDeleteEntry(entry: ImportHistoryEntry, confirmAll = false) {
     setDeleting(historyKeyOf(entry))
+    // run 条目：无会话行级联语义，只清历史记录（run 删除在资产表行内执行）
+    if (entry.kind === "run") {
+      removeImportHistoryEntry(entry.taskId, entry.framework ?? null)
+      setHistory(getImportHistory())
+      setDeleting(null)
+      return
+    }
     try {
       const res = await fetch("/api/ingest/delete-session", {
         method: "DELETE",
@@ -243,7 +252,9 @@ export function ImportHistory() {
                 <TableCell className="max-w-[260px] truncate text-xs" title={entry.query ?? entry.taskId}>{entry.query ?? entry.taskId}</TableCell>
                 <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatTime(entry.importedAt)}</TableCell>
                 <TableCell className="text-xs">
-                  {knownFramework === BRAND_SOURCE_TYPE ? (
+                  {entry.kind === "run" ? (
+                    <Badge variant="purple">Run</Badge>
+                  ) : knownFramework === BRAND_SOURCE_TYPE ? (
                     <Badge variant="purple">{BRAND_NAME}</Badge>
                   ) : knownFramework ? (
                     <span className="inline-flex items-center gap-1">
