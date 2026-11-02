@@ -516,23 +516,32 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
                   ))}
                 </div>
                 <div className="h-px bg-border" />
-                {rootLanes.map(lane => (
-                  <div key={lane.key} className="relative border-b" style={{ height: laneH(lane.spans.length) }} onClick={handlePlotClick} data-lane={lane.key}>
-                    {ticks.filter(t => t.pct > 0 && t.pct < 100).map((t, i) => (
-                      <div key={i} className="absolute top-0 h-full w-px bg-border/20" style={{ left: `${t.pct}%` }} />
-                    ))}
-                    {measure && measure.a.pct > 0 && (
+                {/* 测距覆盖层（两条 dashed 标记线 + 阴影区）：从 per-lane 提到 plot 容器层
+                    只画一次。跨泳道对齐同一时间点的标记本就是同一组 pct，多成员 run
+                    （rootLanes.length > 1）下逐道重复会让人分不清「在测哪条道」。
+                    top=轴头(20px)+分隔线(1px)，bottom 对齐末道底部；pointer-events-none
+                    让点击穿透到具体泳道，测距/测点交互不受影响。 */}
+                {measure && (
+                  <div className="pointer-events-none absolute left-0 right-0" style={{ top: 21, bottom: 0 }}>
+                    {measure.a.pct > 0 && (
                       <div className="absolute top-0 h-full border-l border-dashed border-rose-500" style={{ left: `${measure.a.pct}%` }} />
                     )}
-                    {measure?.b && measure.b.pct > 0 && (
+                    {measure.b && measure.b.pct > 0 && (
                       <div className="absolute top-0 h-full border-l border-dashed border-rose-500" style={{ left: `${measure.b.pct}%` }} />
                     )}
-                    {measure?.b && (
+                    {measure.b && (
                       <div className="absolute top-0 h-full bg-rose-500/10" style={{
                         left: `${Math.min(measure.a.pct, measure.b.pct)}%`,
                         width: `${Math.abs(measure.b.pct - measure.a.pct)}%`,
                       }} />
                     )}
+                  </div>
+                )}
+                {rootLanes.map(lane => (
+                  <div key={lane.key} className="relative border-b" style={{ height: laneH(lane.spans.length) }} onClick={handlePlotClick} data-lane={lane.key}>
+                    {ticks.filter(t => t.pct > 0 && t.pct < 100).map((t, i) => (
+                      <div key={i} className="absolute top-0 h-full w-px bg-border/20" style={{ left: `${t.pct}%` }} />
+                    ))}
                     {lane.spans.map(s => renderBar(s, ((s.start - globalStartMs) / totalDuration) * 100, Math.max(0.15, ((s.end - s.start) / totalDuration) * 100)))}
                   </div>
                 ))}
@@ -541,18 +550,6 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
                     {ticks.filter(t => t.pct > 0 && t.pct < 100).map((t, ti) => (
                       <div key={ti} className="absolute top-0 h-full w-px bg-border/20" style={{ left: `${t.pct}%` }} />
                     ))}
-                    {measure && measure.a.pct > 0 && (
-                      <div className="absolute top-0 h-full border-l border-dashed border-rose-500" style={{ left: `${measure.a.pct}%` }} />
-                    )}
-                    {measure?.b && measure.b.pct > 0 && (
-                      <div className="absolute top-0 h-full border-l border-dashed border-rose-500" style={{ left: `${measure.b.pct}%` }} />
-                    )}
-                    {measure?.b && (
-                      <div className="absolute top-0 h-full bg-rose-500/10" style={{
-                        left: `${Math.min(measure.a.pct, measure.b.pct)}%`,
-                        width: `${Math.abs(measure.b.pct - measure.a.pct)}%`,
-                      }} />
-                    )}
                     {lane.map(({ span, startPct, widthPct }) => renderBar(span, startPct, widthPct))}
                   </div>
                 ))}
