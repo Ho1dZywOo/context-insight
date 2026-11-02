@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
-import { importSession } from '@/lib/ingest/data-service';
+import { importSession, importReasonOf } from '@/lib/ingest/data-service';
 import {
   isKnownSource,
   isUmbrellaSource,
@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
       // imported:false + query:null = 0 interactions parsed (unreadable file);
       // imported:false + query = session existed, merged;
       // imported:true + query:null = empty claude capture → placeholder created
-      reason: result.imported ? (result.query ? 'imported' : 'imported-empty') : (result.query ? 'already-exists' : 'no-interactions'),
+      reason: importReasonOf(result.imported, result.query),
       query: result.query ?? null,
       framework: sessionRow?.framework ?? null,
       version: sessionRow?.version ?? null,
