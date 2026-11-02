@@ -499,6 +499,18 @@ export async function importSession(
   }
 }
 
+// importSession 结果 → 导入语义四态（本地 import-file 路由与数据仓 lake 导入
+// 共用的单一真身——前端 importResultMessage 依 reason 区分「已存在合并 / 空捕获
+// 占位 / 无交互（空或不可读）」；lake 侧此前缺 reason，非导入一律被错标成
+// already-exists）：
+//   imported:true  + query    → imported（正常导入）
+//   imported:true  + no query → imported-empty（空捕获占位行）
+//   imported:false + query    → already-exists（已存在，合并）
+//   imported:false + no query → no-interactions（0 条可解析记录 / 不可读）
+export function importReasonOf(imported: boolean, query: string | null): 'imported' | 'imported-empty' | 'already-exists' | 'no-interactions' {
+  return imported ? (query ? 'imported' : 'imported-empty') : (query ? 'already-exists' : 'no-interactions');
+}
+
 async function importSessionInner(
   dbPath: string,
   sessionId: string,

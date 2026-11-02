@@ -23,7 +23,7 @@ import { governText, GovernanceError, MAX_SESSION_BYTES } from './governance';
 import { exportSessionToClaudeJsonl, xLake } from './export';
 import { readEnvelope, readEnvelopeWithLegacy, envelopeFields } from '../shared/envelope';
 import { readCaptureText, ensure7z, compressCaptureFile, decompressToPlain } from '@/lib/compression';
-import { importSession } from '@/lib/ingest/data-service';
+import { importSession, importReasonOf } from '@/lib/ingest/data-service';
 import {
   resolveNativeCounterpart,
   defaultNativeDiscoveryRoots,
@@ -82,7 +82,7 @@ export async function importLakeSession(sid: string, prisma: PrismaLike, remote?
     await patchXLakeColumns(mainJsonl, result.sessionId, prisma).catch(e => {
       impLog.warn('x_lake 补列失败（不阻塞导入）', { sid, error: e instanceof Error ? e.message : String(e) });
     });
-    const out = { ...result, ...(await readSessionType(prisma, result.sessionId)) };
+    const out = { ...result, ...(await readSessionType(prisma, result.sessionId)), reason: importReasonOf(result.imported, result.query) };
     impLog.info('lake import done', { sid, recording, sessionId: result.sessionId, imported: result.imported, ms: Date.now() - startedAt });
     return out;
   } catch (e) {

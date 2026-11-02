@@ -687,19 +687,22 @@ export function ImportDialog() {
           body: JSON.stringify({ action: "import", sid, recording }),
         });
         const data = await res.json();
-        const result = res.ok ? data.result : null;
-        const ok = Boolean(result);
+        const result = res.ok ? (data.result as { imported?: boolean; query?: string | null; reason?: string; framework?: string | null; version?: string | null } | null) : null;
+        // 按 imported 判定（lake 结果无 ok 字段——imported:false = 已存在/no-interactions，
+        // 不应标 success）；message 一律走 importResultMessage（result.reason 由 lake
+        // 导入结果带回，与本地导入同口径），无 result 才走 lakeErrorMessage
+        const ok = result?.imported === true;
         if (!res.ok && LAKE_CREDENTIAL_CODES.includes(data.code ?? "")) {
           setTokenReason(data.code as LakeTokenReason);
           setTokenDialogOpen(true);
         }
         updateItem(key, {
           status: ok ? "success" : "error",
-          message: ok ? importResultMessage(result) : lakeErrorMessage(data),
+          message: result ? importResultMessage(result) : lakeErrorMessage(data),
           framework: result?.framework ?? undefined,
           version: result?.version ?? undefined,
         });
-        if (ok) {
+        if (ok && result) {
           importedPreviews.push({
             id: sid,
             recording,

@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { BRAND_NAME, BAY_NAME, isBrandSourceType } from '@/lib/branding'
 import { isProxyVersion, agentFrameworkOf } from '@/lib/shared/session-format'
+import { sessionHref } from '@/lib/shared/session-link'
 import type { AssetItem, AssetKindFilter, RunAssetItem, SessionAssetItem } from '@/lib/collection/types'
 import { displayModel } from '@/lib/collection/model-display'
 import { useRouter } from 'next/navigation';
@@ -287,7 +288,7 @@ export function AssetList({
   async function handleDeleteSelected() {
     // 按 kind 分发：会话批量 delete-session；run 逐个走 observe/run 级联删除
     if (selectedSessions.length > 0) {
-      const entries = selectedSessions.map(i => ({ taskId: i.taskId, framework: i.framework ?? 'unknown' }))
+      const entries = selectedSessions.map(i => ({ taskId: i.taskId, framework: i.framework ?? undefined }))
       try {
         await fetch('/api/ingest/delete-session', {
           method: 'DELETE',
@@ -310,7 +311,7 @@ export function AssetList({
         const res = await fetch('/api/ingest/delete-session', {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId: item.taskId, framework: item.framework ?? 'unknown' }),
+          body: JSON.stringify({ taskId: item.taskId, framework: item.framework ?? undefined }),
         })
         if (res.ok) window.location.reload()
       } catch {}
@@ -685,7 +686,7 @@ export function AssetList({
                   </TableCell>
                   <TableCell className="max-w-[300px] truncate text-xs">
                     <Link
-                      href={`/run/solo:${encodeURIComponent(item.taskId)}`}
+                      href={sessionHref(item.taskId, item.framework)}
                       className="text-primary hover:underline"
                     >
                       {item.query ?? item.taskId}
