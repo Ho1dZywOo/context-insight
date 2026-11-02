@@ -24,6 +24,7 @@ import { TurnDetail, type TurnDetailData } from "@/components/observe/TurnDetail
 import { TurnDetailSkeleton } from "@/components/observe/TurnDetailSkeleton";
 import type { FilmstripTurn } from "@/components/observe/TurnFilmstrip";
 import { RunTurnsNodes, STATUS_DOT, type TurnsNode, type TurnsNodeSession, type MemberTurnsState } from "@/components/run/RunTurnsNodes";
+import { effectiveExpandedSet, toggleNodeExpansion } from "@/components/run/run-turns-display";
 import { RunTurnsRoleFilter, deriveRoleOptions, toggleRoleFilter } from "@/components/run/RunTurnsRoleFilter";
 import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState } from "@/components/run/RunTurnsSearch";
 import type { TurnHighlight } from "@/lib/shared/highlight";
@@ -228,18 +229,6 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     const node = listRef.current?.querySelector(`[data-node="${key}"]`);
     if (node) revealIntoView(listRef.current, node);
   }, []);
-
-  const toggleNode = useCallback((key: string) => {
-    setToggledTurnsNodes(prev => (prev.has(key) ? prev : new Set(prev).add(key)));
-    setExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-    const ch = nodes.find(c => c.key === key);
-    if (ch && !expanded.has(key)) for (const s of ch.sessions) ensureMemberTurns(s.taskId);
-  }, [nodes, ensureMemberTurns, expanded]);
 
   /** memberData 只读镜像（effect 提交后同步）：loadMore 读镜像而非闭包捕获，
    *  回调身份保持稳定——会话块/行 memo 不被每次成员取数打散 */
@@ -449,12 +438,22 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
 
   /** 生效展开集 = 用户展开 ∪ 选中轮所在节点（未点过的节点跟随选中自动展开——
    * 深链/跨节点走查的展开是渲染期派生，不落 effect 改状态） */
-  const effectiveExpanded = useMemo(() => {
-    if (!ownerNodeKey || expanded.has(ownerNodeKey) || toggledNodes.has(ownerNodeKey)) return expanded;
-    const next = new Set(expanded);
-    next.add(ownerNodeKey);
-    return next;
-  }, [expanded, toggledNodes, ownerNodeKey]);
+  const effectiveExpanded = useMemo(
+    () => effectiveExpandedSet(expanded, toggledNodes, ownerNodeKey),
+    [expanded, toggledNodes, ownerNodeKey],
+  );
+
+  /** 折叠/展开：按 effectiveExpandedSet 判定当前真实渲染态再翻转——自动展开的
+   *  选中轮节点不在 expanded 里，若按 expanded 判定会「点一下先加入 expanded、
+   *  再点才真正收起」；统一走纯函数，一次点击即收起自动展开节点 */
+  const toggleNode = useCallback((key: string) => {
+    const { expanded: nextExpanded, toggled: nextToggled, expanding } =
+      toggleNodeExpansion(expanded, toggledNodes, ownerNodeKey, key);
+    setToggledTurnsNodes(nextToggled);
+    setExpanded(nextExpanded);
+    const ch = nodes.find(c => c.key === key);
+    if (ch && expanding) for (const s of ch.sessions) ensureMemberTurns(s.taskId);
+  }, [nodes, ensureMemberTurns, expanded, toggledNodes, ownerNodeKey]);
 
   // ── 选中即揭示：换选挂起 ──
   // prop 驱动的换选（深链 / 跨 tab / 上一层 select）在这里挂起意图；

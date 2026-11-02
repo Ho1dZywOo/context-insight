@@ -360,8 +360,10 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [workflowAvail, setWorkflowAvail] = useState<Map<string, { available: boolean; name: string | null }>>(() => new Map());
-  // store 版本订阅：任一目标 job 更新 → 导览瓦片重算
-  useSyncExternalStore(subscribeSkillAudit, getSkillAuditVersion, () => 0);
+  // store 版本订阅：任一目标 job 更新 → 导览瓦片重算。版本号必须进 introTiles
+  // 依赖——否则 store 快照变了 useMemo 仍返回旧值，「已审 / 可对账成员」计数
+  // 停留在对账完成前的旧值（store 版本没进 deps，仅重渲不重算）。
+  const auditVersion = useSyncExternalStore(subscribeSkillAudit, getSkillAuditVersion, () => 0);
   // turn-digest 缓存（成员 taskId → turnIndex→turnId 映射的 promise）：finding
   // 深链用，懒取一次即缓存（refreshEpoch 换代时组件重建、缓存随之失效）
   const turnMapsRef = useRef(new Map<string, Promise<Map<number, string>>>());
@@ -478,7 +480,10 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
       { label: "已审", value: fmtInt(audited) },
       { label: "涉事成员", value: fmtInt(memberSet.size) },
     ]
-  }, [domain, targets, members, runId, workflowAvail, declarer, probing])
+    // auditVersion 是「任一 job 更新即自增」的 store 版本号——它是 memo 失效的
+    // 触发器，值本身不进瓦片内容（exhaustive-deps 视其为「不必要依赖」属误报）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [domain, targets, members, runId, workflowAvail, declarer, probing, auditVersion])
 
   const select = (sel: SelectedTarget | null) => {
     setSelected(sel);

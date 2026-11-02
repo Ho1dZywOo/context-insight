@@ -18,6 +18,8 @@ import {
   buildDisplayTurns,
   toLaneDisplayTurn,
   sessionBlockPropsEqual,
+  effectiveExpandedSet,
+  toggleNodeExpansion,
 } from "@/components/run/run-turns-display";
 import type {
   TurnsBlockTurn,
@@ -261,5 +263,64 @@ describe("sessionBlockPropsEqual：会话块 memo 比较", () => {
         props({ roleFilter: new Set(["user"]) }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("effectiveExpandedSet / toggleNodeExpansion：折叠/展开单一事实源", () => {
+  it("选中轮节点未被点过 → 自动展开（不在 expanded 也不在 toggled 时补入，不改写原 expanded）", () => {
+    const expanded = new Set<string>();
+    const toggled = new Set<string>();
+    const eff = effectiveExpandedSet(expanded, toggled, "node-a");
+    expect(eff.has("node-a")).toBe(true);
+    expect(expanded.has("node-a")).toBe(false);
+  });
+
+  it("选中轮节点已被用户点过（在 toggled）→ 不再自动展开", () => {
+    const expanded = new Set<string>();
+    const toggled = new Set(["node-a"]);
+    expect(effectiveExpandedSet(expanded, toggled, "node-a").has("node-a")).toBe(false);
+  });
+
+  it("选中轮节点已在 expanded → 返回原集合身份（不无谓重建）", () => {
+    const expanded = new Set(["node-a"]);
+    expect(effectiveExpandedSet(expanded, new Set(), "node-a")).toBe(expanded);
+  });
+
+  it("自动展开的选中轮节点点击 → 一次收起（不误加进 expanded，expanding=false）", () => {
+    // 回归锁：旧实现按 expanded.has(key) 判定翻转，会把自动展开节点「先加进
+    // expanded、再点才真正收起」；这里断言一次点击即收起。
+    const expanded = new Set<string>();
+    const toggled = new Set<string>();
+    const r = toggleNodeExpansion(expanded, toggled, "node-a", "node-a");
+    expect(r.expanding).toBe(false);
+    expect(r.expanded.has("node-a")).toBe(false);
+    expect(r.toggled.has("node-a")).toBe(true);
+  });
+
+  it("普通已折叠节点点击 → 展开（expanding=true，补入 expanded 与 toggled）", () => {
+    const r = toggleNodeExpansion(new Set(), new Set(), "node-b", "node-a");
+    expect(r.expanding).toBe(true);
+    expect(r.expanded.has("node-a")).toBe(true);
+    expect(r.toggled.has("node-a")).toBe(true);
+  });
+
+  it("普通已展开节点点击 → 收起（从 expanded 移除，toggled 补入）", () => {
+    const expanded = new Set(["node-a"]);
+    const r = toggleNodeExpansion(expanded, new Set(), null, "node-a");
+    expect(r.expanding).toBe(false);
+    expect(r.expanded.has("node-a")).toBe(false);
+    expect(r.toggled.has("node-a")).toBe(true);
+  });
+
+  it("已点过（toggled）的选中轮节点点击 → 重新展开", () => {
+    const r = toggleNodeExpansion(new Set(), new Set(["node-a"]), "node-a", "node-a");
+    expect(r.expanding).toBe(true);
+    expect(r.expanded.has("node-a")).toBe(true);
+  });
+
+  it("非选中节点不受 ownerNodeKey 自动展开影响", () => {
+    const expanded = new Set<string>();
+    const toggled = new Set<string>();
+    expect(effectiveExpandedSet(expanded, toggled, "node-a").has("node-b")).toBe(false);
   });
 });

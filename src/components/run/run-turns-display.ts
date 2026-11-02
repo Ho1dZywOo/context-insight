@@ -280,3 +280,40 @@ export function sessionBlockPropsEqual(a: SessionBlockProps, b: SessionBlockProp
   const turns = a.state.turns;
   return [a.selectedTurnId, b.selectedTurnId].every(id => id == null || !turns.some(t => t.turnId === id));
 }
+
+// ── 节点展开态（纯函数）：折叠/展开的单一事实源 ─────────────────────────
+
+/** 生效展开集：用户手动展开 ∪ 选中轮所在节点自动展开。选中轮所在节点
+ *  （ownerNodeKey）在未被用户点过（不在 toggledNodes）且不在 expanded 时，
+ *  跟随选中自动展开——深链/跨节点走查是渲染期派生，不落 effect 改状态。
+ *  无需补入时返回原 expanded（保持集合身份，memo 不被无谓重建）。 */
+export function effectiveExpandedSet(
+  expanded: Set<string>,
+  toggledNodes: Set<string>,
+  ownerNodeKey: string | null,
+): Set<string> {
+  if (!ownerNodeKey || expanded.has(ownerNodeKey) || toggledNodes.has(ownerNodeKey)) return expanded;
+  const next = new Set(expanded);
+  next.add(ownerNodeKey);
+  return next;
+}
+
+/** 折叠/展开翻转：按 effectiveExpandedSet 判定当前真实渲染态再翻转。若按
+ *  expanded 判定，自动展开的 ownerNodeKey（不在 expanded 里）会被误判为「已
+ *  折叠」——首次点击反而把它加进 expanded（视觉仍展开），需再点一次才真正
+ *  收起。返回翻转后的 expanded/toggled 集合与本次是否展开（供懒加载成员
+ *  轮次——只有展开才触发取数）。 */
+export function toggleNodeExpansion(
+  expanded: Set<string>,
+  toggledNodes: Set<string>,
+  ownerNodeKey: string | null,
+  key: string,
+): { expanded: Set<string>; toggled: Set<string>; expanding: boolean } {
+  const effective = effectiveExpandedSet(expanded, toggledNodes, ownerNodeKey);
+  const expanding = !effective.has(key);
+  const nextExpanded = new Set(expanded);
+  if (expanding) nextExpanded.add(key);
+  else nextExpanded.delete(key);
+  const nextToggled = toggledNodes.has(key) ? toggledNodes : new Set(toggledNodes).add(key);
+  return { expanded: nextExpanded, toggled: nextToggled, expanding };
+}
