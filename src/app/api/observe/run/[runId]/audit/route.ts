@@ -59,7 +59,8 @@ const NAME_RE = /^[A-Za-z0-9._-]+$/;
 
 interface AuditRequestBody {
   kind?: 'skill' | 'agent' | 'root' | 'run';
-  /** skill/agent = 目标名；root = 声明成员 taskId；run = 声明源成员 taskId。 */
+  /** skill/agent = 目标名；root = 声明成员 taskId；run = 声明源成员 taskId
+   *  （仅用于恢复编排规程，可不在 members 子集内——独立解析，不入对账集）。 */
   name?: string;
   /** 涉事成员 taskId 列表；缺省 = run 全体成员（root 恒单成员）。严格子集
    *  时对账范围收窄到该子集——两条编排路径一致（sift `--run` 原生路径仅
@@ -214,7 +215,16 @@ export const POST = withRouteLog(
         // run 域：声明源成员（name = taskId）的规程层声明 × 全体成员整会话。
         // 只取编排规程层（"怎么干"，跨成员可共享）；计划层（STATE.md，"干什么"）
         // 是成员私有任务承诺，对其他成员只会产生 N/A 噪声，不入 run 级对账。
-        const declarerSession = sessions.get(name);
+        // 声明源与涉事成员是独立角色（PR #7 审查意见）：声明源只用于恢复规程，
+        // 未必需纳入对账子集——sessions 只含 wanted 子集，声明源不在子集时不
+        // 能据此误报「无已导入会话」，单独按 run 成员元信息取其会话（仅用于
+        // 声明恢复，不加入对账集：withSession / transcript 物化仍只见子集）。
+        const declarerRef = scope.members.find(m => m.taskId === name)!;
+        const declarerSession = sessions.get(name)
+          ?? await prisma.session.findFirst({
+              where: { taskId: name, ...(declarerRef.framework ? { framework: declarerRef.framework } : {}) },
+              select: { id: true, sourcePath: true },
+            });
         if (!declarerSession) {
           return NextResponse.json(
             { error: `声明源成员 ${name} 无已导入会话`, reason: 'no-sessions' },
