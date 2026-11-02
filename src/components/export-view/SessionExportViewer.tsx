@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { use } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { isClaudeFormatSession } from "@/lib/shared/session-format"
+import { DEFAULT_CONTEXT_WINDOW_LIMIT } from "@/lib/shared/context-window"
 import { Button } from "@/components/ui/button"
 import { ArrowLeftIcon, LayoutDashboardIcon, MessageSquareIcon, SparklesIcon, BarChart3Icon, FileSearchIcon, FileTextIcon, PlayIcon, RefreshCwIcon, WifiIcon, ShieldCheckIcon, GaugeIcon, AwardIcon, UploadIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -804,7 +805,7 @@ export default function SessionDetailPage({
     )
     if (nextTurn?.contextWindowPct != null) return nextTurn.contextWindowPct
     if (turn.contextWindowPct != null && turn.outputTokens > 0) {
-      const deltaPct = turn.outputTokens / 200000 * 100
+      const deltaPct = turn.outputTokens / DEFAULT_CONTEXT_WINDOW_LIMIT * 100
       return turn.contextWindowPct + deltaPct
     }
     return null
@@ -888,7 +889,7 @@ export default function SessionDetailPage({
       inputMessagesTokens: selectedTurnDetail?.inputMessagesTokens ?? 0,
       contextWindowPct: selectedTurnDetail?.contextWindowPct ?? null,
       endContextWindowPct: computeEndPct(selectedTurnItem),
-      contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? 200000,
+      contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
       systemOverheadTokens: selectedTurnDetail?.systemOverheadTokens ?? 0,
       systemPrompt: selectedTurnDetail?.systemPrompt ?? null,
       fullContext: selectedTurnDetail?.fullContext ?? null,
@@ -916,7 +917,7 @@ export default function SessionDetailPage({
         inputMessagesTokens: rootTurn?.inputMessagesTokens ?? 0,
         contextWindowPct: rootTurn?.contextWindowPct ?? null,
         endContextWindowPct: computeEndPct(rootTurn ?? null),
-        contextWindowLimit: rootTurn?.contextWindowLimit ?? 200000,
+        contextWindowLimit: rootTurn?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
         systemOverheadTokens: 0,
         systemPrompt: null,
         fullContext: null,
@@ -966,7 +967,7 @@ export default function SessionDetailPage({
             inputMessagesTokens: 0,
             contextWindowPct: lastSubTurn?.contextWindowPct ?? null,
             endContextWindowPct: computeEndPct(lastSubTurn ?? null),
-            contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? 200000,
+            contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
             systemOverheadTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
@@ -987,7 +988,7 @@ export default function SessionDetailPage({
           inputMessagesTokens: selectedTurnDetail.inputMessagesTokens ?? 0,
           contextWindowPct: selectedTurnDetail.contextWindowPct ?? null,
           endContextWindowPct: computeEndPct(selectedTurnItem),
-          contextWindowLimit: selectedTurnDetail.contextWindowLimit ?? 200000,
+          contextWindowLimit: selectedTurnDetail.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
           systemOverheadTokens: selectedTurnDetail.systemOverheadTokens ?? 0,
           systemPrompt: selectedTurnDetail.systemPrompt ?? null,
           fullContext: selectedTurnDetail.fullContext ?? null,
