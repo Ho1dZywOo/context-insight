@@ -32,6 +32,8 @@ let root: Root | null = null
 let container: HTMLDivElement | null = null
 // 每用例可重置的上传应答（成功/失败/形态由各用例注入）
 let uploadResponder: (() => Response | Promise<Response>) | null = null
+// 最近一次上传请求体（用于断言描述等请求细节——如非法时间戳的兜底文案）
+let lastUploadBody: Record<string, unknown> | null = null
 
 const json = (data: unknown, status = 200): Promise<Response> =>
   Promise.resolve(new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } }))
@@ -49,6 +51,7 @@ beforeAll(() => {
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
       if (body.action === 'list') return json({ dirs: ['hud-it'], sessions: [] })
       if (body.action === 'upload' || body.action === 'bundle-upload') {
+        lastUploadBody = body
         return uploadResponder ? uploadResponder() : json({ error: 'no responder' }, 500)
       }
       return json({ error: 'unknown action' }, 400)
@@ -66,6 +69,7 @@ afterEach(() => {
   if (root) { const r = root; act(() => { r.unmount() }); root = null }
   container?.remove(); container = null
   vi.useRealTimers()
+  lastUploadBody = null
 })
 
 /** 渲染 HUD 挂载点 + 上传弹窗（同一棵树），并等范式目录/凭据预检拉平 */
@@ -224,5 +228,29 @@ describe('上传结果 HUD（组件内单点，全上传面一致）', () => {
     await act(async () => { (container!.querySelector('.hud-card') as HTMLElement).click() })
     await act(async () => { vi.advanceTimersByTime(200) })
     expect(container!.textContent).not.toContain('T-error')
+  })
+
+  it('⑥ 非法时间戳兜底：ISO 非法时回显原串、不渲染 NaN（上传描述时间线）', async () => {
+    uploadResponder = () => json({ ok: true })
+    const onOpenChange = vi.fn()
+    // 非法 ISO 字符串（truthy）：`new Date` 不 throw、只产 Invalid Date——
+    // 未兜底时 getMonth() 等得 NaN，拼出 "NaN/NaN NaN:NaN"
+    await renderDialog({
+      open: true,
+      onOpenChange,
+      kind: 'session',
+      target: { ...SESSION_TARGET, startTime: 'not-a-date', endTime: '非法时间' },
+    })
+    await fillSessionForm()
+    await act(async () => { findButton('确认上传').click() })
+    await flush()
+
+    const description = String(lastUploadBody?.description ?? '')
+    // 兜底回显原串：时间线不含 NaN，提交描述保持可读
+    expect(description).not.toContain('NaN')
+    expect(description).toContain('not-a-date')
+    expect(description).toContain('非法时间')
+    // 成功路径不受影响（弹窗即关）
+    expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 })

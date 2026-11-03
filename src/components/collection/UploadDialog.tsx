@@ -82,16 +82,15 @@ interface UploadDialogProps {
 
 function formatTime(iso: string | null | undefined): string {
   if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    const month = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    const hour = String(d.getHours()).padStart(2, '0')
-    const minute = String(d.getMinutes()).padStart(2, '0')
-    return `${month}/${day} ${hour}:${minute}`
-  } catch {
-    return String(iso)
-  }
+  // `new Date` 对非法字符串不 throw，只产 Invalid Date（getTime() 得 NaN）；
+  // try/catch 拦不住，必须显式 NaN 兜底返回原串（否则渲染 NaN/NaN NaN:NaN）
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso)
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hour = String(d.getHours()).padStart(2, '0')
+  const minute = String(d.getMinutes()).padStart(2, '0')
+  return `${month}/${day} ${hour}:${minute}`
 }
 
 // 提交信息组装：提交人（独立输入框唯一事实源）+ 内容描述（选填，空则省略
