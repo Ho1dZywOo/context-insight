@@ -13,7 +13,8 @@
 // 子图为弹窗不占顶层视图）；② 节点点击后侧栏切换为运行历史；③ 概览统计与
 // 代际信息来自真实数据；④ 画布缩放（工具条按钮 + Ctrl 滚轮）与跑马灯按需
 // 点亮（选中节点 → 关联边状态色加粗 + 白色蚂蚁线，点击空白熄灭）；另设
-// 确定性几何拓扑锁 PCB 交叉跳线、回滚 fixture 锁子图弹窗（代际切换）。
+// 确定性几何拓扑锁 PCB 交叉跳线、回滚 fixture 锁子图弹窗（代际切换）、
+// 返回栈锁（tab 切换逐步回退，栈空离页兜底恰一次）。
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createElement } from 'react';
@@ -33,10 +34,13 @@ import type { RunImportMeta } from '@/lib/run/run-store';
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const nav = vi.hoisted(() => ({ back: vi.fn(), replace: vi.fn(), push: vi.fn() }))
+// useSearchParams 读可变 search：用例可深链 ?tab=graph（run-view URL 镜像）
+const searchState = vi.hoisted(() => ({ current: '' }))
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: () => {}, replace: () => {}, back: () => {}, refresh: () => {} }),
+  useRouter: () => ({ push: nav.push, replace: nav.replace, back: nav.back, refresh: () => {} }),
   usePathname: () => '/run/minidemo01',
-  useSearchParams: () => new URLSearchParams(''),
+  useSearchParams: () => new URLSearchParams(searchState.current),
 }))
 
 const fixture = JSON.parse(
@@ -44,6 +48,16 @@ const fixture = JSON.parse(
 ) as unknown;
 const index = parseAndIndex(fixture);
 const viewModel = buildViewModel(index);
+// 成员引用挂接（Overview 成员表数据源）：ses_mini_a 一行 join（build g0 execute）
+attachSessionRefs(viewModel, new Map([
+  ['ses_mini_a', {
+    taskId: 'ses_mini_a', framework: 'opencode', rowId: 'row_a', turns: 7,
+    totalTokens: 2300, durationMs: 60000, label: null,
+    startTime: '2026-10-13T02:00:12.000Z', endTime: '2026-10-13T02:01:12.000Z',
+    cacheReadTokens: 0, contextPeakPct: 72.5, model: 'volc-gateway/glm-4.7',
+    totalCost: 0.2, version: null, totalLatencyMs: 60000,
+  }],
+]));
 const importMeta: RunImportMeta['data'] = {
   importedAt: '2026-10-15T10:00:00+08:00',
   sourceDir: '/bundle/mini',
@@ -64,6 +78,22 @@ const responseBody = {
     import: importMeta,
   },
   viewModel,
+  memberStats: {
+    joinedCount: 1,
+    totalTokens: 2300,
+    totalCost: 0.2,
+    totalTurns: 7,
+    totalActiveMs: 1_110_000,
+    totalDurationMs: 7_440_000,
+    memberRowIds: ['row_a'],
+    models: [{ model: 'glm-4.7', count: 1 }],
+    earliestStart: '2026-10-13T02:00:12.000Z',
+    latestEnd: '2026-10-13T02:01:12.000Z',
+  },
+  totalErrors: 2,
+  members: [
+    { taskId: 'ses_mini_a', framework: 'opencode', version: null, label: 'build 执行' },
+  ],
 };
 
 vi.stubGlobal('fetch', vi.fn(async () => ({
@@ -73,7 +103,9 @@ vi.stubGlobal('fetch', vi.fn(async () => ({
 
 let root: Root | null = null
 
-async function renderPage() {
+async function renderPage(initialSearch = '') {
+  searchState.current = initialSearch
+  nav.replace.mockClear()
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -106,21 +138,114 @@ afterEach(() => {
 })
 
 describe('Run 详情页暗色工作台', () => {
-  it('工作台结构：视图标题、图例、Run 概览侧栏（子图为弹窗，不占顶层视图）', async () => {
+  it('Overview 默认 tab：总览头（身份 + Σ指标瓦片）+ 结构/导入卡；Graph 切换走 URL 镜像', async () => {
     await renderPage()
 
+    // 默认 Overview（无 tab 参数回落）；Graph 挂载但隐藏（hidden 切换保状态）
+    const overview = document.querySelector('[data-run-tab="overview"]')
+    const graph = document.querySelector('[data-run-tab="graph"]')
+    expect(overview).toBeTruthy()
+    expect(graph).toBeTruthy()
+    expect(graph!.classList.contains('hidden')).toBe(true)
     expect(document.querySelector('.run-canvas')).toBeTruthy()
-    // 工具条无视图 tab——主图即工作台，子图经生成器节点入口以弹窗展开
+
+    const ovText = overview!.textContent ?? ''
+    // 统一总览（run-first）：总览头 = 身份 + Σ指标大瓦片（memberStats +
+    // totalErrors → 瓦片值；泳道/轮次面板取数失败时空态降级，不阻塞框架区块）
+    expect(ovText).toContain('OpenCode')
+    expect(ovText).toContain('glm-4.7')
+    expect(ovText).toContain('2.3k')
+    expect(ovText).toContain('$0.20')
+    expect(ovText).toContain('2.1h')
+    expect(ovText).toContain('活跃 0.3h')
+    expect(ovText).toContain('⚠ Errors')
+    // 成员维度不在 Overview 摆表（泳道分道 + Members 徽标承载；逐成员指标属 Turns tab）
+    expect(ovText).not.toContain('成员会话')
+    // 结构卡 / 导入信息卡
+    expect(ovText).toContain('执行结构')
+    expect(ovText).toContain('第 1 次运行')
+    expect(ovText).toContain('导入信息')
+
+    // 切 Graph：navigate 单点写 URL 镜像（replace，无 history 条目），
+    // 两个 tab 容器 hidden 互换（均保持挂载）
+    const graphTab = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('Graph'))
+    expect(graphTab).toBeTruthy()
+    await act(async () => {
+      graphTab!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(nav.replace).toHaveBeenCalledWith('?tab=graph', { scroll: false })
+    expect(overview!.classList.contains('hidden')).toBe(true)
+    expect(graph!.classList.contains('hidden')).toBe(false)
+  });
+
+  it('返回栈：tab 切换逐步回退上一个工作台动作（Score→Files→返回→Files→返回→Overview），栈空离页兜底恰一次', async () => {
+    // Files 面板取数单独兜底（其余端点沿用 responseBody 通用 mock）
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/file-reads')) return { ok: true, json: async () => ({ files: [] }) }
+      return { ok: true, json: async () => responseBody }
+    }))
+    try {
+      await renderPage()
+      const tabBtn = (label: string) =>
+        [...document.querySelectorAll('button')].find(b => b.textContent === label) as HTMLButtonElement
+      const backBtn = () => document.querySelector('button[title="返回上一步"]') as HTMLButtonElement
+      const visibleTab = (key: string) =>
+        document.querySelector(`[data-run-tab="${key}"]`)?.className ?? ''
+
+      // Score → Files：两个动作依次入栈
+      await act(async () => { tabBtn('Files').click() })
+      expect(visibleTab('files')).toContain('flex')
+      await act(async () => { tabBtn('Score').click() })
+      expect(visibleTab('score')).toContain('flex')
+      expect(visibleTab('files')).toContain('hidden')
+
+      // 返回 → Files（上一个动作），URL 镜像同步恢复
+      await act(async () => { backBtn().click() })
+      expect(visibleTab('files')).toContain('flex')
+      expect(visibleTab('score')).toContain('hidden')
+      expect(nav.replace).toHaveBeenLastCalledWith(expect.stringContaining('tab=files'), { scroll: false })
+
+      // 再返回 → Overview（初始态，栈逐步退空）
+      await act(async () => { backBtn().click() })
+      expect(visibleTab('overview')).toContain('flex')
+      expect(nav.replace).toHaveBeenLastCalledWith(expect.stringContaining('tab=overview'), { scroll: false })
+
+      // 栈空 → 离页兜底恰一次（回上页或首页，二者恰一）
+      nav.back.mockClear()
+      nav.push.mockClear()
+      await act(async () => { backBtn().click() })
+      expect(nav.back.mock.calls.length + nav.push.mock.calls.length).toBe(1)
+    } finally {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => responseBody })))
+    }
+  });
+
+  it('工作台结构：视图标题、图例、Run 概览侧栏（子图为弹窗，不占顶层视图）', async () => {
+    await renderPage('?tab=graph')
+
+    expect(document.querySelector('.run-canvas')).toBeTruthy()
+    // 页面 tab 栏为普通 button（无 ARIA tab 角色）；工具条模式组同无 role=tab
     expect(document.querySelectorAll('[role="tab"]').length).toBe(0)
     expect(document.body.textContent).toContain('主图（所有代）')
+
+    // 返回钮在导航行（title=返回上一步）：深链直入、工作台内无回退历史 →
+    // 离页兜底（回上页或首页，二者恰一）；回归：此前指向 /?kind=run 会把
+    // 列表过滤成 Run
+    const back = document.querySelector('button[title="返回上一步"]')
+    expect(back).toBeTruthy()
+    nav.back.mockClear()
+    nav.push.mockClear()
+    back!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(nav.back.mock.calls.length + nav.push.mock.calls.length).toBe(1)
 
     const text = document.body.textContent ?? ''
     expect(text).toContain('依赖')
     expect(text).toContain('回滚')
     expect(text).toContain('Run 概览')
     expect(text).toContain('节点')
-    // 页头成员会话计数（导入时口径）：imported 3 / total 3；侧栏不再重复展示
-    expect(text).toContain('成员会话：3/3')
+    // 导入计数（原页头 sessionStats 移入）：导入信息卡给完整分解口径
+    expect(text).toContain('会话：新导入 3 · 已存在 0 · 引用 3')
     expect(text).toContain('第 1 次运行')
 
     // 边渲染：默认全部静止（跑马灯按需点亮——见下个用例），正交走线无三次贝塞尔
@@ -140,7 +265,7 @@ describe('Run 详情页暗色工作台', () => {
   })
 
   it('选中节点点亮关联边跑马灯（状态色加粗 + 白色蚂蚁线），点击空白熄灭', async () => {
-    await renderPage()
+    await renderPage('?tab=graph')
     const main = viewModel.views[0]
     const byKey = new Map(viewModel.nodes.map(n => [n.key, n]))
     const initKey = main.nodeKeys.find(k => byKey.get(k)!.nodeId === 'init')!
@@ -180,7 +305,7 @@ describe('Run 详情页暗色工作台', () => {
   })
 
   it('画布缩放：工具条按钮 / Ctrl+滚轮 / 重置 / 适配', async () => {
-    await renderPage()
+    await renderPage('?tab=graph')
     const zoomLabel = () => document.querySelector('[aria-label="重置缩放"]')!.textContent
     expect(zoomLabel()).toBe('100%')
 
@@ -221,7 +346,7 @@ describe('Run 详情页暗色工作台', () => {
   })
 
   it('相机模型：缩放/平移直改 camera transform 与百分比同步，手势期间挂 run-gesture 暂停动画', async () => {
-    await renderPage()
+    await renderPage('?tab=graph')
     const camera = document.querySelector('.run-camera') as HTMLElement
     const viewport = document.querySelector('.run-viewport') as HTMLElement
     const svg = document.querySelector('.run-canvas svg') as SVGSVGElement
@@ -279,7 +404,7 @@ describe('Run 详情页暗色工作台', () => {
   })
 
   it('点击节点：侧栏从概览切换为运行历史（逐次尝试）', async () => {
-    await renderPage()
+    await renderPage('?tab=graph')
     expect(document.body.textContent).toContain('Run 概览')
 
     await act(async () => {
@@ -294,7 +419,7 @@ describe('Run 详情页暗色工作台', () => {
   })
 
   it('再次点击同一节点：侧栏收起回到概览', async () => {
-    await renderPage()
+    await renderPage('?tab=graph')
     await act(async () => {
       clickNode('build')
     })
@@ -304,6 +429,79 @@ describe('Run 详情页暗色工作台', () => {
       clickNode('build')
     })
     expect(document.body.textContent).toContain('Run 概览')
+  })
+
+  it('加载态外壳：chrome 即时成型（返回/品牌）+ 导航/首卡三区骨架，旧站头退役', async () => {
+    // run 详情端点挂起（未决 Promise）——页面停留加载态
+    const pending = new Promise<Response>(() => {})
+    vi.stubGlobal('fetch', vi.fn(() => pending))
+    try {
+      await renderPage()
+      // chrome 即时成型：返回钮（导航行）+ 品牌区（链接回首页）+ 版本
+      expect(document.querySelector('button[title="返回上一步"]')).toBeTruthy()
+      expect(document.querySelector('a[href="/"]')).toBeTruthy()
+      const body = document.body.textContent ?? ''
+      expect(body).toContain('Context')
+      expect(body).toContain('v0.2')
+      // 无障碍：sr-only 加载提示（role=status）
+      expect(document.querySelector('[role="status"]')?.textContent).toContain('加载 Run')
+      // 骨架贴近落位：导航药丸 + 首卡三区（身份/元信息/瓦片）+ 泳道骨架
+      const pulses = document.querySelectorAll('.animate-pulse')
+      expect(pulses.length).toBeGreaterThan(20)
+      const grids = document.querySelectorAll('.divide-y')
+      expect(grids.length).toBeGreaterThanOrEqual(1)
+      // 旧站头退役：连字品牌名（AppHeader 形态）不再出现在正文
+      expect(body).not.toContain('Context-Insight')
+    } finally {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => responseBody })))
+    }
+  })
+
+  it('错误态外壳：chrome + 居中错误卡（返回/重试），旧站头退役', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'Run not found: minidemo01' }),
+    })))
+    try {
+      await renderPage()
+      // chrome 可用：品牌区（顶栏不再放返回钮——错误卡自带返回/重试）
+      expect(document.querySelector('a[href="/"]')).toBeTruthy()
+      // 错误卡：错误文案 + 返回/重试
+      const body = document.body.textContent ?? ''
+      expect(body).toContain('Run not found: minidemo01')
+      expect(body).toContain('重试')
+      // 旧站头退役：连字品牌名（AppHeader 形态）不再出现在正文
+      expect(body).not.toContain('Context-Insight')
+    } finally {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => responseBody })))
+    }
+  })
+
+  it('全局 chrome 单行导航 + Overview 首卡身份：品牌区 + 动作簇在导航栏，run 身份在首卡', async () => {
+    await renderPage()
+    const body = document.body.textContent ?? ''
+    // 导航行：品牌区（渐变标 + 双色字标）+ 版本；无 run 名/runId（身份在首卡）
+    expect(body).toContain('Context')
+    expect(body).toContain('Insight')
+    expect(body).toContain('v0.2')
+    // 品牌区是回工作台首页的链接
+    expect(document.querySelector('a[href="/"]')).toBeTruthy()
+    // Overview 首卡：run 名为标题（h1 + 悬停全名/runId），状态药丸 +
+    // kind 徽标 + runId mono 一处呈现
+    const h1 = document.querySelector('h1') as HTMLElement | null
+    expect(h1).toBeTruthy()
+    expect(h1!.getAttribute('title')).toContain('minidemo01')
+    expect(body).toContain('failed')
+    expect(body).toContain('工作流')
+    expect(body).toContain('minidemo01')
+    // 动作簇：刷新图标钮（title=立即刷新）+ 上传实心药丸；bundle 形态无
+    // MD/HTML 导出钮（solo 专属）
+    expect(document.querySelector('button[title="立即刷新"]')).toBeTruthy()
+    const upload = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('上传到'))
+    expect(upload).toBeTruthy()
+    expect(document.querySelector('button[title="导出 Markdown"]')).toBeNull()
+    expect(document.querySelector('button[title="导出离线 HTML"]')).toBeNull()
   })
 })
 
@@ -428,14 +626,15 @@ describe('子图弹窗（gen-sub 三代，回滚 fixture）', () => {
     // 验收类型并入标头（脚本 · 通过），时间行不再为「—」（会话行起止兜底）
     expect((dialog!.textContent ?? '')).toContain('脚本 · 通过');
     expect((dialog!.textContent ?? '')).not.toContain('—');
-    const sessionLink = dialog!.querySelector('a[href^="/session/"]');
-    expect(sessionLink, '子图节点会话入口').toBeTruthy();
-    // 角色词精简（执行/验收）+ 短 id 展示（完整 id 在 title/href 保留全量）
-    expect(sessionLink!.textContent).toContain('执行：S5082A31602EE1');
-    expect(sessionLink!.getAttribute('href')).toContain('S5082A31602EE15ED');
-    expect(sessionLink!.getAttribute('title')).toBe('S5082A31602EE15ED');
-    // 成员行美化：链接 + 右侧用量胶囊（完整数值悬浮）；尝试卡片带耗时徽标
-    const memberRow = sessionLink!.parentElement!;
+    // 成员会话定位入口（原 solo 整页链接退役）：定位按钮 + title 带完整 id
+    const sessionBtn = Array.from(dialog!.querySelectorAll('button'))
+      .find(b => b.getAttribute('title')?.includes('S5082A31602EE15ED')) as HTMLElement | undefined;
+    expect(sessionBtn, '子图节点会话定位入口').toBeTruthy();
+    // 角色词精简（执行/验收）+ 短 id 展示（完整 id 在 title 保留全量）
+    expect(sessionBtn!.textContent).toContain('执行：S5082A31602EE1');
+    expect(sessionBtn!.getAttribute('title')).toContain('在 Turns 时间线定位该会话');
+    // 成员行美化：定位入口 + 右侧用量胶囊（完整数值悬浮）；尝试卡片带耗时徽标
+    const memberRow = sessionBtn!.parentElement!;
     expect(memberRow.textContent).toContain('3 turns · 1.2k');
     expect(memberRow.querySelector('span[title]')?.getAttribute('title')).toBe('3 turns · 1234 tokens');
     expect((dialog!.textContent ?? '')).toContain('5.0s');
@@ -471,7 +670,7 @@ describe('子图弹窗（gen-sub 三代，回滚 fixture）', () => {
     expect(flaky?.querySelector('.run-node-box')?.getAttribute('stroke')).toBe('#cf222e');
 
     // 未选中子图节点时，侧栏为提示文案（无运行历史、无会话链接）
-    expect(dialog.querySelectorAll('a[href^="/session/"]').length).toBe(0);
+    expect(dialog.querySelectorAll('a[href^="/run/solo:"]').length).toBe(0);
     expect((dialog.textContent ?? '')).toContain('点击子图节点查看运行历史');
   });
 
@@ -1186,72 +1385,5 @@ describe('失败归因 post-mortem：环境指纹 / 同因连败 / 验收项清�
     expect(text).toContain('通过 1/3');
     expect(text).toContain('边界用例齐全（tests 目录含边界样例）');
     expect(text).toContain('样例无残留（grep 无 AddCustom）');
-  });
-});
-
-describe('无 graph 定位字段空态（导出侧未启用 graph 插件）', () => {
-  /** 递归剥掉全树成员的图定位字段，模拟不带 graph 插件的导出包 */
-  function stripAnnotations(node: { members?: Array<Record<string, unknown>> }): void {
-    for (const m of node.members ?? []) {
-      delete m.nodeId;
-      delete m.generation;
-      delete m.attempt;
-      if (m.data) stripAnnotations(m.data as { members?: Array<Record<string, unknown>> });
-    }
-  }
-
-  async function renderNoGraphPage() {
-    // 在原始 manifest JSON 上剥图定位字段（模拟不带 graph 插件的导出包），
-    // 再走完整解析 → 视图模型管线
-    const raw = structuredClone(fixture) as { data: { members: Array<Record<string, unknown>> } };
-    stripAnnotations(raw.data);
-    const vm2 = buildViewModel(parseAndIndex(raw));
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        run: {
-          runId: 'minidemo01',
-          name: null,
-          status: vm2.status,
-          exportDataComplete: vm2.exportDataComplete,
-          startedAt: vm2.startedAt,
-          finishedAt: vm2.finishedAt,
-          import: importMeta,
-        },
-        viewModel: vm2,
-      }),
-    })));
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
-    await act(async () => {
-      root!.render(
-        createElement(
-          Suspense,
-          { fallback: null },
-          createElement(RunDetailPage, { params: Promise.resolve({ runId: 'minidemo01' }) }),
-        ),
-      );
-    });
-    await act(async () => {
-      await new Promise(r => setTimeout(r, 0));
-    });
-  }
-
-  it('工作台降级为空态引导卡：说明原因与可用信息，隐藏模式切换与画布', async () => {
-    await renderNoGraphPage();
-
-    // 空态卡就地说明（白话），不再是一张静默空画布
-    const text = document.body.textContent ?? '';
-    expect(text).toContain('该 Run 没有图数据');
-    expect(text).toContain('未包含 graph 节点定位字段');
-    expect(text).toContain('Run 概览与成员会话信息仍可在右侧查看');
-    // 画布与模式切换不渲染（三模式均依赖图数据）
-    expect(document.querySelector('.run-canvas')).toBeNull();
-    expect(document.querySelector('[aria-label="视图模式"]')).toBeNull();
-    // 顶部警告条同步给出解释
-    expect(text).toContain('依赖图与代际/重试视图不可用');
-    // 侧栏 Run 概览仍可用
-    expect(text).toContain('Run 概览');
   });
 });

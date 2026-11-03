@@ -27,5 +27,7 @@ export default function proxy(request: NextRequest): NextResponse {
 }
 
 export const config = {
-  matcher: ['/api/:path*'],
+  // /lake_viewer/api/* 遗留写端点（runs/import、bundles/import、runs/[sid]/notes
+  // POST 等）仍在役，与主 /api/* 面同列纳入跨源守卫。
+  matcher: ['/api/:path*', '/lake_viewer/api/:path*'],
 };

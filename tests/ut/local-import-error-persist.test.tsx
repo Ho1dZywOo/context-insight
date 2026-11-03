@@ -11,20 +11,20 @@
 // 整页 reload，报错一闪而过用户看不到。修复后：全部成功才自动关闭；有任何
 // 失败则驻留结果视图，报错完整展示（独立换行、不截断），用户手动 Done 关闭。
 // 覆盖两条导入链路（共享同一套 allDone/hasError 状态机）：
-//   ① lake 导入（handleImportLake）——客户现场 Main jsonl missing 形态
+//   ① lake 导入（handleImportLakeSessions）——客户现场 Main jsonl missing 形态
 //   ② 本地单文件 JSONL 导入（handleLoadSessions 直导分支）
 
 import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { LocalFileImport } from '@/components/LocalFileImport'
+import { ImportDialog } from '@/components/collection/ImportDialog'
 import { BAY_NAME } from '@/lib/branding'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const SID = 'err-ses-0001'
-const HISTORY_KEY = 'cannbot-import-history'
+const HISTORY_KEY = 'context-import-history'
 
 let root: Root | null = null
 
@@ -112,15 +112,16 @@ async function renderAndOpen(): Promise<void> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  await act(async () => { root!.render(createElement(LocalFileImport)) })
+  await act(async () => { root!.render(createElement(ImportDialog)) })
   await flush(150)
-  await aclick(findButtonByText('Import Session'))
+  await aclick(findButtonByText('Import'))
   await flush(150)
 }
 
 describe('导入失败驻留 + 报错完整可见（不自动关闭）', () => {
   it('lake 导入失败：报错可见、对话框不自动关闭、有 Done 手动关闭', async () => {
     await renderAndOpen()
+    // 来源切数据仓 → 预检 + 并行拉会话列表与 bundle 清单
     await aclick(findButtonByText(BAY_NAME))
     await flush(250)
     await aclick(findButtonByText('err-it'))
@@ -153,12 +154,15 @@ describe('导入失败驻留 + 报错完整可见（不自动关闭）', () => {
 
   it('本地 JSONL 导入失败：报错可见、不自动关闭', async () => {
     await renderAndOpen()
-    // 默认 sourceType = jsonl（伞形，claude/codex 自动识别）；填入单文件路径后按钮变「Import」
+    // 默认格式 = jsonl（伞形，claude/codex 自动识别）；填入单文件路径后按钮变「Import」
     const input = [...document.querySelectorAll('input')].find(i => i.placeholder?.includes('*.jsonl')) as HTMLInputElement
     expect(input, 'File Path 输入框未找到').toBeTruthy()
     setInputValue(input, '/tmp/cpx-ses_badfile.jsonl')
     await flush(100)
-    await aclick(findButtonByText('Import', true))
+    // 触发键（header）与 footer 直导按钮同名 Import——限定弹窗内查找
+    const footerImport = [...document.querySelectorAll('[data-slot="dialog-content"] button')]
+      .find(b => b.textContent?.trim() === 'Import') ?? null
+    await aclick(footerImport)
     await flush(300)
 
     const bodyText = document.body.textContent ?? ''

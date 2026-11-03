@@ -26,8 +26,8 @@ import { NextRequest } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 import { readSession } from '@/lib/ingest/adapters/opencode-db';
 import { importSession } from '@/lib/ingest/data-service';
-import { GET as fileReadsGET } from '@/app/api/observe/session/file-reads/route';
-import { GET as skillContentGET } from '@/app/api/observe/session/skill-content/route';
+import { GET as fileReadsGET } from '@/app/api/observe/run/[runId]/file-reads/route';
+import { GET as skillContentGET } from '@/lib/observe/session-handlers/skill-content';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-v2-cmd-it-'));
 const DB = path.join(TMP, 'opencode.db');
@@ -88,7 +88,10 @@ describe('opencode v2 结果负载归一 + shell 命令面（全链）', () => {
 
   it('file-reads API：read 显式读 + shell 隐式读（cat 全文 / sed 范围）', async () => {
     await ensureImported();
-    const res = await fileReadsGET(getReq(`/api/observe/session/file-reads?taskId=${SID}`));
+    const res = await fileReadsGET(
+      getReq(`/api/observe/run/solo:${SID}/file-reads`),
+      { params: Promise.resolve({ runId: `solo:${SID}` }) },
+    );
     expect(res.status).toBe(200);
     const data = await res.json();
     const paths: string[] = data.files.map((f: { path: string }) => f.path);
@@ -152,7 +155,10 @@ describe('湖原生导出（claude-jsonl 嵌套壳）结果归一（全链）', 
     const shell = tcs.find(t => t.toolCallId === 'toolu_v2lake_shell')!;
     expect(shell.resultJson).toBe('a-content\nb-content');
 
-    const res = await fileReadsGET(getReq(`/api/observe/session/file-reads?taskId=${SID2}`));
+    const res = await fileReadsGET(
+      getReq(`/api/observe/run/solo:${SID2}/file-reads`),
+      { params: Promise.resolve({ runId: `solo:${SID2}` }) },
+    );
     expect(res.status).toBe(200);
     const data = await res.json();
     const paths: string[] = data.files.map((f: { path: string }) => f.path);

@@ -39,6 +39,10 @@ import type {
   SessionBlockProps,
 } from "@/components/run/run-turns-display";
 
+// Re-export：RunTurnsTab 直接从 RunTurnsNodes 取显示层符号（与纯函数层 run-turns-display 同源）
+export { STATUS_DOT };
+export type { TurnsNode, TurnsNodeSession, MemberTurnsState };
+
 function fmtTokens(n: number): string {
   if (n === 0) return "";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;

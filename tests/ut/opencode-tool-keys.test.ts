@@ -17,8 +17,8 @@ import { NextRequest } from 'next/server';
 import path from 'node:path';
 import { prisma } from '../setup';
 import { POST as importFilePOST } from '@/app/api/ingest/import-file/route';
-import { GET as fileReadsGET } from '@/app/api/observe/session/file-reads/route';
-import { GET as skillContentGET } from '@/app/api/observe/session/skill-content/route';
+import { GET as fileReadsGET } from '@/app/api/observe/run/[runId]/file-reads/route';
+import { GET as skillContentGET } from '@/lib/observe/session-handlers/skill-content';
 
 const sid = 'opencode-tool-keys-it';
 const fixture = path.join(__dirname, './data/claude-sessions/opencode-tool-keys.jsonl');
@@ -59,7 +59,10 @@ describe('opencode 工具参数键（read `path` / skill `id`）全链识别', (
   it('file-reads API：`path` 键 read 进入 Files 分析', async () => {
     await importFilePOST(importReq());
 
-    const res = await fileReadsGET(getReq(`/api/observe/session/file-reads?taskId=${sid}`));
+    const res = await fileReadsGET(
+      getReq(`/api/observe/run/solo:${sid}/file-reads`),
+      { params: Promise.resolve({ runId: `solo:${sid}` }) },
+    );
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.summary.totalFiles).toBeGreaterThanOrEqual(1);

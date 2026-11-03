@@ -7,16 +7,16 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // @vitest-environment happy-dom
-// Import Session 会话列表「按 session id 搜索」IT：select 步此前只有搜索框
+// 统一导入向导会话列表「按 session id 搜索」IT：select 步此前只有搜索框
 // （匹配 firstQuery / id 子串）但表格不显示 Session ID——codex 等 jsonl 源
-// firstQuery 常为空，会话不可辨识。驱动真实 LocalFileImport 组件验证：
+// firstQuery 常为空，会话不可辨识。驱动真实 ImportDialog 组件验证：
 // Session ID 列渲染（含 firstQuery 为空的行）、粘贴 id 片段过滤到目标行。
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { LocalFileImport } from '@/components/LocalFileImport'
+import { ImportDialog } from '@/components/collection/ImportDialog'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -80,24 +80,24 @@ async function openSelectStep(): Promise<void> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  await act(async () => { root!.render(createElement(LocalFileImport)) })
+  await act(async () => { root!.render(createElement(ImportDialog)) })
   await flush()
 
-  click(findButtonByText('Import Session')!)
+  click(findButtonByText('Import')!)
   await flush()
 
-  // 选 JSONL (auto) 伞形源（claude/codex 内容自动识别）→ 输入 sessions 目录
-  //（非单文件 → 走列表选择步）
+  // 默认格式 = JSONL (auto) 伞形源（claude/codex 内容自动识别）→ 输入
+  // sessions 目录（非单文件 → 走列表选择步）
   click(findButtonByText('JSONL (auto)')!)
   await flush()
   const pathInput = document.querySelector('input[placeholder*="sessions-dir"]') as HTMLInputElement
   expect(pathInput).not.toBeNull()
   typeInto(pathInput, '/home/tester/.codex/sessions')
-  click(findButtonByText('Load Sessions')!)
+  click(findButtonByText('Load')!)
   await flush()
 }
 
-describe('Import Session 会话列表：Session ID 列 + 按 id 搜索', () => {
+describe('统一导入向导会话列表：Session ID 列 + 按 id 搜索', () => {
   it('select 步渲染 Session ID 列（含 firstQuery 为空的行），id 子串过滤命中目标行', async () => {
     await openSelectStep()
 

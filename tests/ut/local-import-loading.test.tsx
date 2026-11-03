@@ -7,16 +7,16 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // @vitest-environment happy-dom
-// Import Session 加载反馈 IT：Load Sessions 扫描目录/读库期间（请求在途）
-// 前端给出转圈指示（content 区 Loading sessions... + 按钮转圈禁用 + Browse
-// 防误触），成功进入选择步或失败报错后 Loading 态复位。驱动真实
-// LocalFileImport 组件走 input → select 全链路。
+// 统一导入向导加载反馈 IT：Load 扫描目录/读库期间（请求在途）前端给出转圈
+// 指示（content 区 Loading sessions... + 按钮转圈禁用 + Browse 防误触），
+// 成功进入选择步或失败报错后 Loading 态复位。驱动真实 ImportDialog 组件走
+// input → select 全链路（SQLite 路径先经类型探测回落会话通路）。
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { LocalFileImport } from '@/components/LocalFileImport'
+import { ImportDialog } from '@/components/collection/ImportDialog'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -82,10 +82,10 @@ async function openInputStep(): Promise<void> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  await act(async () => { root!.render(createElement(LocalFileImport)) })
+  await act(async () => { root!.render(createElement(ImportDialog)) })
   await flush()
 
-  await act(async () => { click(findButtonByText('Import Session')!) })
+  await act(async () => { click(findButtonByText('Import')!) })
   await flush()
   await act(async () => { click(findButtonByText('SQLite (auto)')!) })
   await flush()
@@ -94,10 +94,10 @@ async function openInputStep(): Promise<void> {
   setInputValue(pathInput, '/tmp/fake-sessions.db')
 }
 
-describe('Import Session Load Sessions 加载反馈', () => {
+describe('统一导入向导 Load 加载反馈', () => {
   it('请求在途：转圈指示 + 按钮/Browse 禁用，完成后进入选择步并消失', async () => {
     await openInputStep()
-    await act(async () => { click(findButtonByText('Load Sessions')!) })
+    await act(async () => { click(findButtonByText('Load')!) })
     await flush()
 
     expect(document.body.textContent).toContain('Loading sessions...')
@@ -111,19 +111,19 @@ describe('Import Session Load Sessions 加载反馈', () => {
 
     expect(document.body.textContent).toContain('Select sessions to import')
     expect(document.body.textContent).not.toContain('Loading sessions...')
-    expect(findButtonByText('Load Sessions')).toBe(null)
+    expect(findButtonByText('Load')).toBe(null)
   })
 
   it('请求失败：错误提示 + Loading 态复位（按钮恢复可用）', async () => {
     sessionsBehavior = 'reject'
     await openInputStep()
-    await act(async () => { click(findButtonByText('Load Sessions')!) })
+    await act(async () => { click(findButtonByText('Load')!) })
     await flush()
 
     expect(document.body.textContent).toContain('network down')
     expect(document.body.textContent).not.toContain('Loading sessions...')
-    const loadBtn = findButtonByText('Load Sessions')
-    expect(loadBtn, '按钮应恢复 Load Sessions 文案').toBeTruthy()
+    const loadBtn = findButtonByText('Load')
+    expect(loadBtn, '按钮应恢复 Load 文案').toBeTruthy()
     expect(loadBtn!.disabled).toBe(false)
   })
 })

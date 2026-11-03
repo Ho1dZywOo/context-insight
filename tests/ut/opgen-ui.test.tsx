@@ -8,16 +8,16 @@
 
 // @vitest-environment happy-dom
 // 任务结果标注 UI IT：
-//   ① SessionList 上传弹窗——「任务结果」三态选择器（不标注/成功/失败），
-//      勾选"成功"后确认上传 → 请求体携带 opGen:'success'；缺省不携带
-//   ② LocalFileImport lake 列表——「任务结果」列渲染 成功/失败/— 徽标
+//   ① 统一资产表会话行上传弹窗——「任务结果」三态选择器（不标注/成功/
+//      失败），勾选"成功"后确认上传 → 请求体携带 opGen:'success'；缺省不携带
+//   ② 统一导入向导数据仓会话表——「任务结果」列渲染 成功/失败/— 徽标
 
 import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { SessionList } from '@/components/SessionList'
-import { LocalFileImport } from '@/components/LocalFileImport'
+import { AssetList } from '@/components/collection/AssetList'
+import { ImportDialog } from '@/components/collection/ImportDialog'
 import { BAY_NAME } from '@/lib/branding'
 
 vi.mock('next/navigation', () => ({
@@ -87,6 +87,7 @@ function click(el: Element): void {
 }
 
 const ITEM = {
+  kind: 'session' as const, key: 'session:s1',
   sessionId: 's1', taskId: 'ses_opgen-ui-0001', framework: 'claude-code', label: '标注 UI 测试', query: '生成算子',
   turnCount: 2, model: 'test-model', totalTokens: 100, totalCost: 0, startTime: '2026-09-02T03:00:00Z', endTime: '2026-09-02T03:05:00Z',
   version: null, user: '张三', sourcePath: '/tmp/x.jsonl', importedAt: '2026-09-02T04:00:00Z', totalLatencyMs: 1000, totalToolCallCount: 2, totalSkillLoadCount: 0, totalSubagentCount: 0,
@@ -97,7 +98,7 @@ describe('任务结果标注 UI', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
-    await act(async () => { root!.render(createElement(SessionList, { items: [ITEM], total: 1, page: 1, pageSize: 16 })) })
+    await act(async () => { root!.render(createElement(AssetList, { items: [ITEM], total: 1, page: 1, pageSize: 16 })) })
     await flush()
 
     // 打开上传弹窗（行内 Upload 按钮，title 跟随 BAY_NAME 品牌）
@@ -144,7 +145,7 @@ describe('任务结果标注 UI', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
-    await act(async () => { root!.render(createElement(SessionList, { items: [ITEM], total: 1, page: 1, pageSize: 16 })) })
+    await act(async () => { root!.render(createElement(AssetList, { items: [ITEM], total: 1, page: 1, pageSize: 16 })) })
     await flush()
 
     await act(async () => { click(document.querySelector(`button[title="Upload to ${BAY_NAME}"]`)!) })
@@ -171,18 +172,18 @@ describe('任务结果标注 UI', () => {
     container.remove()
   })
 
-  it('② lake 列表：「任务结果」列 成功/失败/— 三态徽标', async () => {
+  it('② 数据仓会话表：「任务结果」列 成功/失败/— 三态徽标', async () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
-    await act(async () => { root!.render(createElement(LocalFileImport)) })
+    await act(async () => { root!.render(createElement(ImportDialog)) })
     await flush()
 
-    await act(async () => { click(findButtonByText('Import Session')!) })
+    await act(async () => { click(findButtonByText('Import')!) })
     await flush()
     await act(async () => { click(findButtonByText(BAY_NAME)!) })
     await flush()
-    // 范式选择步 → 点 others
+    // 目录选择步（统一布局：各顶层目录双计数）→ 点 others
     await act(async () => { click(findButtonByText('others')!) })
     await flush()
 
