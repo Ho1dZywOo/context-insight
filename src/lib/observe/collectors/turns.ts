@@ -85,7 +85,7 @@ export interface CollectTurnsOptions {
   member?: string | null;
   /** 1 起 */
   page?: number;
-  /** 默认 200，硬上限 500（性能护栏：turns 恒分页） */
+  /** 默认 200，上限 20_000（刀F 统一；≤500 为 Turns tab UI 调用方自控，非 API 钳制） */
   pageSize?: number;
   /** 工具调用结果原文（Error Turns 卡错误信息抽取）：轻投影缺省不带——
    *  Turns tab 单轮深钻走顶级 turn 端点；Overview 全量消费方请改用
