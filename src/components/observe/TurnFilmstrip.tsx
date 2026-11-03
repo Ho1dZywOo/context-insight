@@ -105,7 +105,9 @@ export const TurnFilmstrip = memo(function TurnFilmstrip({ turns, selectedTurnId
   // 超容量聚桶：每 bucketSize 轮一根柱；桶内峰值定高、最危险态定色
   const bucketSize = n > capacity ? Math.ceil(n / capacity) : 1
   const bars = useMemo(() => {
-    const maxTokens = Math.max(...turns.map(t => t.totalTokens), 1)
+    // reduce 求峰值：不把整组 turns 展开成实参（V8 展开实参约 12 万级上限，
+    // 数千轮大会话会在聚桶之前就抛 RangeError），也无临时 token 数组
+    const maxTokens = turns.reduce((m, t) => Math.max(m, t.totalTokens), 1)
     const out: Array<{ turnId: string; turnIndex: number; heightPct: number; colorClass: string; title: string }> = []
     for (let i = 0; i < n; i += bucketSize) {
       const grp = turns.slice(i, i + bucketSize)
