@@ -411,7 +411,7 @@ describe('端到端：LLM 层（stub client）', () => {
   });
 });
 
-const route = await import('../../src/app/api/observe/session/scorecard/route');
+const route = await import('@/lib/observe/session-handlers/scorecard');
 
 describe('API 层：/api/observe/session/scorecard', () => {
 
@@ -445,7 +445,7 @@ describe('API 层：/api/observe/session/scorecard', () => {
   });
 });
 
-const semanticRoute = await import('../../src/app/api/observe/session/scorecard/semantic/route');
+const semanticRoute = await import('@/lib/observe/session-handlers/scorecard-semantic');
 
 describe('API 层：semantic NDJSON 流式进度', () => {
 

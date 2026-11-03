@@ -53,7 +53,7 @@ async function importFixture(taskId: string, file: string) {
 }
 
 async function postBaseline(taskId: string) {
-  const { POST } = await import('../../src/app/api/observe/session/scorecard/baseline/route');
+  const { POST } = await import('@/lib/observe/session-handlers/scorecard-baseline');
   return POST(new NextRequest('http://localhost/api/observe/session/scorecard/baseline', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

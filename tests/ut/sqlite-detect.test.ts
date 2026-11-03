@@ -7,7 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // SQLite 来源嗅探 IT：单一 SQLite 导入入口靠 schema 区分 opencode 库
-// （小写表 session/message/part）与 context-insight 导出库（Prisma 大写表
+// （小写表 session/message/part）与 Context-Insight 导出库（Prisma 大写表
 // "Session"/"Turn"），路由层据此纠正用户选错的 source。
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import fs from "node:fs"
@@ -77,7 +77,7 @@ describe("detectSqliteSource（schema 嗅探）", () => {
     expect(detectSqliteSource(opencodeV2Db)).toBe("opencode-db")
   })
 
-  it("context-insight 导出库（大写 Session 表）→ context-insight，与文件名无关", () => {
+  it("Context-Insight 导出库（大写 Session 表）→ context-insight，与文件名无关", () => {
     expect(detectSqliteSource(insightDb)).toBe("context-insight")
   })
 

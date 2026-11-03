@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { prisma } from '../setup';
-import { GET } from '@/app/api/observe/session/wire-rounds/route';
+import { GET } from '@/lib/observe/session-handlers/wire-rounds';
 
 // 路由级 IT（seed + 读捕获文件 + 双请求对比）：本体 <1s，满载并行下测试库
 // 锁竞争偶发超默认 5s，30s 为容错上限（与 GIT_PIPELINE_TIMEOUT_MS 同口径）

@@ -39,7 +39,6 @@ describe("LlmOutputView highlight jump", () => {
   const baseProps = {
     content: "the quick brown fox jumps over the lazy dog",
     contentJson: null,
-    contentSummary: null,
     outputTokens: 0,
     reasoningTokens: 0,
     role: "assistant",

@@ -21,7 +21,7 @@ import {
   buildCoverage,
   aggregateUsedSkills,
 } from '../../src/lib/skill-coverage.ts';
-import { GET } from '@/app/api/observe/session/skill-coverage/route';
+import { GET } from '@/lib/observe/session-handlers/skill-coverage';
 
 const FIXTURE = path.resolve(__dirname, './data/claude-sessions/skill-coverage-session.jsonl');
 
