@@ -151,7 +151,7 @@ export function fmtOffset(base: number, ts: string): string {
  *  因此「顺序」仅在单一成员/子代理会话内部有严格可比性。 */
 export function laneOrderValue(turns: Array<{ turnIndex: number }>): number {
   if (turns.length === 0) return Number.MAX_SAFE_INTEGER
-  return Math.min(...turns.map(t => t.turnIndex))
+  return turns.reduce((m, t) => Math.min(m, t.turnIndex), Infinity)
 }
 
 // ── 耗时活动分解：LLM 思考 vs 工具调用（无时长工具按占比估计） ───────────────
@@ -400,8 +400,11 @@ export function PerfBenchmarkChart({ points }: {
     }
     const n = tsPoints.length
     const vals = tsPoints.map(p => p[m.key])
-    const maxVal = n > 0 ? Math.max(...vals, 1) : 0
-    const minVal = n > 0 ? Math.min(...vals) : 0
+    // reduce 求峰值/谷值：不把整组 vals（主 agent 全量轮次）展开成实参
+    // （V8 展开实参约 12 万级上限，数千轮大会话会在聚桶之前就抛
+    // RangeError），也无临时数组。
+    const maxVal = n > 0 ? vals.reduce((m, v) => Math.max(m, v), 1) : 0
+    const minVal = n > 0 ? vals.reduce((m, v) => Math.min(m, v)) : 0
     const avgVal = n > 0 ? vals.reduce((s, v) => s + v, 0) / n : 0
     // y 轴 = 峰值整步上取（1/2/5×10^k）：轴刻度永远覆盖全部数值——分位
     // 钳制会让轴与实际数值自相矛盾；空窗给占位量程（网格结构不塌）
