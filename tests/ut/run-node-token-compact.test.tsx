@@ -94,6 +94,7 @@ function renderTokens(totalTokens: number): string {
         rollbacks: [],
         peers: [],
         onSelectNode: () => {},
+        onLocateSession: () => {},
         onClose: () => {},
       }),
     );
