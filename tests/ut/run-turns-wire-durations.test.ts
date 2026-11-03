@@ -73,7 +73,10 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
+afterAll(async () => {
+  // 与 collection-list 的 afterAll 清理约定对齐：清掉 proxy/native 会话行
+  // （turn/toolCall 随会话级联删除），sourcePath 指向已删临时文件的残留行不污染并行断言
+  await prisma.session.deleteMany({ where: { taskId: { in: [SID_PROXY, SID_NATIVE] } } });
   fs.rmSync(TMP, { recursive: true, force: true });
 });
 

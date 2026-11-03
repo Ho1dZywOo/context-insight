@@ -94,7 +94,11 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-afterAll(() => {
+afterAll(async () => {
+  // 与 collection-list 的 afterAll 清理约定对齐：清掉 beforeAll 种的 3 个成员会话
+  // （250M 级 token 行不残留，否则污染本次 run 内并行文件做全局 session 聚合/计数断言；
+  // turn/toolCall 随会话级联删除）
+  await prisma.session.deleteMany({ where: { taskId: { in: MEMBER_SIDS } } });
   fs.rmSync(tmpHome, { recursive: true, force: true });
   if (ORIG_HOME === undefined) delete process.env.CONTEXT_INSIGHT_HOME;
   else process.env.CONTEXT_INSIGHT_HOME = ORIG_HOME;
