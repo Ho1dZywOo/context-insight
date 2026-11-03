@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { CheckCircle2Icon, AlertCircleIcon, BookOpenIcon, Loader2Icon } from "lucide-react"
 import { useSkillContentAudit, type SkillContentAuditItem } from "@/components/observe/use-skill-content-audit"
+import type { ViewUrlFor } from "@/lib/observe/member-url"
 
 interface SkillContentAuditProps {
   taskId: string
@@ -18,10 +19,11 @@ interface SkillContentAuditProps {
   skillNames?: string[]
   /** 点击某个 skill chip 时触发（由 SkillDetail 接到 sc.fetchOne + 展开该行）。 */
   onView?: (skillName: string) => void
+  urlFor?: ViewUrlFor
 }
 
-export function SkillContentAudit({ taskId, skillNames, onView }: SkillContentAuditProps) {
-  const { items, loading, error } = useSkillContentAudit(taskId)
+export function SkillContentAudit({ taskId, skillNames, onView, urlFor }: SkillContentAuditProps) {
+  const { items, loading, error } = useSkillContentAudit(taskId, undefined, urlFor)
 
   if (loading) {
     return (

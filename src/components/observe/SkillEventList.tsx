@@ -98,7 +98,12 @@ export function SkillEventList({ skillEvents, skillToolCalls }: SkillEventListPr
               ) : group.invokeEvent ? (
                 <Badge variant="green">invoke</Badge>
               ) : group.dispatchEvent ? (
-                <Badge variant="orange">dispatch</Badge>
+                <>
+                  <Badge variant="orange">dispatch</Badge>
+                  {isBackgroundDispatch(group.dispatchArgsJson, group.dispatchResultJson) && (
+                    <Badge variant="yellow" title="后台异步派发：立即返回，完成后再通知父会话">background</Badge>
+                  )}
+                </>
               ) : (
                 group.otherEvents.map(se => (
                   <Badge key={se.id} variant={EVENT_TYPE_BADGE_VARIANTS[se.eventType] ?? "gray"}>
@@ -109,9 +114,6 @@ export function SkillEventList({ skillEvents, skillToolCalls }: SkillEventListPr
               <Badge variant={group.allSuccess ? "green" : "red"}>
                 {group.allSuccess ? "success" : "fail"}
               </Badge>
-              {isBackgroundDispatch(group.dispatchArgsJson, group.dispatchResultJson) && (
-                <Badge variant="yellow" title="后台异步派发：立即返回，完成后再通知父会话">background</Badge>
-              )}
               {(() => {
                 const matchingTcs = skillToolCalls ? skillToolCalls.filter(tc => {
                   const sn = extractSkillNameFromArgs(tc.argsJson)

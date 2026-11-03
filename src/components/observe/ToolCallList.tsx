@@ -2,14 +2,21 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
 // This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// Please refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
+// 工具调用块（叙事舞台下半）：skill 与普通调用同一块语法（detail-blocks），
+// 区别只在头行的 ⚡ 前缀与 skill 名。状态 = 字色（不再药丸徽标）；Args /
+// Result 走发丝分节 + 长内容夹断（ExpandableText，与整页「一条滚动条」
+// 哲学一致——旧 max-h + overflow 滚动条退役）。三角唯一触发点契约保持。
 import { useState, useEffect, useRef } from "react"
-import { Badge } from "@/components/ui/badge"
+import { ZapIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { CopyButton } from "./CopyButton"
+import { ExpandableText } from "./ExpandableText"
+import { BLOCK, BLOCK_ROW, BLOCK_SUB, BLOCK_TRI } from "./detail-blocks"
 import { highlightKeyword, type TurnHighlight } from "@/lib/shared/highlight"
 
 interface ToolCallItem {
@@ -40,6 +47,13 @@ function toolCallDisplayState(state: string, errorType: string | null, resultJso
   if (state === "ok" || state === "completed") return { label: state, variant: "green" }
   if (state === "error" || state === "failed") return { label: state, variant: "red" }
   return { label: state, variant: "orange" }
+}
+
+const STATUS_TEXT: Record<string, string> = {
+  green: "text-emerald-600 dark:text-emerald-400",
+  red: "text-red-600 dark:text-red-400",
+  orange: "text-orange-600 dark:text-orange-400",
+  gray: "text-muted-foreground",
 }
 
 function formatDuration(ms: number): string {
@@ -126,131 +140,79 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
     return () => clearTimeout(t)
   }, [highlight, expandedIds])
 
+  // skill 调用排前（派发语义先于执行细节），渲染同一块语法
+  const ordered = [...skillCalls, ...nonSkillCalls]
+
   return (
-    <div ref={rootRef} className="space-y-1.5">
-      {skillCalls.map(tc => {
+    <div ref={rootRef} className="space-y-2">
+      {ordered.map(tc => {
         const isExpanded = expandedIds.has(tc.id)
         const displayState = toolCallDisplayState(tc.state, tc.errorType, tc.resultJson)
-        const skillLabel = extractSkillLabel(tc.argsJson)
+        const skillLabel = tc.isSkillRelated ? extractSkillLabel(tc.argsJson) : null
 
         return (
-          <div key={tc.id} className="rounded-md border-l-3 border-l-yellow-400 bg-yellow-50/20 dark:bg-yellow-500/5 text-xs">
-            {/* 此前是死行：无点击、无 Args/Result——task 派发类 skill 调用
-                （Args=prompt、Result=subagent 报告）整段不可见（现场 #8：
-                1022t Args + 3595t Result 只剩一行"⚡ task completed"） */}
-            <div className="w-full flex items-center gap-2 px-2 py-1 rounded-md">
-              <Badge variant="yellow" className="text-xs">⚡</Badge>
-              {skillLabel ? (
-                <span className="font-medium text-foreground/80">{skillLabel}</span>
-              ) : (
-                <span className="font-medium text-foreground/80">{tc.toolName}</span>
-              )}
-              <Badge variant={displayState.variant} className="text-xs">{displayState.label}</Badge>
+          <div key={tc.id} className={BLOCK}>
+            <div className={cn(BLOCK_ROW, "text-sm")}>
+              {tc.isSkillRelated && <ZapIcon className="size-3.5 shrink-0 text-amber-500" aria-hidden="true" />}
+              <span className="font-medium truncate">{skillLabel ?? tc.toolName}</span>
+              {skillLabel && <span className="text-xs text-muted-foreground shrink-0">{tc.toolName}</span>}
+              <span className={cn("text-xs shrink-0", STATUS_TEXT[displayState.variant])}>{displayState.label}</span>
               {tc.durationMs > 0 && (
-                <span className="text-muted-foreground">{formatDuration(tc.durationMs)}</span>
-              )}
-              {(tc.argsJson || tc.resultJson) && <CopyButton text={[tc.argsJson, tc.resultJson].filter(Boolean).join("\n\n---\n\n")} className="ml-auto size-4 text-muted-foreground hover:text-foreground" />}
-              {!tc.argsJson && !tc.resultJson && <span className="ml-auto" />}
-              <span
-                role="button"
-                tabIndex={0}
-                className="shrink-0 px-2 py-1 -mr-2 rounded text-muted-foreground hover:text-foreground hover:bg-accent/50 cursor-pointer select-none"
-                onClick={() => toggleExpanded(tc.id)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleExpanded(tc.id) }}
-              >
-                {isExpanded ? "▼" : "▶"}
-              </span>
-            </div>
-
-            {isExpanded && (
-              <div className="px-2 pb-2 space-y-2">
-                {tc.argsJson && (
-                  <div>
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-xs font-medium text-muted-foreground">Args</span>
-                      <CopyButton text={tc.argsJson} className="size-4 text-muted-foreground hover:text-foreground" />
-                    </div>
-                    <pre className="text-xs whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto bg-muted/30 p-1.5 rounded">
-                      {highlightKeyword(truncateJson(tc.argsJson, 2000) ?? tc.argsJson, highlight?.keyword)}
-                    </pre>
-                  </div>
-                )}
-                {tc.resultJson && (
-                  <div>
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-xs font-medium text-muted-foreground">Result</span>
-                      <CopyButton text={tc.resultJson} className="size-4 text-muted-foreground hover:text-foreground" />
-                    </div>
-                    <pre className="text-xs whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto bg-muted/30 p-1.5 rounded">
-                      {highlightKeyword(truncateJson(tc.resultJson, 2000) ?? tc.resultJson, highlight?.keyword)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })}
-      {nonSkillCalls.map(tc => {
-        const isExpanded = expandedIds.has(tc.id)
-        const displayState = toolCallDisplayState(tc.state, tc.errorType, tc.resultJson)
-
-        return (
-          <div key={tc.id} className="border rounded-md">
-            <div className="w-full flex items-center gap-2 px-2 py-1.5 text-sm">
-              <span className="font-medium">{tc.toolName}</span>
-              <Badge variant={displayState.variant}>{displayState.label}</Badge>
-              {tc.durationMs > 0 && (
-                <span className="text-xs text-muted-foreground">{formatDuration(tc.durationMs)}</span>
+                <span className="text-xs text-muted-foreground tabular-nums shrink-0">{formatDuration(tc.durationMs)}</span>
               )}
               {tc.errorType && (
-                <Badge variant="red">{tc.errorType}</Badge>
+                <span className="text-xs text-red-600 dark:text-red-400 shrink-0 truncate">{tc.errorType}</span>
               )}
-              {(tc.argsJson || tc.resultJson) && <CopyButton text={[tc.argsJson, tc.resultJson].filter(Boolean).join("\n\n---\n\n")} className="ml-auto size-4 text-muted-foreground hover:text-foreground" />}
-              {!tc.argsJson && !tc.resultJson && <span className="ml-auto" />}
+              {(tc.argsJson || tc.resultJson) ? (
+                <CopyButton text={[tc.argsJson, tc.resultJson].filter(Boolean).join("\n\n---\n\n")} className="ml-auto size-4 text-muted-foreground hover:text-foreground shrink-0" />
+              ) : (
+                <span className="ml-auto" />
+              )}
               <span
                 role="button"
                 tabIndex={0}
-                className="shrink-0 px-2 py-1 -mr-2 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/50 cursor-pointer select-none"
+                className={BLOCK_TRI}
                 onClick={() => toggleExpanded(tc.id)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleExpanded(tc.id) }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleExpanded(tc.id) }}
               >
                 {isExpanded ? "▼" : "▶"}
               </span>
             </div>
 
             {isExpanded && (
-              <div className="px-2 pb-2 space-y-2">
+              <>
                 {tc.errorMessage && (
-                  <div className="text-xs text-red-600 dark:text-red-400 p-1.5 bg-red-50/50 dark:bg-red-500/10 rounded">
+                  <div className={cn(BLOCK_SUB, "text-xs leading-relaxed text-red-600 dark:text-red-400")}>
                     {highlightKeyword(tc.errorMessage, highlight?.keyword)}
                   </div>
                 )}
-
                 {tc.argsJson && (
-                  <div>
+                  <div className={BLOCK_SUB}>
                     <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-xs font-medium text-muted-foreground">Args</span>
-                      <CopyButton text={tc.argsJson} className="size-4 text-muted-foreground hover:text-foreground" />
+                      <span className="text-[11px] font-medium text-muted-foreground">Args</span>
+                      <CopyButton text={tc.argsJson} className="size-3.5 text-muted-foreground hover:text-foreground" />
                     </div>
-                    <pre className="text-xs whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto bg-muted/30 p-1.5 rounded">
-                      {highlightKeyword(highlight?.keyword ? tc.argsJson : (truncateJson(tc.argsJson, 2000) ?? tc.argsJson), highlight?.keyword)}
-                    </pre>
+                    <ExpandableText clampPx={200}>
+                      <pre className="text-xs font-mono whitespace-pre-wrap break-words">
+                        {highlightKeyword(highlight?.keyword ? tc.argsJson : (truncateJson(tc.argsJson, 2000) ?? tc.argsJson), highlight?.keyword)}
+                      </pre>
+                    </ExpandableText>
                   </div>
                 )}
-
                 {tc.resultJson && (
-                  <div>
+                  <div className={BLOCK_SUB}>
                     <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-xs font-medium text-muted-foreground">Result</span>
-                      <CopyButton text={tc.resultJson} className="size-4 text-muted-foreground hover:text-foreground" />
+                      <span className="text-[11px] font-medium text-muted-foreground">Result</span>
+                      <CopyButton text={tc.resultJson} className="size-3.5 text-muted-foreground hover:text-foreground" />
                     </div>
-                    <pre className="text-xs whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto bg-muted/30 p-1.5 rounded">
-                      {highlightKeyword(highlight?.keyword ? tc.resultJson : (truncateJson(tc.resultJson, 2000) ?? tc.resultJson), highlight?.keyword)}
-                    </pre>
+                    <ExpandableText clampPx={200}>
+                      <pre className="text-xs font-mono whitespace-pre-wrap break-words">
+                        {highlightKeyword(highlight?.keyword ? tc.resultJson : (truncateJson(tc.resultJson, 2000) ?? tc.resultJson), highlight?.keyword)}
+                      </pre>
+                    </ExpandableText>
                   </div>
                 )}
-              </div>
+              </>
             )}
           </div>
         )
