@@ -45,9 +45,10 @@ describe('guardBrowserOrigin 纯函数矩阵', () => {
     expect(d).toEqual({ allow: true });
   });
 
-  it('lake_viewer 旧 API 前缀已随路由收敛退役：不匹配守卫前缀（刀4 删除路由）', () => {
+  it('lake_viewer 遗留 API 前缀仍在守卫范围内：跨源写端点拒绝（路由未删除）', () => {
     const d = guardBrowserOrigin({ pathname: '/lake_viewer/api/lake-status', origin: 'https://evil.com', referer: null, host: HOST });
-    expect(d).toEqual({ allow: true });
+    expect(d.allow).toBe(false);
+    if (!d.allow) expect(d.reason).toContain('cross-origin');
   });
 
   it('/api 裸路径同样在守卫范围内', () => {
@@ -127,9 +128,29 @@ describe('proxy 入口直调 IT', () => {
     expect(res.headers.get('x-middleware-next')).toBe('1');
   });
 
-  it('matcher 只覆盖 /api 前缀（lake_viewer API 路由已删除）', () => {
+  it('lake_viewer 遗留写端点跨源 POST → 403（runs/import 不触达）', async () => {
+    const res = await proxy(req('http://127.0.0.1:21025/lake_viewer/api/runs/import', {
+      origin: 'https://evil.com',
+      body: { sid: 'x', recording: 'capture' },
+    }));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(typeof body.error).toBe('string');
+  });
+
+  it('lake_viewer 遗留写端点同源 → 放行透传（/?src=lake 视图自调）', async () => {
+    const res = await proxy(req('http://localhost:21025/lake_viewer/api/runs/import', {
+      origin: 'http://localhost:21025',
+      host: 'localhost:21025',
+      body: { sid: 'x', recording: 'capture' },
+    }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-middleware-next')).toBe('1');
+  });
+
+  it('matcher 覆盖 /api 与 /lake_viewer/api 双前缀（lake_viewer 写端点仍在役）', () => {
     expect(proxyConfig.matcher).toContain('/api/:path*');
-    expect(proxyConfig.matcher).not.toContain('/lake_viewer/api/:path*');
+    expect(proxyConfig.matcher).toContain('/lake_viewer/api/:path*');
   });
 });
 
