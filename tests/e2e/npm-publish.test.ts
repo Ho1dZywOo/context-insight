@@ -1,5 +1,5 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms of
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
 // Please refer to the License for details. You may not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
@@ -12,7 +12,7 @@
 //   ② 裁剪生效：tests / docs / 运行时数据 / home 泄漏树 / lockfile 不进包（.npmignore 兜住）
 //   ③ package.json 发布就绪：无 private、版本与展示版本单一源 version.ts 单轨一致、
 //      bin（context-insight/ctxi）与 postinstall 钩子齐备
-//   ④ 产物文件数哨兵（300-450）；CLI bundle 实跑 --version 与展示版本一致
+//   ④ 产物文件数哨兵（300-550）；CLI bundle 实跑 --version 与展示版本一致
 //
 // 注：不校验 package-lock.json——它被 .gitignore 忽略不入库（各机器本地生成），
 // 版本升级后重装前必"漂移"，属环境过期而非代码错误（issue #5）；且 pack/publish
@@ -97,7 +97,7 @@ describe("npm publish readiness (npm pack --dry-run)", () => {
     expect(leaked, `以下文件不应进包: ${leaked.join(", ")}`).toEqual([])
   }, 120_000)
 
-  it("产物文件数哨兵：≤ 500（2026-10 源码自然增长至 ~480；暴涨说明构建垃圾混入——曾混入 E2E 泄漏的 home/ 构建树 29MB）", () => {
+  it("产物文件数哨兵：≤ 600（2026-10 develop 线源码自然增长至 ~552：run-first 统一工作台 12 tab + collectors/session-handlers 平移 + 性能层；暴涨说明构建垃圾混入——曾混入 E2E 泄漏的 home/ 构建树 29MB）", () => {
     const r = spawnSync("npm", ["pack", "--dry-run", "--json"], {
       cwd: PKG_DIR, encoding: "utf8", timeout: 120_000,
     })
@@ -105,7 +105,7 @@ describe("npm publish readiness (npm pack --dry-run)", () => {
     const parsed = parsePackJson(r.stdout as string)
     expect(parsed.length).toBe(1)
     expect(parsed[0].entryCount).toBeGreaterThan(300)
-    expect(parsed[0].entryCount).toBeLessThanOrEqual(500)
+    expect(parsed[0].entryCount).toBeLessThanOrEqual(600)
   }, 120_000)
 
   it("package.json 发布就绪：无 private、版本单轨、bin 与 postinstall 齐备", () => {

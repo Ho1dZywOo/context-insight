@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
 // This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You should not use this file except in compliance with the License.
+// Please refer to the License for details. You may not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
@@ -97,7 +97,7 @@ afterAll(() => {
   fs.rmSync(TMP, { recursive: true, force: true });
 });
 
-const runs = await import('../../src/app/lake_viewer/_lib/runs');
+const runs = await import('../../src/lib/collection/lake-view/runs');
 
 describe('质量列回落：未导入行读仓内评审记录快照', () => {
   it('未导入 + 仓有评审记录：末条 scorecard 出分，scoreSource=lake-note，维度归一', async () => {

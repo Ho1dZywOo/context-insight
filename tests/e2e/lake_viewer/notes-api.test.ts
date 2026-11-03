@@ -81,12 +81,21 @@ afterAll(async () => {
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best-effort */ }
 });
 
-const postReq = (body: string) => new Request('http://viewer.test/lake_viewer/api/runs/x/notes', {
+// 刀4 收敛：旧 /lake_viewer/api/runs/[sid]/notes 与 paradigms/[name]/target
+// 路由并入 /api/ingest/lake 的 lake-notes / paradigm-target action。读 = 无
+// kind / 无 baselineMs·expectedMs 键；写 = 带 kind / 带键。动态 import 每次
+// 现取（vi.resetModules 换湖后拿到新模块实例）
+const lakePOST = async () => (await import('../../../src/app/api/ingest/lake/route')).POST;
+const notesReq = (sid: string, payload?: Record<string, unknown>) => new NextRequest('http://localhost/api/ingest/lake', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body,
+  body: JSON.stringify({ action: 'lake-notes', sid, ...(payload ?? {}) }),
 });
-const ctx = (sid: string) => ({ params: Promise.resolve({ sid }) });
+const targetReq = (name: string, payload?: Record<string, unknown>) => new NextRequest('http://localhost/api/ingest/lake', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ action: 'paradigm-target', name, ...(payload ?? {}) }),
+});
 
 function bareTree(): string {
   return execSync(`git -C "${BARE}" ls-tree -r --name-only main`).toString('utf8');
@@ -95,9 +104,9 @@ function bareTree(): string {
 interface ApiRecord { ts: string; type: string; text?: string; totalScore?: number | null; dimensions?: Array<{ name: string; score: number | null }> }
 
 describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
-  it('POST note → 湖里出现 <sid>.notes.jsonl；GET 读回记录并解析提交信息', async () => {
-    const { GET, POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const res = await POST(postReq(JSON.stringify({ kind: 'note', text: '首轮 87 分，loss 收敛' })), ctx('ele-note0001'));
+  it('POST note → 湖里出现 <sid>.notes.jsonl；读回记录并解析提交信息', async () => {
+    const POST = await lakePOST();
+    const res = await POST(notesReq('ele-note0001', { kind: 'note', text: '首轮 87 分，loss 收敛' }));
     expect(res.status).toBe(200);
     const { records } = await res.json() as { records: ApiRecord[] };
     expect(records).toHaveLength(1);
@@ -106,7 +115,7 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
 
     expect(bareTree()).toContain('elementwise/ele-note0001/ele-note0001.notes.jsonl');
 
-    const get = await GET(new Request('http://viewer.test/'), ctx('ele-note0001'));
+    const get = await POST(notesReq('ele-note0001'));
     const data = await get.json() as {
       records: ApiRecord[];
       submit: { author: string | null; description: string | null; remark: string | null };
@@ -118,8 +127,8 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
   });
 
   it('POST scorecard → 6 维评分快照入湖并可读回', async () => {
-    const { GET, POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const res = await POST(postReq(JSON.stringify({ kind: 'scorecard' })), ctx('ele-note0001'));
+    const POST = await lakePOST();
+    const res = await POST(notesReq('ele-note0001', { kind: 'scorecard' }));
     expect(res.status).toBe(200);
     const { records } = await res.json() as { records: ApiRecord[] };
     expect(records).toHaveLength(2);
@@ -128,20 +137,20 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
     expect(card?.totalScore).toBe(87);
     expect(card?.dimensions).toHaveLength(6);
 
-    const get = await GET(new Request('http://viewer.test/'), ctx('ele-note0001'));
+    const get = await POST(notesReq('ele-note0001'));
     const data = await get.json() as { records: ApiRecord[] };
     expect(data.records.filter(r => r.type === 'scorecard')).toHaveLength(1);
   });
 
   it('POST scorecard 覆盖语义：再次上传替换旧快照（记录流只留最新一份，note 不动）', async () => {
-    const { GET, POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
+    const POST = await lakePOST();
     // 第一次上传（上面用例已传过一份），改卡后再传 → scorecard 仍只 1 条且为新值
     const { scorecardStore } = await import('../../../src/lib/scoring');
     const { prisma } = await import('../../../src/lib/db');
     const session = await prisma.session.findFirst({ where: { taskId: 'ele-note0001' }, select: { id: true } });
     const stored = await scorecardStore().get(session!.id);
     await scorecardStore().put({ ...stored!, framework: { ...stored!.framework, totalScore: 0.42 } });
-    const res = await POST(postReq(JSON.stringify({ kind: 'scorecard' })), ctx('ele-note0001'));
+    const res = await POST(notesReq('ele-note0001', { kind: 'scorecard' }));
     expect(res.status).toBe(200);
     const { records } = await res.json() as { records: ApiRecord[] };
     const cards = records.filter(r => r.type === 'scorecard');
@@ -151,35 +160,35 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
   });
 
   it('baseline 会话记录落到 baseline/ 路径', async () => {
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const res = await POST(postReq(JSON.stringify({ kind: 'note', text: '基准备注' })), ctx('ele-base0009'));
+    const POST = await lakePOST();
+    const res = await POST(notesReq('ele-base0009', { kind: 'note', text: '基准备注' }));
     expect(res.status).toBe(200);
     expect(bareTree()).toContain('elementwise/baseline/ele-base0009/ele-base0009.notes.jsonl');
   });
 
   it('opgen：修正任务结果标注（meta.json 落湖），清除后字段移除', async () => {
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
+    const POST = await lakePOST();
     const metaRef = 'main:elementwise/ele-note0001/ele-note0001.meta.json';
     const metaJson = () => JSON.parse(execSync(`git -C "${BARE}" show "${metaRef}"`).toString('utf8')) as { x_lake: { data: Record<string, unknown> } };
 
     expect(metaJson().x_lake.data.opGen).toBeUndefined(); // 夹具未标注
 
-    const ok = await POST(postReq(JSON.stringify({ kind: 'opgen', value: 'success' })), ctx('ele-note0001'));
+    const ok = await POST(notesReq('ele-note0001', { kind: 'opgen', value: 'success' }));
     expect(ok.status).toBe(200);
     expect(metaJson().x_lake.data.opGen).toBe('success');
     // envelope 其余字段不被破坏
     expect(metaJson().x_lake.data.framework).toBe('claude-code');
 
-    const clear = await POST(postReq(JSON.stringify({ kind: 'opgen', value: null })), ctx('ele-note0001'));
+    const clear = await POST(notesReq('ele-note0001', { kind: 'opgen', value: null }));
     expect(clear.status).toBe(200);
     expect(metaJson().x_lake.data.opGen).toBeUndefined();
 
-    const bad = await POST(postReq(JSON.stringify({ kind: 'opgen', value: 'maybe' })), ctx('ele-note0001'));
+    const bad = await POST(notesReq('ele-note0001', { kind: 'opgen', value: 'maybe' }));
     expect(bad.status).toBe(400);
   });
 
   it('回归防护：viewer 自身提交（note/opgen）不顶掉描述与作者', async () => {
-    const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
     const r = await listRuns({ paradigm: 'elementwise' });
     const row = r.items.find(x => x.sid === 'ele-note0001');
     // 此前已追加过 note / scorecard / opgen 提交（notes(viewer): …），描述/作者仍取原始上传 commit
@@ -200,7 +209,7 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
     execSync('git push --quiet origin main', { cwd: work, stdio: 'pipe' });
     fs.rmSync(work, { recursive: true, force: true });
 
-    const { listRuns, invalidateCaches } = await import('../../../src/app/lake_viewer/_lib/runs');
+    const { listRuns, invalidateCaches } = await import('../../../src/lib/collection/lake-view/runs');
     invalidateCaches();
     const r = await listRuns({ paradigm: 'elementwise' });
     const row = r.items.find(x => x.sid === 'ele-note0001');
@@ -209,8 +218,8 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
 
     // NotesDialog 的「提交信息（上传时填写）」面板同口径：readSubmitInfo 也取
     // 首传，不被维护提交顶掉（与列表列一致）
-    const { GET: getNotes } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const notes = await (await getNotes(new Request('http://viewer.test/'), ctx('ele-note0001'))).json() as {
+    const POST = await lakePOST();
+    const notes = await (await POST(notesReq('ele-note0001'))).json() as {
       submit: { author: string | null; description: string | null };
     };
     expect(notes.submit.author).toBe('zhang3');
@@ -218,59 +227,58 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
   });
 
   it('paradigm target：基线/期望配置落湖（<范式>/<范式>.jsonl）并可读回', async () => {
-    const { GET, POST } = await import('../../../src/app/lake_viewer/api/paradigms/[name]/target/route');
-    const postReq = (body: string) => new Request('http://viewer.test/lake_viewer/api/paradigms/x/target', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body,
-    });
-    const ctx = (name: string) => ({ params: Promise.resolve({ name }) });
+    const POST = await lakePOST();
 
-    const empty = await GET(new Request('http://viewer.test/'), ctx('elementwise'));
+    const empty = await POST(targetReq('elementwise'));
     expect((await empty.json() as { target: unknown }).target).toBeNull();
 
-    const save = await POST(postReq(JSON.stringify({ baselineMs: 5_400_000, expectedMs: 1_800_000 })), ctx('elementwise'));
+    const save = await POST(targetReq('elementwise', { baselineMs: 5_400_000, expectedMs: 1_800_000 }));
     expect(save.status).toBe(200);
     expect(bareTree()).toContain('elementwise/elementwise.jsonl');
-    expect(await (await GET(new Request('http://viewer.test/'), ctx('elementwise'))).json() as { target: { baselineMs: number; expectedMs: number } }).toMatchObject({
+    expect(await (await POST(targetReq('elementwise'))).json() as { target: { baselineMs: number; expectedMs: number } }).toMatchObject({
       target: { baselineMs: 5_400_000, expectedMs: 1_800_000 },
     });
 
-    const badName = await GET(new Request('http://viewer.test/'), ctx('a/b'));
+    const badName = await POST(targetReq('a/b'));
     expect(badName.status).toBe(400);
-    const badValue = await POST(postReq(JSON.stringify({ baselineMs: -1 })), ctx('elementwise'));
+    const badValue = await POST(targetReq('elementwise', { baselineMs: -1 }));
     expect(badValue.status).toBe(400);
   });
 
-  it('target 防误清空：畸形 body / 两键俱缺 → 400，不吞成全 null 覆盖', async () => {
-    const { GET, POST } = await import('../../../src/app/lake_viewer/api/paradigms/[name]/target/route');
-    const postReq = (body: string) => new Request('http://viewer.test/lake_viewer/api/paradigms/x/target', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body,
-    });
-    const ctx = (name: string) => ({ params: Promise.resolve({ name }) });
+  it('target 防误清空：畸形 body / 非数值键值 → 拒绝或按读处理，不吞成全 null 覆盖', async () => {
+    const POST = await lakePOST();
 
-    const before = await (await GET(new Request('http://viewer.test/'), ctx('elementwise'))).json() as { target: { baselineMs: number } };
+    const before = await (await POST(targetReq('elementwise'))).json() as { target: { baselineMs: number } };
 
-    const badJson = await POST(postReq('{not json'), ctx('elementwise'));
-    expect(badJson.status).toBe(400);
-    const noKeys = await POST(postReq(JSON.stringify({ unrelated: 1 })), ctx('elementwise'));
-    expect(noKeys.status).toBe(400);
-    // 键存在但值类型错误（字符串/布尔）也 400：静默收敛成 null 同样会追加全
+    // 畸形 JSON：lake action 顶层解析失败 → 500（同样拒绝写入，不清空目标）
+    const badJson = await POST(new NextRequest('http://localhost/api/ingest/lake', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{not json',
+    }));
+    expect(badJson.status).toBe(500);
+    // 两键俱缺 = 读契约（action 收敛后不带键根本不触发写；旧路由此处 400 的
+    // 「防误清空」危险在新契约下结构性不存在）
+    const noKeys = await POST(targetReq('elementwise', { unrelated: 1 }));
+    expect(noKeys.status).toBe(200);
+    // 键存在但值类型错误（字符串/布尔）→ 400：静默收敛成 null 同样会追加全
     // null 记录抹掉参考线（review #190172787）
-    const strVal = await POST(postReq(JSON.stringify({ baselineMs: '5400000' })), ctx('elementwise'));
+    const strVal = await POST(targetReq('elementwise', { baselineMs: '5400000' }));
     expect(strVal.status).toBe(400);
-    const boolVal = await POST(postReq(JSON.stringify({ expectedMs: true })), ctx('elementwise'));
+    const boolVal = await POST(targetReq('elementwise', { expectedMs: true }));
     expect(boolVal.status).toBe(400);
 
     // 被拒后既有目标原样保留（末条生效的追加式存储未被污染）
-    const after = await (await GET(new Request('http://viewer.test/'), ctx('elementwise'))).json() as { target: { baselineMs: number } };
+    const after = await (await POST(targetReq('elementwise'))).json() as { target: { baselineMs: number } };
     expect(after.target.baselineMs).toBe(before.target.baselineMs);
 
     // 显式带键的 null 是合法清除语义
-    const explicitNull = await POST(postReq(JSON.stringify({ baselineMs: null, expectedMs: 120_000 })), ctx('elementwise'));
+    const explicitNull = await POST(targetReq('elementwise', { baselineMs: null, expectedMs: 120_000 }));
     expect(explicitNull.status).toBe(200);
   });
 
   it('并发写入恢复：外部客户端 push 后再写记录（fetch 换父提交重试）', async () => {
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
+    const POST = await lakePOST();
     // 外部客户端向 bare 推一笔新提交：viewer 镜像的 origin/main 落后（非 FF）
     const ext = path.join(TMP, 'ext-clone');
     execSync(`git clone --quiet "${BARE}" "${ext}"`, { stdio: 'pipe' });
@@ -281,30 +289,30 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
     fs.rmSync(ext, { recursive: true, force: true });
 
     // 旧实现：重试用同一 stale 父提交 → 三连拒 → 502；修复后 fetch 换父提交成功
-    const res = await POST(postReq(JSON.stringify({ kind: 'note', text: '并发写入后的恢复记录' })), ctx('ele-note0001'));
+    const res = await POST(notesReq('ele-note0001', { kind: 'note', text: '并发写入后的恢复记录' }));
     expect(res.status).toBe(200);
     const { records } = await res.json() as { records: ApiRecord[] };
     expect(records.some(r => r.text === '并发写入后的恢复记录')).toBe(true);
   });
 
   it('空文本 400 / 未知 sid 404 / 无评分卡 409', async () => {
-    const { GET, POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const empty = await POST(postReq(JSON.stringify({ kind: 'note', text: '   ' })), ctx('ele-note0001'));
+    const POST = await lakePOST();
+    const empty = await POST(notesReq('ele-note0001', { kind: 'note', text: '   ' }));
     expect(empty.status).toBe(400);
-    const unknown = await GET(new Request('http://viewer.test/'), ctx('no-such-sid'));
+    const unknown = await POST(notesReq('no-such-sid'));
     expect(unknown.status).toBe(404);
     // ele-base0009 不在测试库 → 无评分卡
-    const noCard = await POST(postReq(JSON.stringify({ kind: 'scorecard' })), ctx('ele-base0009'));
+    const noCard = await POST(notesReq('ele-base0009', { kind: 'scorecard' }));
     expect(noCard.status).toBe(409);
   });
 
   it('edit：按 ts+原文定位改写文本，保留原 ts；原文失配 409', async () => {
-    const { GET, POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const before = await (await GET(new Request('http://viewer.test/'), ctx('ele-note0001'))).json() as { records: ApiRecord[] };
+    const POST = await lakePOST();
+    const before = await (await POST(notesReq('ele-note0001'))).json() as { records: ApiRecord[] };
     const target = before.records.find(r => r.type === 'note' && r.text === '首轮 87 分，loss 收敛');
     expect(target).toBeTruthy();
 
-    const res = await POST(postReq(JSON.stringify({ kind: 'edit', ts: target?.ts, text: target?.text, newText: '首轮 87 分（修订：含 warmup）' })), ctx('ele-note0001'));
+    const res = await POST(notesReq('ele-note0001', { kind: 'edit', ts: target?.ts, text: target?.text, newText: '首轮 87 分（修订：含 warmup）' }));
     expect(res.status).toBe(200);
     const { records } = await res.json() as { records: ApiRecord[] };
     const edited = records.find(r => r.ts === target?.ts);
@@ -314,24 +322,20 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
     expect(records.filter(r => r.type === 'scorecard')).toHaveLength(1);
 
     // 原文已被改掉 → 再按旧文本编辑失配 409
-    const stale = await POST(postReq(JSON.stringify({ kind: 'edit', ts: target?.ts, text: target?.text, newText: 'x' })), ctx('ele-note0001'));
+    const stale = await POST(notesReq('ele-note0001', { kind: 'edit', ts: target?.ts, text: target?.text, newText: 'x' }));
     expect(stale.status).toBe(409);
   });
 
   it('存量裸目录（单记录位）带 recording 参数：回落现存捕获位不 404，评分卡照常入湖', async () => {
-    const { GET, POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
+    const POST = await lakePOST();
     // ele-note0001 是存量裸目录会话（DB 行 framework=claude-code 无 -proxy），
     // 客户端按框架推断会带 recording=native——仓内只有捕获位，应回落到它而
     // 不是 404；评分卡取数也不按 capture→-proxy 启发式把已评分会话误判 409
     //（回归：2026-10 review ②，存量数据写入评分快照永久 409/404）
-    const get = await GET(new Request('http://viewer.test/?recording=native'), ctx('ele-note0001'));
+    const get = await POST(notesReq('ele-note0001', { recording: 'native' }));
     expect(get.status).toBe(200);
 
-    const post = await POST(new Request('http://viewer.test/lake_viewer/api/runs/x/notes?recording=native', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'scorecard' }),
-    }), ctx('ele-note0001'));
+    const post = await POST(notesReq('ele-note0001', { recording: 'native', kind: 'scorecard' }));
     expect(post.status).toBe(200);
     const { records } = await post.json() as { records: ApiRecord[] };
     expect(records.filter(r => r.type === 'scorecard')).toHaveLength(1);
@@ -343,13 +347,13 @@ describe('notes api（本地 bare 湖 + 真测试库评分卡）', () => {
 
 describe('归属取当前位置首传（跨位置迁移）', () => {
   it('cpx 自动上传 others/ → 人工范式上传 → 维护提交：作者=放进范式的人，不被 bot/维护顶掉', async () => {
-    // 独立 bare + 镜像：others/ 首传（acme-robot 自动上传）→ 迁入 elementwise/
+    // 独立 bare + 镜像：others/ 首传（cann-robot 自动上传）→ 迁入 elementwise/
     //（zhang3）→ 普通格式维护提交触碰（回填形态）——归属必须落在 zhang3
     const BARE2 = path.join(TMP, 'lake-mig.git');
     makeBareLake(BARE2, [
       {
         time: '2026-09-10T10:00:00+08:00',
-        message: '提交人: acme-robot 日志路径: /tmp/cpx-ele-mig0001.jsonl 备注: 框架 opencode',
+        message: '提交人: cann-robot 日志路径: /tmp/cpx-ele-mig0001.jsonl 备注: 框架 opencode',
         sessions: [{ sid: 'ele-mig0001', paradigm: 'others', framework: 'opencode' }],
       },
       {
@@ -372,15 +376,15 @@ describe('归属取当前位置首传（跨位置迁移）', () => {
     switchLakeConfig({ address: BARE2 });
     try {
       vi.resetModules();
-      const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+      const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
       const r = await listRuns({ paradigm: 'elementwise' });
       const row = r.items.find(x => x.sid === 'ele-mig0001');
       expect(row?.author).toBe('zhang3');
       expect(row?.description).toBe('范式上传');
-      // GET /notes 的提交信息面板同口径：readSubmitInfo 按 sessionDir（当前
-      // 位置）限定 log，others/ 时代的 acme-robot 更老也不参与
-      const { GET: getNotes } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-      const notes = await (await getNotes(new Request('http://viewer.test/'), { params: Promise.resolve({ sid: 'ele-mig0001' }) })).json() as {
+      // lake-notes 读通路（提交信息面板）同口径：readSubmitInfo 按 sessionDir
+      //（当前位置）限定 log，others/ 时代的 cann-robot 更老也不参与
+      const POST = await lakePOST();
+      const notes = await (await POST(notesReq('ele-mig0001'))).json() as {
         submit: { author: string | null; description: string | null };
       };
       expect(notes.submit.author).toBe('zhang3');
@@ -411,8 +415,8 @@ describe('导入列表归属（/api/ingest/lake list → listSessionsIn）', () 
     // 导入侧按最后触碰归属，必须跳过 notes(viewer): 维护提交——否则提交人
     // 显示 lake-viewer、描述显示 notes(viewer): …、时间平移到保存时刻
     // （真机 op-fusion/ses_f4c5b0289ffedrT2tJz1GovhyE 污染同源）
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const note = await POST(postReq(JSON.stringify({ kind: 'note', text: '导入归属回归锚点' })), ctx('ele-base0009'));
+    const POST = await lakePOST();
+    const note = await POST(notesReq('ele-base0009', { kind: 'note', text: '导入归属回归锚点' }));
     expect(note.status).toBe(200);
 
     const entry = await listEntry('ele-base0009');
@@ -437,8 +441,8 @@ describe('导入列表归属（/api/ingest/lake list → listSessionsIn）', () 
     fs.rmSync(work, { recursive: true, force: true });
 
     // 重传之后再存 viewer note：归属仍是 v2（最后一条非 viewer 提交）
-    const { POST } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const note = await POST(postReq(JSON.stringify({ kind: 'note', text: '重传后的备注' })), ctx('ele-base0009'));
+    const POST = await lakePOST();
+    const note = await POST(notesReq('ele-base0009', { kind: 'note', text: '重传后的备注' }));
     expect(note.status).toBe(200);
 
     const entry = await listEntry('ele-base0009');
@@ -447,8 +451,7 @@ describe('导入列表归属（/api/ingest/lake list → listSessionsIn）', () 
     expect(entry?.commitTime).not.toBe('2026-09-01T10:00:00+08:00');
 
     // viewer 页提交信息面板仍取首传（与导入侧口径分工）
-    const { GET: getNotes } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-    const notes = await (await getNotes(new Request('http://viewer.test/'), ctx('ele-base0009'))).json() as {
+    const notes = await (await POST(notesReq('ele-base0009'))).json() as {
       submit: { author: string | null; description: string | null };
     };
     expect(notes.submit.author).toBe('zhang3');
@@ -486,15 +489,15 @@ describe('归属 meta 快照优先（D 根治层）', () => {
     try {
       vi.resetModules();
       // 运行表（旧代码 = 首传 log 推导 zhang3）
-      const { listRuns } = await import('../../../src/app/lake_viewer/_lib/runs');
+      const { listRuns } = await import('../../../src/lib/collection/lake-view/runs');
       const r = await listRuns({ paradigm: 'elementwise' });
       const row = r.items.find(x => x.sid === 'ele-dsnap01');
       expect(row?.author).toBe('li4');
       expect(row?.description).toBe('D 快照权威');
 
       // 备注面板「提交信息（上传时填写）」同口径
-      const { GET: getNotes } = await import('../../../src/app/lake_viewer/api/runs/[sid]/notes/route');
-      const notes = await (await getNotes(new Request('http://viewer.test/'), { params: Promise.resolve({ sid: 'ele-dsnap01' }) })).json() as {
+      const POST = await lakePOST();
+      const notes = await (await POST(notesReq('ele-dsnap01'))).json() as {
         submit: { author: string | null; description: string | null; remark: string | null };
       };
       expect(notes.submit.author).toBe('li4');

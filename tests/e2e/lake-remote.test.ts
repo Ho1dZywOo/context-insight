@@ -1,5 +1,5 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software: you can redistribute it and/or modify it under the terms and conditions of
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
 // Please refer to the License for details. You may not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
@@ -297,22 +297,24 @@ describe('parseUrlCreds：内嵌凭据拆分（push 走 helper 通道的前提�
   });
 });
 
-/** 一次性 helper 临时目录（insight-lake-auth-*）用后即删的收敛断言辅助：
- *  瞬时快照对并行用例敏感——其他 worker 同刻持有/清理的目录会闯进快照，
- *  两个方向（新增闯入 / 快照内条目被他人清理）都会假红。等"不再有快照之外
- *  新目录"的收敛态；快照内目录消失不影响判定——本用例自己的泄漏目录不在
- *  快照里且用后仍在，等待窗口（10s）内必然可见。 */
-const authDirsSettled = (before: string[]): boolean => {
-  for (let i = 0; i < 40; i++) {
-    const fresh = fs.readdirSync(os.tmpdir()).filter(n => n.startsWith('insight-lake-auth-') && !before.includes(n));
-    if (fresh.length === 0) return true;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+/** helper 临时目录用后即删的回归锁。断言「本次调用不新增持久目录」：并行
+ *  文件的在飞 helper（spawnGitAuthed 的 mkdtemp → finally rmSync 窗口）既
+ *  可能中途闯入快照、也可能中途退场——与 before 严格相等会在两个方向被
+ *  并行负载误伤。改为有界重试等新增目录退场（在飞件 ms 级）；重试耗尽
+ *  仍多出即真泄漏（锁泄漏语义不变）。 */
+async function expectNoAuthHelperLeak(before: string[]): Promise<void> {
+  const known = new Set(before);
+  let fresh: string[] = [];
+  for (let i = 0; i < 20; i++) {
+    fresh = fs.readdirSync(os.tmpdir()).filter(n => n.startsWith('insight-lake-auth-') && !known.has(n));
+    if (fresh.length === 0) return;
+    await new Promise(res => setTimeout(res, 250));
   }
-  return false;
-};
+  expect(fresh).toEqual([]);
+}
 
 describe('pushMirror：401 挑战-应答通道（本地 bare IT）', () => {
-  it('pushAuth 存在：一次性 helper 构造/清理 + push 成功（本地传输不咨询凭据，锁命令构造与生命周期）', () => {
+  it('pushAuth 存在：一次性 helper 构造/清理 + push 成功（本地传输不咨询凭据，锁命令构造与生命周期）', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-pushmirror-it-'));
     try {
       const bare = path.join(tmp, 'bare.git');
@@ -331,7 +333,7 @@ describe('pushMirror：401 挑战-应答通道（本地 bare IT）', () => {
       mirrorMod.pushMirror(work, withAuth);
       expect(execSync('git rev-parse main', { cwd: bare, stdio: 'pipe' }).toString().trim())
         .toBe(execSync('git rev-parse HEAD', { cwd: work, stdio: 'pipe' }).toString().trim());
-      expect(authDirsSettled(before)).toBe(true); // helper 临时目录用后即删
+      await expectNoAuthHelperLeak(before);
       // pushAuth=null 直推路径
       fs.writeFileSync(path.join(work, 'g.txt'), 'y');
       git('git -c user.name=t -c user.email=t@x add -A');
@@ -343,7 +345,7 @@ describe('pushMirror：401 挑战-应答通道（本地 bare IT）', () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
-  it('pullAuth 存在：clone/fetch 经一次性 helper（本地传输不咨询凭据，锁命令构造与生命周期）', () => {
+  it('pullAuth 存在：clone/fetch 经一次性 helper（本地传输不咨询凭据，锁命令构造与生命周期）', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-pullmirror-it-'));
     try {
       const bare = path.join(tmp, 'bare.git');
@@ -365,20 +367,20 @@ describe('pushMirror：401 挑战-应答通道（本地 bare IT）', () => {
       // helper 的价值在 https 挑战-应答，此处锁命令构造与临时目录生命周期）
       expect(execSync('git rev-parse --verify -q refs/remotes/origin/main', { cwd: dir, stdio: 'pipe' }).toString().trim())
         .toBe(execSync('git rev-parse main', { cwd: bare, stdio: 'pipe' }).toString().trim());
-      expect(authDirsSettled(before)).toBe(true); // helper 临时目录用后即删
+      await expectNoAuthHelperLeak(before);
       // 二次 ensure 走 fetch 路径同样带 helper 生命周期（无残留即证）
       mirrorMod.ensureMirror(withPullAuth);
-      expect(authDirsSettled(before)).toBe(true);
+      await expectNoAuthHelperLeak(before);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
-  it('pushAuth 含换行：helper 协议非法，立即拒绝且不落临时目录', () => {
+  it('pushAuth 含换行：helper 协议非法，立即拒绝且不落临时目录', async () => {
     const r = remote.resolveAdhocRemote({ address: '/tmp/x.git', branch: 'main' });
     const bad: LakeRemote = { ...r, pushAuth: { username: 'u', password: 'p\nq' } };
     const before = fs.readdirSync(os.tmpdir()).filter(n => n.startsWith('insight-lake-auth-'));
     expect(() => mirrorMod.pushMirror('/tmp', bad)).toThrow('newline');
-    expect(authDirsSettled(before)).toBe(true);
+    await expectNoAuthHelperLeak(before);
   });
 });
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software: you can redistribute it and/or modify it under the terms and conditions of
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// You may refer to the License for details. You should not use this file except in compliance with the License.
+// Please refer to the License for details. You may not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
@@ -442,7 +442,7 @@ describe('Run 详情页暗色工作台', () => {
       expect(document.querySelector('a[href="/"]')).toBeTruthy()
       const body = document.body.textContent ?? ''
       expect(body).toContain('Context')
-      expect(body).toContain('v0.2')
+      expect(body).toContain('v1.0')
       // 无障碍：sr-only 加载提示（role=status）
       expect(document.querySelector('[role="status"]')?.textContent).toContain('加载 Run')
       // 骨架贴近落位：导航药丸 + 首卡三区（身份/元信息/瓦片）+ 泳道骨架
@@ -484,7 +484,7 @@ describe('Run 详情页暗色工作台', () => {
     // 导航行：品牌区（渐变标 + 双色字标）+ 版本；无 run 名/runId（身份在首卡）
     expect(body).toContain('Context')
     expect(body).toContain('Insight')
-    expect(body).toContain('v0.2')
+    expect(body).toContain('v1.0')
     // 品牌区是回工作台首页的链接
     expect(document.querySelector('a[href="/"]')).toBeTruthy()
     // Overview 首卡：run 名为标题（h1 + 悬停全名/runId），状态药丸 +
