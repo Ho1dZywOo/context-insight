@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 
 describe('getScorecard 查询失败上抛', () => {
   it('DB 不可达 → rejects（区别于「确定无卡」的 null）', async () => {
-    const { getScorecard } = await import('../../../src/app/lake_viewer/_lib/insight-data');
+    const { getScorecard } = await import('../../../src/lib/collection/lake-view/insight-data');
     await expect(getScorecard('any-sid')).rejects.toThrow();
   });
 });

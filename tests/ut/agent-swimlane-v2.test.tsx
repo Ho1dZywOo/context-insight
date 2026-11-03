@@ -33,7 +33,6 @@ afterEach(() => {
 })
 
 const T0 = '2026-10-15T10:00:00Z'
-const at = (ms: number) => new Date(new Date(T0).getTime() + ms).toISOString()
 
 function mkAgent(over: {
   executionId: string
@@ -121,7 +120,7 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     dblclick(bar!)
 
     expect(onViewTurns).toHaveBeenCalledTimes(1)
-    expect(onViewTurns).toHaveBeenCalledWith('ses_g1', undefined)
+    expect(onViewTurns).toHaveBeenCalledWith('ses_g1', undefined, null)
     // 双击到达时取消挂起的单击测距点
     expect(el.textContent).not.toContain('已标记起点')
     await settleMeasure()
@@ -238,8 +237,8 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     const fresh = [...el.querySelectorAll<HTMLElement>('[data-bar^="subA#"]')]
     dblclick(fresh[0])
     dblclick(fresh[1])
-    expect(jump).toHaveBeenNthCalledWith(1, 'ses_g1', Date.parse('2026-10-15T10:00:10Z'))
-    expect(jump).toHaveBeenNthCalledWith(2, 'ses_g1', Date.parse('2026-10-15T10:01:00Z'))
+    expect(jump).toHaveBeenNthCalledWith(1, 'ses_g1', Date.parse('2026-10-15T10:00:10Z'), null)
+    expect(jump).toHaveBeenNthCalledWith(2, 'ses_g1', Date.parse('2026-10-15T10:01:00Z'), null)
   })
 
   it('多派发但缺时间戳：回落整段一根条，浮窗拼接全部步骤 + 次数；状态取最新', async () => {
@@ -354,6 +353,64 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     const el = await renderV2(agents, [], onViewTurns)
     const rootBar = el.querySelector<HTMLElement>('[data-bar="root"]')
     dblclick(rootBar!)
-    expect(onViewTurns).toHaveBeenCalledWith(null, undefined)
+    expect(onViewTurns).toHaveBeenCalledWith(null, undefined, null)
+  })
+})
+
+describe('AgentSwimlaneV2 run 级成员分道（run-first 泛化）', () => {
+  const T = Date.parse(T0)
+  const withMember = (a: AgentItem, member: { taskId: string; label: string | null; isProxy?: boolean }): AgentItem =>
+    ({ ...a, member }) as AgentItem
+
+  it('多成员：root 按成员分道（成员 = 泳道，data-lane = 成员 taskId，标签用成员名）', async () => {
+    const roots = [
+      withMember(mkAgent({ executionId: 'm-a', span: { start: T, end: T + 60_000 }, isSubagent: false, agentName: 'main', agentSessionId: 'ses-a' }), { taskId: 'ses-a', label: 'build·g0' }),
+      withMember(mkAgent({ executionId: 'm-b', span: { start: T + 30_000, end: T + 90_000 }, isSubagent: false, agentName: 'main', agentSessionId: 'ses-b' }), { taskId: 'ses-b', label: 'build·验收' }),
+    ]
+    const sub = mkAgent({ executionId: 's-1', span: { start: T + 10_000, end: T + 20_000 }, agentSessionId: 'ses-sub', agentName: 'reviewer' })
+    const el = await renderV2([...roots, sub], [], () => {})
+    // 每个成员一条 root 道（按成员 taskId 键控），子代理照常进车道/贪心槽
+    expect(el.querySelector('[data-lane="ses-a"]')).toBeTruthy()
+    expect(el.querySelector('[data-lane="ses-b"]')).toBeTruthy()
+    expect(el.textContent).toContain('build·g0')
+    expect(el.textContent).toContain('build·验收')
+    // 成员归因缺省（member=null）的 root 不落成员道，并入无名分组
+    const anon = mkAgent({ executionId: 'm-c', span: { start: T + 40_000, end: T + 50_000 }, isSubagent: false, agentName: 'main', agentSessionId: 'ses-c' })
+    const el2 = await renderV2([...roots, anon], [], () => {})
+    expect(el2.querySelector('[data-lane="ses-a"]')).toBeTruthy()
+    expect(el2.querySelector('[data-lane="ses-b"]')).toBeTruthy()
+    expect(el2.querySelector('[data-lane="root"]')).toBeTruthy()
+  })
+
+  it('单成员/无归因（session 视图与 solo run）：合并 root 单道，标签 root——会话语义不变', async () => {
+    const roots = [
+      withMember(mkAgent({ executionId: 'm-a', span: { start: T, end: T + 60_000 }, isSubagent: false, agentName: 'main', agentSessionId: 'ses-a' }), { taskId: 'ses-a', label: 'build·g0' }),
+    ]
+    const el = await renderV2(roots, [], () => {})
+    expect(el.querySelector('[data-lane="root"]')).toBeTruthy()
+    expect(el.querySelector('[data-lane="ses-a"]')).toBeFalsy()
+    expect(el.textContent).toContain('root')
+    // 完全无归因（viewer 内嵌 payload）同款
+    const el2 = await renderV2([
+      mkAgent({ executionId: 'm-x', span: { start: T, end: T + 60_000 }, isSubagent: false, agentName: 'main', agentSessionId: 'ses-x' }),
+    ], [], () => {})
+    expect(el2.querySelector('[data-lane="root"]')).toBeTruthy()
+    expect(el2.textContent).toContain('root')
+  })
+
+  it('超长道名：单行截断不折行（title 悬停全文）——两行文本会溢出 22px 道盒与相邻道重叠', async () => {
+    const longLabel = 'tiling-developer·cannbot-very-long-branch-name-序号007'
+    const roots = [
+      withMember(mkAgent({ executionId: 'm-a', span: { start: T, end: T + 60_000 }, isSubagent: false, agentName: 'main', agentSessionId: 'ses-a' }), { taskId: 'ses-a', label: longLabel }),
+      withMember(mkAgent({ executionId: 'm-b', span: { start: T + 30_000, end: T + 90_000 }, isSubagent: false, agentName: 'main', agentSessionId: 'ses-b' }), { taskId: 'ses-b', label: 'build·验收' }),
+    ]
+    const el = await renderV2(roots, [], () => {})
+    // 标签单行契约：truncate（nowrap + 省略号），全文走 title 悬停
+    const labelSpan = [...el.querySelectorAll('span')].find(s => s.getAttribute('title') === longLabel)
+    expect(labelSpan).toBeTruthy()
+    expect(labelSpan!.className).toContain('truncate')
+    expect(labelSpan!.textContent).toBe(longLabel)
+    // 折行类残留负向锁（break-all 曾让长名折两行溢出道盒）
+    expect(el.querySelector('.break-all')).toBeNull()
   })
 })

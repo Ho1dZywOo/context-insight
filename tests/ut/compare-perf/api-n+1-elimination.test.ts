@@ -222,8 +222,8 @@ vi.mock("@/lib/tool-timing", async (importOriginal) => {
   }
 })
 
-import { GET as turnsGet } from "@/app/api/observe/session/turns/route"
-import { GET as sessionGet } from "@/app/api/observe/session/route"
+import { GET as turnsGet } from "@/lib/observe/session-handlers/turns"
+import { GET as sessionGet } from "@/lib/observe/session-handlers/detail"
 
 const counts = mocked.counts
 

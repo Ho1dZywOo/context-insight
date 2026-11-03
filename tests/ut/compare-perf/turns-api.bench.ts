@@ -200,8 +200,8 @@ vi.mock("@/lib/db", () => {
 })
 
 import * as db from "@/lib/db"
-import { GET as turnsGet } from "@/app/api/observe/session/turns/route"
-import { GET as sessionGet } from "@/app/api/observe/session/route"
+import { GET as turnsGet } from "@/lib/observe/session-handlers/turns"
+import { GET as sessionGet } from "@/lib/observe/session-handlers/detail"
 
 function makeReq(url: string): NextRequest {
   return new NextRequest(new Request(url))

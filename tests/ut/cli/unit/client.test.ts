@@ -59,7 +59,7 @@ describe('InsightClient', () => {
       expect(url).toContain('pageSize=20');
     });
 
-    it('getSession sends GET to /api/observe/session with taskId', async () => {
+    it('getSession sends GET to solo run member-detail (run-first 刀J：session 端点退役)', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ sessionId: 's1', taskId: 't1' }),
@@ -67,8 +67,7 @@ describe('InsightClient', () => {
       await client.getSession('test-task');
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const url = mockFetch.mock.calls[0][0];
-      expect(url).toContain('/api/observe/session');
-      expect(url).toContain('taskId=test-task');
+      expect(url).toContain('/api/observe/run/solo%3Atest-task/member-detail');
     });
 
     it('getStats without taskId returns global stats', async () => {
@@ -89,58 +88,56 @@ describe('InsightClient', () => {
       expect(result).toEqual({ taskId: 't1', totalTokens: 500 });
     });
 
-    it('getTurns sends GET to /api/observe/session/turns', async () => {
+    it('getTurns sends GET to solo run member-turns', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ items: [], total: 0 }),
       });
       await client.getTurns('t1', { role: 'assistant' });
       const url = mockFetch.mock.calls[0][0];
-      expect(url).toContain('/api/observe/session/turns');
-      expect(url).toContain('taskId=t1');
+      expect(url).toContain('/api/observe/run/solo%3At1/member-turns');
       expect(url).toContain('role=assistant');
     });
 
-    it('getTurnDetail sends GET to /api/observe/session/turns/{turnId}', async () => {
+    it('getTurnDetail sends GET to top-level /api/observe/turn/{turnId}', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ turnId: 'turn1', role: 'assistant' }),
       });
       await client.getTurnDetail('turn1');
       const url = mockFetch.mock.calls[0][0];
-      expect(url).toContain('/api/observe/session/turns/turn1');
+      expect(url).toContain('/api/observe/turn/turn1');
     });
 
-    it('searchTurns sends GET to /api/observe/session/turns/search', async () => {
+    it('searchTurns sends GET to solo run turns/search', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ items: [], total: 0 }),
       });
       await client.searchTurns('t1', 'bug');
       const url = mockFetch.mock.calls[0][0];
-      expect(url).toContain('/api/observe/session/turns/search');
-      expect(url).toContain('taskId=t1');
+      expect(url).toContain('/api/observe/run/solo%3At1/turns/search');
       expect(url).toContain('keyword=bug');
     });
 
-    it('getWorkflow sends GET to /api/observe/session/workflow', async () => {
+    it('getWorkflow sends GET to solo run workflow member view', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ phases: [], summary: {} }),
       });
       await client.getWorkflow('t1');
       const url = mockFetch.mock.calls[0][0];
-      expect(url).toContain('/api/observe/session/workflow');
+      expect(url).toContain('/api/observe/run/solo%3At1/workflow');
     });
 
-    it('getBridges sends GET to /api/observe/session/bridges', async () => {
+    it('getBridges sends GET to solo run bridges', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ items: [], total: 0 }),
       });
       await client.getBridges('t1');
       const url = mockFetch.mock.calls[0][0];
-      expect(url).toContain('/api/observe/session/bridges');
+      expect(url).toContain('/api/observe/run/solo%3At1/bridges');
     });
 
     it('importSession sends POST to /api/ingest/import-file', async () => {

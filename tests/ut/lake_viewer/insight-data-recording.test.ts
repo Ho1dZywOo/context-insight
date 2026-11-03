@@ -27,7 +27,7 @@ describe('getScorecard recording 消歧', () => {
   beforeEach(() => findFirst.mockReset());
 
   it("recording='capture' → 取 -proxy 捕获行", async () => {
-    const { getScorecard } = await import('../../../src/app/lake_viewer/_lib/insight-data');
+    const { getScorecard } = await import('../../../src/lib/collection/lake-view/insight-data');
     findFirst.mockResolvedValue(null);
     await getScorecard('ses_x', undefined, 'capture');
     expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
@@ -36,7 +36,7 @@ describe('getScorecard recording 消歧', () => {
   });
 
   it("recording='native' → 取非 -proxy 原生行", async () => {
-    const { getScorecard } = await import('../../../src/app/lake_viewer/_lib/insight-data');
+    const { getScorecard } = await import('../../../src/lib/collection/lake-view/insight-data');
     findFirst.mockResolvedValue(null);
     await getScorecard('ses_x', undefined, 'native');
     expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
@@ -45,7 +45,7 @@ describe('getScorecard recording 消歧', () => {
   });
 
   it('显式 framework 优先于 recording（observe 路由语义不变）', async () => {
-    const { getScorecard } = await import('../../../src/app/lake_viewer/_lib/insight-data');
+    const { getScorecard } = await import('../../../src/lib/collection/lake-view/insight-data');
     findFirst.mockResolvedValue({ id: 'row1', framework: 'claude-code' });
     await getScorecard('ses_x', 'claude-code', 'native');
     expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({

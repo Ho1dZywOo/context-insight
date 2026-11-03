@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,30 +18,15 @@ import { getAllContextWindows, getDefaultContextWindow } from '@/lib/context-win
 const mockConsoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
 const mockConsoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-const savedHome = process.env.HOME;
-const savedProxyDir = process.env.CONTEXT_PROXY_DIR;
-const savedInsightHome = process.env.CONTEXT_INSIGHT_HOME;
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxi-cmd-config-test-'));
-
-beforeAll(() => {
-  process.env.HOME = tmpHome;
-  delete process.env.CONTEXT_PROXY_DIR;
-  delete process.env.CONTEXT_INSIGHT_HOME;
-  delete process.env.CONTEXT_SERVER;
-});
-
-afterAll(() => {
-  if (savedHome === undefined) delete process.env.HOME;
-  else process.env.HOME = savedHome;
-  if (savedProxyDir === undefined) delete process.env.CONTEXT_PROXY_DIR;
-  else process.env.CONTEXT_PROXY_DIR = savedProxyDir;
-  if (savedInsightHome === undefined) delete process.env.CONTEXT_INSIGHT_HOME;
-  else process.env.CONTEXT_INSIGHT_HOME = savedInsightHome;
-  try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { }
-});
+// 隔离真实 ~/.context-insight：loadConfig 的发现契约会读端口登记文件
+// （insight-port，常驻 server 写入实际端口），不隔离则默认值随环境漂移
+const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-cli-config-test-'));
+const ORIG_HOME = process.env.CONTEXT_INSIGHT_HOME;
 
 describe('configCommand', () => {
   beforeEach(() => {
+    process.env.CONTEXT_INSIGHT_HOME = tmpHome;
+    delete process.env.CONTEXT_SERVER;
     resetConfig();
     mockConsoleLog.mockClear();
     mockConsoleError.mockClear();
@@ -49,6 +34,8 @@ describe('configCommand', () => {
 
   afterEach(() => {
     resetConfig();
+    if (ORIG_HOME === undefined) delete process.env.CONTEXT_INSIGHT_HOME;
+    else process.env.CONTEXT_INSIGHT_HOME = ORIG_HOME;
   });
 
   it('registers as a Commander sub-command', () => {

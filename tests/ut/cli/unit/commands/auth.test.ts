@@ -22,7 +22,7 @@ let home: string;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeAll(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbi-auth-it-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxi-auth-it-'));
   for (const k of ['CONTEXT_PROXY_DIR', 'LAKE_PUSH_URL', 'LAKE_USERNAME', 'LAKE_TOKEN', 'LAKE_REMOTE_URL']) {
     savedEnv[k] = process.env[k];
     delete process.env[k];

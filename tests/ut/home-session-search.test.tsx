@@ -23,7 +23,7 @@ import os from 'node:os'
 import { PrismaClient } from '@prisma/client'
 import { importSession } from '../../src/lib/ingest/data-service.ts'
 import Home from '../../src/app/page'
-import { SessionList } from '../../src/components/SessionList'
+import { AssetList } from '../../src/components/collection/AssetList'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: () => {}, replace: () => {}, back: () => {}, refresh: () => {} }),
@@ -87,7 +87,7 @@ describe('主页 Sessions 搜索（服务端 ?q= 过滤）', () => {
 })
 
 function makeItem(taskId: string, query: string) {
-  return { ...EMPTY_ITEM, sessionId: taskId, taskId, query }
+  return { ...EMPTY_ITEM, sessionId: taskId, key: `session:${taskId}`, taskId, query }
 }
 
 describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', () => {
@@ -124,7 +124,7 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
     const root: Root = createClientRoot(container)
     // SSR 初始：全量第一页
     await act(async () => {
-      root.render(createElement(SessionList, {
+      root.render(createElement(AssetList, {
         items: payloads[''].items, total: 61, page: 1, pageSize: 20, totalCount: 61,
       }))
     })
@@ -159,7 +159,7 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
     document.body.appendChild(container)
     const root: Root = createClientRoot(container)
     await act(async () => {
-      root.render(createElement(SessionList, {
+      root.render(createElement(AssetList, {
         items: [], total: 200, page: 1, pageSize: 20, totalCount: 200,
       }))
     })
@@ -182,33 +182,8 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
   })
 })
 
-describe('首页框架列带版本号（与 lake viewer 同款）', () => {
-  const mk = (framework: string, version: string | null) => ({
-    ...EMPTY_ITEM, framework, version,
-  })
-
-  it('原生行：徽标后跟版本号文本', () => {
-    const html = renderToString(createElement(SessionList, {
-      items: [mk('opencode', '2.0.28')],
-      page: 1, pageSize: 10, total: 1, totalCount: 1, q: '',
-    } as never))
-    expect(html).toContain('OpenCode')
-    expect(html).toContain('>2.0.28<')
-  })
-
-  it('proxy 行：黄标表达 proxy，版本剥掉后缀展示', () => {
-    const html = renderToString(createElement(SessionList, {
-      items: [mk('opencode-proxy', '1.18.19-opencode-proxy')],
-      page: 1, pageSize: 10, total: 1, totalCount: 1, q: '',
-    } as never))
-    expect(html).toContain('OpenCode')
-    expect(html).toContain('proxy')       // 徽标
-    expect(html).toContain('>1.18.19<')   // 剥后缀后的版本
-    expect(html).not.toContain('1.18.19-opencode-proxy')
-  })
-})
-
 const EMPTY_ITEM = {
+  kind: 'session' as const, key: 'session:x',
   sessionId: 'x', taskId: 'x', query: '', framework: 'opencode', version: null,
   startTime: '2026-09-01T00:00:00Z', importedAt: '2026-09-01T00:00:00Z', endTime: null,
   totalTokens: 0, totalCost: 0, totalLatencyMs: 0, totalToolCallCount: 0, totalSkillLoadCount: 0,
