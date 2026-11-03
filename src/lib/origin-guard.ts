@@ -19,11 +19,7 @@
 
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '[::1]', '::1']);
 
-// /api/* 为主 API 面；/lake_viewer/api/* 是旧 lake viewer 遗留路由（页面已
-// redirect 到 /?src=lake，但 8 个 route.ts 仍在役，含 runs/import、
-// bundles/import、runs/[sid]/notes、paradigms/[name]/target 等写副作用 POST
-// 端点），同样纳入跨源守卫范围。
-const API_PATH_PREFIXES = ['/api/', '/lake_viewer/api/'];
+const API_PATH_PREFIXES = ['/api/'];
 
 export type OriginGuardDecision =
   | { allow: true }

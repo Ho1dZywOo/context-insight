@@ -795,6 +795,16 @@ function v2ToolCallInfo(c: Record<string, unknown>): ToolCallInfo {
     argsJson,
     resultJson,
     state: status,
+    // 工具真实起止（与 v1 part 表列同语义）：item.time.created=发起、终态时
+    // time.completed=完成（真实 v2 活库实测 40928/40938 条 tool 项带完整
+    // time.created/completed）；running 态 completed 未落 → 不取（非终态
+    // time_updated 不是完成时刻），缺省 null 走 turn-split 既有降级
+    startedAt: typeof (c.time as { created?: unknown } | undefined)?.created === 'number'
+      ? (c.time as { created: number }).created
+      : null,
+    completedAt: (status === 'completed' || status === 'error') && typeof (c.time as { completed?: unknown } | undefined)?.completed === 'number'
+      ? (c.time as { completed: number }).completed
+      : null,
   };
 }
 

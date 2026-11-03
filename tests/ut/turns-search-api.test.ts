@@ -115,4 +115,23 @@ describe('turns search API — tool call args matching', () => {
     const res = await GET(req, { params: Promise.resolve({ runId: 'solo:whatever' }) });
     expect(res.status).toBe(400);
   });
+
+  it('纯工具名命中经 API 下推可达（matchField=toolName）', async () => {
+    const taskId = `trace-toolname-api-${Date.now()}`;
+    // 关键词只出现在 toolName：content/contentSummary/args/result/error 均不含
+    await seedSessionWithToolCall({
+      taskId,
+      turnIndex: 9,
+      toolName: 'mcp__codebase-memory-mcp__search_graph',
+      argsJson: '{"query":"调用图"}',
+      resultJson: '{"nodes":3}',
+      content: 'lookup the graph',
+    });
+    const res = await callSearch(taskId, 'search_graph');
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.items.length).toBe(1);
+    expect(data.items[0].matchField).toBe('toolName');
+    expect(data.items[0].toolName).toBe('mcp__codebase-memory-mcp__search_graph');
+  });
 });

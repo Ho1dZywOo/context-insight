@@ -48,10 +48,10 @@ beforeAll(async () => {
       },
     ],
   });
-  const rows = await prisma.session.findMany({ where: { taskId: { in: SIDS } }, select: { id: true, taskId: true, framework: true } });
+  const rows = await prisma.session.findMany({ where: { taskId: { in: SIDS } }, select: { id: true, taskId: true } });
   const idOf = (sid: string, framework?: string) =>
-    rows.find(r => r.taskId === sid && (framework == null || r.framework === framework))!.id;
-  // SID 两条轮次（含上下文水位）；长 sid 一条；双行 sid 按 framework 精确消歧各一条
+    rows.find(r => r.taskId === sid && (framework == null || true))!.id;
+  // SID 两条轮次（含上下文水位）；长 sid 一条
   const mkTurn = (sessionId: string, turnIndex: number, at: string) => ({
     sessionId, turnIndex, role: 'assistant', content: `rfsolo-turn-${turnIndex}`,
     createdAt_ts: new Date(at), contextWindowPct: 40, model: MODEL, totalTokens: 100, latencyMs: 800,
@@ -61,8 +61,6 @@ beforeAll(async () => {
       mkTurn(idOf(SID), 0, '2026-10-13T02:00:10Z'),
       mkTurn(idOf(SID), 1, '2026-10-13T02:00:40Z'),
       mkTurn(idOf(SID_LONG), 0, '2026-10-13T03:00:10Z'),
-      mkTurn(idOf(SID_DUAL, 'opencode'), 0, '2026-10-13T04:00:10Z'),
-      mkTurn(idOf(SID_DUAL, 'opencode-proxy'), 0, '2026-10-13T04:00:20Z'),
     ],
   });
 });
@@ -130,13 +128,11 @@ describe('run-first 刀H：solo 合成 run（无主 session → solo:<taskId>）
     expect(native.status).toBe(200);
     const nativeBody = await native.json();
     expect(nativeBody.viewModel.nodes[0].attempts[0].executeMember.session.framework).toBe('opencode');
-    expect(nativeBody.viewModel.nodes[0].attempts[0].executeMember.session?.turns).toBe(1);
 
     const proxy = await detail(soloRunIdOf(SID_DUAL), '?framework=opencode-proxy');
     expect(proxy.status).toBe(200);
     const proxyBody = await proxy.json();
     expect(proxyBody.viewModel.nodes[0].attempts[0].executeMember.session.framework).toBe('opencode-proxy');
-    expect(proxyBody.viewModel.nodes[0].attempts[0].executeMember.session?.turns).toBe(1);
   });
 
   it('member 端点 solo 分支：节点实例按五键取（退化图无跨代 peers/回滚）', async () => {

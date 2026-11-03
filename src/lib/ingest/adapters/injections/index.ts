@@ -15,9 +15,11 @@
 // 新框架接入 = injections/<framework>.ts + 下方分发表一行。
 import { agentFrameworkOf } from '@/lib/shared/session-format';
 import type { UserInjectionClassifier, UserInjectionContext, UserInjectionDecision } from '../contract';
-import { classifyClaudeCodeUserInjection } from './claude-code';
+import { classifyClaudeCodeUserInjection, stripTokenBudgetReminders } from './claude-code';
 import { classifyCodexUserInjection } from './codex';
 import { classifyOpencodeFamilyUserInjection } from './opencode';
+
+export { stripTokenBudgetReminders };
 
 // 框架 → 分类器。claude 双键（'claude' / 'claude-code'）：行级标记用 legacy
 // 短形 'claude-proxy'（agentFrameworkOf 剥后缀得 'claude'），Session.framework

@@ -113,8 +113,7 @@ beforeAll(async () => {
   await mkExec(rows[SID_NG], 'sm-sub-3', true, '2026-10-20T02:05:00Z');
 });
 
-afterAll(async () => {
-  await prisma.session.deleteMany({ where: { taskId: { in: ALL_SIDS } } });
+afterAll(() => {
   if (ORIG_HOME === undefined) delete process.env.CONTEXT_INSIGHT_HOME;
   else process.env.CONTEXT_INSIGHT_HOME = ORIG_HOME;
   fs.rmSync(tmpHome, { recursive: true, force: true });

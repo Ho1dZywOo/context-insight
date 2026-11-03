@@ -59,12 +59,9 @@ const NAME_RE = /^[A-Za-z0-9._-]+$/;
 
 interface AuditRequestBody {
   kind?: 'skill' | 'agent' | 'root' | 'run';
-  /** skill/agent = 目标名；root = 声明成员 taskId；run = 声明源成员 taskId
-   *  （仅用于恢复编排规程，可不在 members 子集内——独立解析，不入对账集）。 */
+  /** skill/agent = 目标名；root = 声明成员 taskId；run = 声明源成员 taskId。 */
   name?: string;
-  /** 涉事成员 taskId 列表；缺省 = run 全体成员（root 恒单成员）。严格子集
-   *  时对账范围收窄到该子集——两条编排路径一致（sift `--run` 原生路径仅
-   *  全集请求时启用，子集回落逐成员 transcript 物化）。 */
+  /** 涉事成员 taskId 列表；缺省 = run 全体成员（root 恒单成员）。 */
   members?: string[];
 }
 
@@ -104,11 +101,6 @@ export const POST = withRouteLog(
         { status: 400 },
       );
     }
-    // 子集约束贯穿两条编排路径（PR #7 审查意见）：sift `--run` 无成员过滤参
-    // 数（原生枚举清单全体成员），严格子集请求不走 `--run`，回落逐成员
-    // transcript 物化路径（子集在该路径原生生效）——`members` 在两条路径上
-    // 行为一致：传了子集就只见子集的命中，不再「参数过校验但被静默忽略」。
-    const fullMemberSet = scope.members.every(m => wanted.includes(m.taskId));
     if (kind === 'root' && wanted.length !== 1) {
       return NextResponse.json(
         { error: `root（主 agent 编排）对账恒单成员，收到 ${wanted.length} 个`, reason: 'bad-request' },
@@ -215,16 +207,7 @@ export const POST = withRouteLog(
         // run 域：声明源成员（name = taskId）的规程层声明 × 全体成员整会话。
         // 只取编排规程层（"怎么干"，跨成员可共享）；计划层（STATE.md，"干什么"）
         // 是成员私有任务承诺，对其他成员只会产生 N/A 噪声，不入 run 级对账。
-        // 声明源与涉事成员是独立角色（PR #7 审查意见）：声明源只用于恢复规程，
-        // 未必需纳入对账子集——sessions 只含 wanted 子集，声明源不在子集时不
-        // 能据此误报「无已导入会话」，单独按 run 成员元信息取其会话（仅用于
-        // 声明恢复，不加入对账集：withSession / transcript 物化仍只见子集）。
-        const declarerRef = scope.members.find(m => m.taskId === name)!;
-        const declarerSession = sessions.get(name)
-          ?? await prisma.session.findFirst({
-              where: { taskId: name, ...(declarerRef.framework ? { framework: declarerRef.framework } : {}) },
-              select: { id: true, sourcePath: true },
-            });
+        const declarerSession = sessions.get(name);
         if (!declarerSession) {
           return NextResponse.json(
             { error: `声明源成员 ${name} 无已导入会话`, reason: 'no-sessions' },
@@ -269,19 +252,17 @@ export const POST = withRouteLog(
 
       // ── 对账输入编排 ──
       // 源 bundle 在盘且契约齐全（skill/agent 域）→ sift `--run` 原生对账：
-      // sift 自己扫清单成员、匹配目标调用、转换原生会话（保留原生 id 与子会
-      // 话派生关系），报告带 run 溯源（命中会话/调用数 + 审计单元映射）。sift
-      // `--run` 恒对账清单全体成员（无成员过滤参数，见 fullMemberSet 注释），
-      // 故仅全集请求（未传 members 或恰为全集）走该路径；严格子集回落 DB
-      // transcript 物化，让 `members` 子集约束在两条路径上一致生效。root 域
-      // sift 明确不支持 --run（且组合声明本就走 DB 恢复），恒走 DB transcript
-      // 路径。
+      // sift 自己扫清单成员、匹配目标调用、转换原生会话（保留原生 id 与子会话
+      // 派生关系），报告带 run 溯源（命中会话/调用数 + 审计单元映射）。成员选择
+      // 交给 sift（原生 tool_use 扫描为准）；`members` 参数仅作请求校验，不再
+      // 逐成员物化 transcript。root 域 sift 明确不支持 --run（且组合声明本就
+      // 走 DB 恢复），恒走 DB transcript 路径。
       const outputDir = path.join(tmp, 'out');
       fs.mkdirSync(outputDir, { recursive: true });
 
       // run 域走宽松模式（无 --kind，整会话不切分）；S1 型声明（turn0 注入）无
       // 真名，sift 无法按名匹配 bundle 成员 → 不走 --run，回落 DB 路径。
-      if (kind !== 'root' && fullMemberSet && !(kind === 'run' && workflowRealName == null)) {
+      if (kind !== 'root' && !(kind === 'run' && workflowRealName == null)) {
         const bundleDir = resolveRunBundleDir(runId);
         if (bundleDir) {
           const memberBySession: Record<string, AuditMemberRef> = {};

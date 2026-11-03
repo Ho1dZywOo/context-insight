@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Home from '@/app/page';
 import { AssetList } from '@/components/collection/AssetList';
+import { UploadHudHost, dismissAllUploadHuds } from '@/components/collection/UploadResultHud';
 import { parseAndIndex } from '@/lib/run/reader';
 import { saveRun, type RunImportMeta } from '@/lib/run/run-store';
 import { sessionDurationMs } from '@/lib/session-duration';
@@ -92,13 +93,11 @@ afterEach(() => {
   act(() => root?.unmount())
   root = null
   document.body.innerHTML = ''
+  // 上传结果 HUD 模块态清空（宿主随测试树卸载，残留通知不渗入后续用例）
+  act(() => { dismissAllUploadHuds() })
 })
 
-afterAll(async () => {
-  // 与 collection-list 的 afterAll 清理约定对齐：清掉 beforeAll 种的 3 个成员会话
-  // （250M 级 token 行不残留，否则污染本次 run 内并行文件做全局 session 聚合/计数断言；
-  // turn/toolCall 随会话级联删除）
-  await prisma.session.deleteMany({ where: { taskId: { in: MEMBER_SIDS } } });
+afterAll(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
   if (ORIG_HOME === undefined) delete process.env.CONTEXT_INSIGHT_HOME;
   else process.env.CONTEXT_INSIGHT_HOME = ORIG_HOME;
@@ -119,7 +118,8 @@ async function renderHome(): Promise<void> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  await act(async () => { root!.render(tree) })
+  // 上传结果 HUD 宿主随树挂载（生产由 app layout 常驻提供，此处对齐）
+  await act(async () => { root!.render(createElement('div', null, tree, createElement(UploadHudHost))) })
   await settle()
 }
 
@@ -426,7 +426,9 @@ describe('统一工作台 Run 上传流（导入后上传，与会话行同款�
     await settle()
 
     expect(lakeCalls).toEqual([{ action: 'bundle-upload', runId: 'minidemo01', description: '提交人: 张三\n内容描述: 演示 run', category: 'others', opGen: 'success' }])
+    // 干净成功：HUD 顶部确认 + 上传弹窗即关
     expect(document.body.textContent).toContain('已上传 3 个成员会话')
+    expect(document.querySelector('[role="dialog"]')?.textContent ?? '').not.toContain('上传 Run 到')
   })
 
   it('治理熔断（422）→ 错误展示；缺行成员提示（warnings）', async () => {

@@ -7,10 +7,12 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import type { ReactNode } from "react"
+import type { TurnSearchItem } from "@/lib/observe/collectors/search"
 
 export interface TurnHighlight {
   keyword: string
-  matchField?: "content" | "contentSummary" | "toolResult" | "toolError" | "toolArgs"
+  /** 匹配面单源派生自 TurnSearchItem.matchField（content/摘要/工具三载体/工具名） */
+  matchField?: TurnSearchItem["matchField"]
   toolName?: string
 }
 

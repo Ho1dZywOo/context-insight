@@ -15,6 +15,7 @@ import { joinSubagentIdentities, type TurnIdentity } from '@/lib/observe/turn-id
 import { selectInputContextTurns } from '@/lib/ingest/input-reconstruct';
 import { isContinuationTurn } from '@/lib/shared/command-parser';
 import { wireToolDurations } from '@/lib/tool-timing';
+import { turnWallMs } from '@/lib/observe/turn-duration';
 
 type ToolCallDetail = {
   id: string;
@@ -373,6 +374,10 @@ export async function GET(request: NextRequest) {
       // TS level even when present; normalize via a typed view so the rest of
       // the mapping reads content uniformly.
       const tContent = (t as { content?: string | null }).content ?? null
+      // 工具有效时长（durationMs > 0 优先、wire 兜底）：turnMs 与下方
+      // toolCalls 投影同源同值——单轮耗时口径见 lib/observe/turn-duration
+      const effectiveToolDurations = t.toolCalls.map(tc =>
+        tc.durationMs > 0 ? tc.durationMs : (wireDurations?.get(tc.toolCallId) ?? tc.durationMs));
       return {
       turnId: t.id,
       turnIndex: t.turnIndex,
@@ -410,12 +415,13 @@ export async function GET(request: NextRequest) {
         ? overheadMap.get(t.subagentSessionId) ?? 0
         : overheadMap.get("") ?? 0,
       latencyMs: t.latencyMs,
+      turnMs: turnWallMs(session.framework, session.version, t.latencyMs, effectiveToolDurations),
       createdAt: t.createdAt_ts?.toISOString() ?? t.createdAt.toISOString(),
       completedAt: t.completedAt?.toISOString() ?? null,
       model: t.model,
       contextWindowLimit: limitFor(t),
       finishReason: t.finishReason,
-      toolCalls: t.toolCalls.map(tc => {
+      toolCalls: t.toolCalls.map((tc, i) => {
         const detail: ToolCallDetail = tc;
         return {
           id: tc.id,
@@ -428,7 +434,7 @@ export async function GET(request: NextRequest) {
           errorMessage: includeDetail ? (detail.errorMessage ?? null) : undefined,
           // DB per-call duration 采集侧未回填（全 0）：wire 轮间隙推导覆盖（cpx 捕获）；
           // 无 wire（原生 opencode）保持 0，Perf 分段退回 token 估算
-          durationMs: tc.durationMs > 0 ? tc.durationMs : (wireDurations?.get(tc.toolCallId) ?? tc.durationMs),
+          durationMs: effectiveToolDurations[i],
           isSkillRelated: (includeDetail || includeToolDetail) ? (detail.isSkillRelated ?? false) : undefined,
         }
       }),
@@ -482,6 +488,7 @@ export async function GET(request: NextRequest) {
             contentSummary: compSummary,
             contentLength: compContent?.length ?? 0,
             agentName: 'continuation',
+            turnMs: 0,
             isSubagent: item.isSubagent,
             subagentName: item.subagentName,
             subagentSessionId: item.subagentSessionId,

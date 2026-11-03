@@ -72,9 +72,15 @@ const skillsAll = {
   events: [
     { skillName: 'rop-skill-x', eventType: 'invoke', member: { taskId: 'ses_mini_a', label: '成员A' } },
     { skillName: 'rop-skill-x', eventType: 'invoke', member: { taskId: 'ses_mini_b', label: '成员B' } },
-    { skillName: 'rop-agent-z', eventType: 'dispatch', member: { taskId: 'ses_mini_b', label: '成员B' } },
   ],
-  total: 3,
+  // 真实契约：collector 把 dispatch 分流进 dispatches（events 恒不含 dispatch）。
+  // event 源＝真实派发段（agent 域目标）；member 源＝工作流成员种群推导
+  //（归 workflow/run 域，不入 agent 域）。
+  dispatches: [
+    { id: 'ev-t1-rop-agent-z', name: 'rop-agent-z', turnId: 'turn_b_3', at: null, verify: false, member: { taskId: 'ses_mini_b', label: '成员B', framework: null }, tokens: null, source: 'event' },
+    { id: 'member-ses_mini_c', name: '成员种群·验收', turnId: 'turn_c_0', at: null, verify: true, member: { taskId: 'ses_mini_c', label: '成员C', framework: null }, tokens: null, source: 'member' },
+  ],
+  total: 2,
 };
 
 // run 级对账端点收到的请求体（kind/name/members 断言用）
@@ -494,6 +500,9 @@ describe('Run 详情 Audit tab（四域审计重构）', () => {
     const row = document.querySelector('[data-audit-target="agent:rop-agent-z"]')!;
     expect(row.textContent).toContain('rop-agent-z');
     expect(row.textContent).toContain('成员B');
+    // member 源派发（工作流成员种群推导）不入 agent 域——归 workflow/run 域
+    expect(document.querySelector('[data-audit-target="agent:成员种群·验收"]')).toBeNull();
+    expect([...document.querySelectorAll('[data-audit-target^="agent:"]')]).toHaveLength(1);
     await act(async () => {
       row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });

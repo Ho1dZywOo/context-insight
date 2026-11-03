@@ -7,7 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // GET /api/observe/run/[runId]/turns/search —— run 跨成员全域关键词搜索
-// （content / summary / 工具 args / result / error 五路匹配共用
+// （content / summary / 工具 args / result / error / 工具名 六路匹配共用
 // observe/collectors/search 单点；结果附 member 归因，契约镜像 session
 // turns/search 端点；design: docs/design/run-observe-parity/design.md §4）。
 // 搜索不受 member 过滤约束（跨成员定位是本端点的核心价值）。
@@ -59,9 +59,9 @@ export const GET = withRouteLog(
       return NextResponse.json({ items: [], total: 0 });
     }
 
-    // 五路候选下推（可安全时）：OR 覆盖 content / contentSummary / 工具
-    // args / result / error——与 matchTurnSearch 的五路一一对应，DB 命中集
-    // ⊇ 内存精确命中集，total 恒等于全量命中数（全量计数语义不变）。
+    // 六路候选下推（可安全时）：OR 覆盖 content / contentSummary / 工具
+    // args / result / error / 工具名——与 matchTurnSearch 的六路一一对应，
+    // DB 命中集 ⊇ 内存精确命中集，total 恒等于全量命中数（全量计数语义不变）。
     const trimmed = keyword.trim();
     const keywordFilter = canPushDownKeyword(trimmed)
       ? {
@@ -75,6 +75,7 @@ export const GET = withRouteLog(
                     { argsJson: { contains: trimmed } },
                     { resultJson: { contains: trimmed } },
                     { errorMessage: { contains: trimmed } },
+                    { toolName: { contains: trimmed } },
                   ],
                 },
               },

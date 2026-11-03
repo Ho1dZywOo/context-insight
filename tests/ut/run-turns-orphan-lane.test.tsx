@@ -62,7 +62,7 @@ function render(turns: TurnsBlockTurn[], bridges: TurnsBridge[] = [], selectedTu
   return renderToStaticMarkup(
     createElement(SessionBlock, {
       session,
-      state: { turns, total: turns.length, page: 1, loading: false },
+      state: { turns, total: turns.length, loading: false },
       bridges,
       selectedTurnId,
       onSelectTurn: () => {},

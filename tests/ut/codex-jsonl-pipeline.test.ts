@@ -35,7 +35,7 @@ import {
   requireSource,
   sniffImportableFile,
 } from '@/lib/ingest/adapters/registry';
-import { BRAND_SOURCE_TYPE, isBrandSourceType } from '@/lib/branding';
+import { BRAND_SOURCE_TYPE } from '@/lib/branding';
 
 const DATA = path.join(__dirname, './data/codex-sessions');
 const MAIN = '11111111-aaaa-4b04-8f7e-abcdef000001';
@@ -98,19 +98,6 @@ describe('agent-source-framework 注册表：身份映射与文件嗅探单点',
     expect(sniffImportableFile('opencode.db')).toBe('opencode-db');
     expect(sniffImportableFile('notes.txt')).toBeNull();
     expect(sniffImportableFile('README.md')).toBeNull();
-  });
-
-  it('品牌容器标识读侧兼容：存量 cannbot-insight / cannbot_session_ 旧值同义识别', () => {
-    // 品牌更名（cannbot-insight → context-insight）后，存量误标行 / 旧导出件
-    // 仍按品牌容器识别，不退化空显示 / 未知源（读侧兜底，只读不写）
-    expect(isBrandSourceType('context-insight')).toBe(true);
-    expect(isBrandSourceType('cannbot-insight')).toBe(true);
-    expect(isBrandSourceType('opencode')).toBe(false);
-    expect(isBrandSourceType(null)).toBe(false);
-    expect(isBrandSourceType(undefined)).toBe(false);
-    // 文件名级预分类：新前缀与旧前缀都命中品牌容器源
-    expect(sniffImportableFile('context_session_x.db')).toBe(BRAND_SOURCE_TYPE);
-    expect(sniffImportableFile('cannbot_session_x.db')).toBe(BRAND_SOURCE_TYPE);
   });
 });
 

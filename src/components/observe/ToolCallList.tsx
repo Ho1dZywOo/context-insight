@@ -101,7 +101,7 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
   if (currentKw !== prevKw) {
     setPrevKw(currentKw)
     if (currentKw && highlight) {
-      const isToolMatch = highlight.matchField === "toolResult" || highlight.matchField === "toolError" || highlight.matchField === "toolArgs"
+      const isToolMatch = highlight.matchField === "toolResult" || highlight.matchField === "toolError" || highlight.matchField === "toolArgs" || highlight.matchField === "toolName"
       if (isToolMatch) {
         const lower = currentKw.trim().toLowerCase()
         if (lower) {
@@ -117,6 +117,13 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
               (tc.errorMessage?.toLowerCase().includes(lower) ?? false)
             ) {
               toExpand.add(tc.id)
+            }
+          }
+          // 工具名命中：名字含关键词的工具一并展开（关键词常是名字子串，
+          // 如搜 codebase-memory 命中同前缀的多个 MCP 工具）
+          if (highlight.matchField === "toolName") {
+            for (const tc of nonSkillCalls) {
+              if (tc.toolName.toLowerCase().includes(lower)) toExpand.add(tc.id)
             }
           }
           if (toExpand.size > 0) {

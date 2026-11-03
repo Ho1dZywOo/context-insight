@@ -191,8 +191,8 @@ export function formatTimestamp(ts: string | null): string {
   try {
     const d = new Date(ts)
     const year = d.getFullYear()
-    const month = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
+    const month = String(d.getMonth() + 1)
+    const day = String(d.getDate())
     const hour = String(d.getHours()).padStart(2, '0')
     const minute = String(d.getMinutes()).padStart(2, '0')
     return `${year}/${month}/${day} ${hour}:${minute}`
@@ -231,7 +231,7 @@ function formatWindow(start: string | null, end: string | null): string {
   try {
     const s = new Date(start)
     const pad = (n: number) => String(n).padStart(2, "0")
-    const md = (d: Date) => `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`
+    const md = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`
     const hm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`
     if (!end) return `${md(s)} ${hm(s)}`
     const e = new Date(end)
@@ -374,24 +374,9 @@ export function OverviewPanels({ identity, metrics, turns, skills, pending = fal
       skillName: se.skillName,
       eventType: se.eventType,
       isSubagent: t.isSubagent,
+      turnTokens: { totalTokens: t.totalTokens },
     }))
   ), [turns])
-  // 技能 token 汇总按 turn 去重：同一 turn 内某技能可能有多条事件
-  // （load/use/invoke/dispatch 均计入），每条都携带整 turn 的 totalTokens，
-  // 逐事件累加会把该 turn 计多次、高估技能旁的 `…t`。这里按 turn 内技能名
-  // 去重（每 turn 至多计一次），跨 turn 正常累加。
-  const skillTokenTotals = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const t of turns) {
-      const seen = new Set<string>()
-      for (const se of t.skillEvents ?? []) {
-        if (seen.has(se.skillName)) continue
-        seen.add(se.skillName)
-        map.set(se.skillName, (map.get(se.skillName) ?? 0) + t.totalTokens)
-      }
-    }
-    return map
-  }, [turns])
   const dispatchOnlyNames = useMemo(() => dispatchOnlySkillNames(skillEventsFlat), [skillEventsFlat])
   const displaySkills = useMemo(() => skills.filter(sn => !dispatchOnlyNames.has(sn.skillName)), [skills, dispatchOnlyNames])
   const toolCallStats = useMemo(() => {
@@ -568,7 +553,8 @@ export function OverviewPanels({ identity, metrics, turns, skills, pending = fal
             ) : (
               <div className="divide-y divide-foreground/[0.06] overflow-hidden rounded-xl bg-foreground/[0.03] dark:bg-foreground/[0.06]">
                 {displaySkills.map(sn => {
-                  const skillTokens = skillTokenTotals.get(sn.skillName) ?? 0
+                  const skillEvents = skillEventsFlat.filter(e => e.skillName === sn.skillName)
+                  const skillTokens = skillEvents.reduce((sum, e) => sum + e.turnTokens.totalTokens, 0)
                   const formatT = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`
                   return (
                     <div key={sn.skillName} className="flex items-center gap-2.5 px-3 py-2 transition-colors hover:bg-foreground/[0.04]">

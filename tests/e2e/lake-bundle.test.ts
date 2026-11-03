@@ -1,12 +1,12 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// This program is free software that you can redistribute it and/or modify it under the terms of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// You may refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// lake-bundle IT（run 级上传：数据源 = insight，与会话上传同款「导入后
+// cannbay-bundle IT（run 级上传：数据源 = insight，与会话上传同款「导入后
 // 上传」链路）：本地导入 bundle → run-store 落盘（manifest + report 副本）
 // → uploadLakeBundle(prisma, runId, …, category)（staging + 治理）→ push →
 // 列表 → lake 导入 job 闭环。统一布局（目录即目录，按数据加载）：bundle 落

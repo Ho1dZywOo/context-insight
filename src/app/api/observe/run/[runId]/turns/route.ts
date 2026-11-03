@@ -23,6 +23,14 @@ function parsePositiveInt(v: string | null): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** offset 语义（补拉）：0 起（与 page 同传时优先）——客户端两段式拉齐
+ *  剩余轮次的续拉参数，非法值按缺省走 page 分页 */
+function parseNonNegativeInt(v: string | null): number | null {
+  if (v == null || v === '') return null;
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 export const GET = withRouteLog(
   'observe/run/turns',
   async (request: NextRequest, { params }: { params: Promise<{ runId: string }> }) => {
@@ -42,12 +50,13 @@ export const GET = withRouteLog(
 
     const page = parsePositiveInt(searchParams.get('page')) ?? 1;
     const pageSize = parsePositiveInt(searchParams.get('pageSize')) ?? undefined;
+    const offset = parseNonNegativeInt(searchParams.get('offset'));
     const includeToolResult = searchParams.get('includeToolDetail') === 'true';
     // 轮级错误摘要（Overview）：服务端预算错误计数与消息提取，消费方不再
     // 需要 includeToolDetail 的 18MB 级原文
     const includeErrorDigest = searchParams.get('includeErrorDigest') === 'true';
 
-    const result = await collectScopeTurns(prisma, scope, { member, page, pageSize, includeToolResult, includeErrorDigest });
+    const result = await collectScopeTurns(prisma, scope, { member, page, pageSize, offset, includeToolResult, includeErrorDigest });
     return NextResponse.json(result);
   },
 );

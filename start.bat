@@ -9,7 +9,7 @@
 setlocal enabledelayedexpansion
 chcp 65001 >nul 2>&1
 
-:: CANNBot-Insight Windows startup script
+:: Context-Insight Windows startup script
 :: Equivalent to start.sh for native Windows (cmd.exe)
 
 set "SCRIPT_DIR=%~dp0"
@@ -181,7 +181,7 @@ echo [start] ERROR: No available port in range %BASE_PORT%-%BASE_PORT+127
 exit /b 1
 
 :port_found
-echo [start] Launching CANNBot-Insight on port %PORT%...
+echo [start] Launching Context-Insight on port %PORT%...
 
 :: ============================================================
 :: Launch smart-agent (Python) in background (optional, AI audit v2)
@@ -203,14 +203,14 @@ if !errorlevel! neq 0 (
 )
 echo [start] Launching smart-agent ^(Python^) on port %AGENT_PORT%...
 pushd "%SCRIPT_DIR%smart-agent"
-set "CANNBOT_AGENT_PORT=%AGENT_PORT%"
+set "CONTEXT_AGENT_PORT=%AGENT_PORT%"
 start /b python server.py
 popd
-set "CANNBOT_AGENT_URL=http://localhost:%AGENT_PORT%"
+set "CONTEXT_AGENT_URL=http://localhost:%AGENT_PORT%"
 for /l %%i in (1,1,10) do (
     curl -s "http://localhost:%AGENT_PORT%/health" >nul 2>&1
     if !errorlevel! equ 0 (
-        echo [start] smart-agent ready at %CANNBOT_AGENT_URL%
+        echo [start] smart-agent ready at %CONTEXT_AGENT_URL%
         goto :agent_done
     )
     timeout /t 1 /nobreak >nul

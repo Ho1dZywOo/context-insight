@@ -29,16 +29,18 @@ import {
   runAuditKey,
   type AuditKind,
 } from "@/lib/skill-audit-job";
-import { deriveDomainTargets, targetMemberLabels, type RunAuditTarget } from "@/lib/run/audit-registry";
+import { deriveDomainTargets, deriveAgentTargetsFromDispatches, targetMemberLabels, type RunAuditTarget } from "@/lib/run/audit-registry";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
 import { buildMainAgentTurnMap, type TurnDigest } from "@/lib/shared/turn-digest";
 import type { RunMemberRow } from "@/lib/run/member-rows";
 import { AuditReportPanel } from "@/components/run/audit/AuditReportPanel";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 type AuditDomain = "skill" | "agent" | "workflow" | "run";
 
 interface SkillsResponse {
   events: Array<{ skillName: string; eventType: string; member: { taskId: string; label: string | null } | null }>;
+  dispatches: Array<{ name: string; member: { taskId: string; label: string | null } | null; source: "event" | "member" }>;
 }
 
 interface SelectedTarget {
@@ -351,6 +353,7 @@ export interface RunAuditTabProps {
 }
 
 export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
+  const dataEpoch = useRunDataEpoch();
   const [domain, setDomain] = useState<AuditDomain>("skill");
   const [selected, setSelected] = useState<SelectedTarget | null>(null);
   // 选中 ≠ 发起：仅在用户点击「开始对账」后才挂载报告（面板挂载即自动
@@ -360,10 +363,8 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [workflowAvail, setWorkflowAvail] = useState<Map<string, { available: boolean; name: string | null }>>(() => new Map());
-  // store 版本订阅：任一目标 job 更新 → 导览瓦片重算。版本号必须进 introTiles
-  // 依赖——否则 store 快照变了 useMemo 仍返回旧值，「已审 / 可对账成员」计数
-  // 停留在对账完成前的旧值（store 版本没进 deps，仅重渲不重算）。
-  const auditVersion = useSyncExternalStore(subscribeSkillAudit, getSkillAuditVersion, () => 0);
+  // store 版本订阅：任一目标 job 更新 → 导览瓦片重算
+  useSyncExternalStore(subscribeSkillAudit, getSkillAuditVersion, () => 0);
   // turn-digest 缓存（成员 taskId → turnIndex→turnId 映射的 promise）：finding
   // 深链用，懒取一次即缓存（refreshEpoch 换代时组件重建、缓存随之失效）
   const turnMapsRef = useRef(new Map<string, Promise<Map<number, string>>>());
@@ -399,11 +400,14 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
         setLoaded(true)
       })
     return () => { cancelled = true }
-  }, [runId])
+  }, [runId, dataEpoch])
 
   const events = useMemo(() => data?.events ?? [], [data])
+  const dispatches = useMemo(() => data?.dispatches ?? [], [data])
   const skillTargets = useMemo(() => deriveDomainTargets(events, "skill"), [events])
-  const agentTargets = useMemo(() => deriveDomainTargets(events, "agent"), [events])
+  // agent 域目标来自派发种群（events 恒不含 dispatch——collector 把它分流进
+  // dispatches；事件源=真实派发段，member 源=成员种群不入 agent 域）
+  const agentTargets = useMemo(() => deriveAgentTargetsFromDispatches(dispatches), [dispatches])
 
   // run 域声明源：首个编排声明可恢复的成员（各成员注入同一份 run 级规程，
   // 取首即可；漂移在 workflow 域按成员对账审视）
@@ -480,10 +484,7 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
       { label: "已审", value: fmtInt(audited) },
       { label: "涉事成员", value: fmtInt(memberSet.size) },
     ]
-    // auditVersion 是「任一 job 更新即自增」的 store 版本号——它是 memo 失效的
-    // 触发器，值本身不进瓦片内容（exhaustive-deps 视其为「不必要依赖」属误报）
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [domain, targets, members, runId, workflowAvail, declarer, probing, auditVersion])
+  }, [domain, targets, members, runId, workflowAvail, declarer, probing])
 
   const select = (sel: SelectedTarget | null) => {
     setSelected(sel);

@@ -14,12 +14,14 @@
 
 import { useMemo } from "react";
 import { FileReadAnalysis } from "@/components/observe/FileReadAnalysis";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 export interface RunFilesTabProps {
   runId: string;
 }
 
 export function RunFilesTab({ runId }: RunFilesTabProps) {
+  const dataEpoch = useRunDataEpoch();
   const endpoints = useMemo(() => {
     const base = `/api/observe/run/${encodeURIComponent(runId)}`;
     return {
@@ -27,7 +29,7 @@ export function RunFilesTab({ runId }: RunFilesTabProps) {
       fileRestore: `${base}/file-restore`,
       dirRestore: `${base}/dir-restore`,
     };
-  }, [runId]);
+  }, [runId, dataEpoch]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-muted/30 ring-1 ring-foreground/[0.06] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">

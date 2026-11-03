@@ -14,11 +14,12 @@
 // 结果同款必选项（共享表单件 UploadFormFields，双通路视觉与校验锁步）：
 // - 会话体：预填首问/会话用户 + baseline 勾选，凭据预检 + 引导弹窗，成功即关
 // - run 体：预填 run 名称 + 包内结果视图（unchanged/成员数/缺正文警告），
-//   手动关闭；统一布局（目录即目录）——范式目录 = 物理落点 <范式>/<runId>/，
-//   会话与 run 都可上传至任意顶层目录
+//   有缺正文告警驻留明细、干净成功即关；统一布局（目录即目录）——范式目录 =
+//   物理落点 <范式>/<runId>/，会话与 run 都可上传至任意顶层目录
 // 上传 action 走 registry（kind 分发事实单点）。受控组件——open/onOpenChange
-// 由调用方管理，上传开始与结果经 onUploadStart/onResult 回调交还调用方呈现
-// （列表行状态图标 / 详情页 toast）。取代旧双弹窗（刀3 退役）。
+// 由调用方管理，上传开始与结果经 onUploadStart/onResult 回调交还调用方（列表
+// 行状态图标等）；结果提示统一在组件内经 notifyUploadResult 顶部 HUD 弹出
+// （全路径一致，调用方无需各自接反馈）。取代旧双弹窗（刀3 退役）。
 
 import { useEffect, useState } from 'react'
 
@@ -34,6 +35,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { LakeTokenDialog } from '@/components/LakeTokenDialog'
+import { notifyUploadResult } from '@/components/collection/UploadResultHud'
 import {
   findStoredAuthEntry,
   isCredentialErrorCode,
@@ -80,6 +82,8 @@ interface UploadDialogProps {
 
 function formatTime(iso: string | null | undefined): string {
   if (!iso) return '—'
+  // `new Date` 对非法字符串不 throw，只产 Invalid Date（getTime() 得 NaN）；
+  // try/catch 拦不住，必须显式 NaN 兜底返回原串（否则渲染 NaN/NaN NaN:NaN）
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return String(iso)
   const month = String(d.getMonth() + 1).padStart(2, '0')
@@ -331,6 +335,8 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
 }) {
   const form = useUploadForm(open, target ? { desc: (target.query ?? '').trim(), submitter: (target.user ?? '').trim() } : null)
   const [uploading, setUploading] = useState(false)
+  // 失败驻留弹窗内（可读可复制，重试上下文不丢）；成功即关——结果时刻由 HUD 呈现
+  const [error, setError] = useState<string | null>(null)
   const cred = useCredentialPrecheck(open)
 
   // 同步上传原生会话（仅捕获行显示）：勾选即预检（native-preview 只读探测），
@@ -381,6 +387,7 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
       return
     }
     setUploading(true)
+    setError(null)
     onUploadStart?.()
     try {
       const res = await fetch('/api/ingest/lake', {
@@ -413,9 +420,24 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
         else if (native?.status === 'not-found') message = `捕获已上传；原生会话未找到：${native.reason ?? '未知原因'}`
         else if (native?.status === 'failed') message = `捕获已上传；原生会话上传失败：${native.reason ?? '未知原因'}`
       }
-      onResult?.({ ok: res.ok, message })
-      if (res.ok) onOpenChange(false)
+      if (res.ok) {
+        // 成功：HUD 确认（原生同步结果作副文）+ 即关
+        notifyUploadResult({
+          ok: true,
+          title: `已上传到 ${BAY_NAME}`,
+          description: message ?? null,
+        })
+        onResult?.({ ok: true, message })
+        onOpenChange(false)
+      } else {
+        // 失败：HUD 报错 + 弹窗驻留明细
+        notifyUploadResult({ ok: false, title: '上传失败', description: message ?? '未知错误' })
+        setError(message ?? '上传失败')
+        onResult?.({ ok: false, message })
+      }
     } catch {
+      notifyUploadResult({ ok: false, title: '上传失败', description: '网络错误' })
+      setError('网络错误')
       onResult?.({ ok: false, message: 'Upload failed: network error' })
     } finally {
       setUploading(false)
@@ -455,6 +477,15 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
               </p>
             )}
           </div>
+        )}
+        {uploading && (
+          <div className="flex items-center gap-2 py-1 justify-center">
+            <LoaderIcon className="size-4 animate-spin" />
+            <span className="text-sm text-muted-foreground">上传中（敏感信息清洗可能耗时）...</span>
+          </div>
+        )}
+        {error && (
+          <p className="text-sm text-red-600 dark:text-red-400 break-words whitespace-pre-wrap">{error}</p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={uploading}>取消</Button>
@@ -525,18 +556,36 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
           cred.setTokenReason(data.code)
           cred.setTokenDialogOpen(true)
         }
+        // 失败：HUD 报错 + 弹窗驻留明细
+        notifyUploadResult({ ok: false, title: '上传失败', description: message })
         setError(message)
         onResult?.({ ok: false, message })
         return
       }
-      setResult({
-        unchanged: data.unchanged === true,
-        sessionCount: typeof data.sessionCount === 'number' ? data.sessionCount : 0,
-        missingSessions: Array.isArray(data.missingSessions) ? data.missingSessions : [],
-      })
+      const unchanged = data.unchanged === true
+      const sessionCount = typeof data.sessionCount === 'number' ? data.sessionCount : 0
+      const missingSessions = Array.isArray(data.missingSessions) ? data.missingSessions as string[] : []
+      setResult({ unchanged, sessionCount, missingSessions })
+      if (missingSessions.length > 0) {
+        // 成功但有缺正文告警：HUD 警示（琥珀）+ 弹窗驻留明细（完整 sid 清单）
+        notifyUploadResult({
+          ok: true,
+          tone: 'warning',
+          title: `已上传 ${sessionCount} 个成员会话到 ${BAY_NAME}`,
+          description: `${missingSessions.length} 个成员会话不在 insight，包内缺其正文：${missingSessions.slice(0, 3).join(', ')}${missingSessions.length > 3 ? ' 等' : ''}`,
+        })
+      } else {
+        // 干净成功：HUD 确认 + 即关
+        notifyUploadResult({
+          ok: true,
+          title: unchanged ? '包内容与数据仓一致，无需重新上传' : `已上传 ${sessionCount} 个成员会话到 ${BAY_NAME}`,
+        })
+        onOpenChange(false)
+      }
       onResult?.({ ok: true, message: null, warnings: Array.isArray(data.warnings) ? data.warnings : [] })
     } catch (e) {
       const message = e instanceof Error ? e.message : '网络错误'
+      notifyUploadResult({ ok: false, title: '上传失败', description: message })
       setError(message)
       onResult?.({ ok: false, message })
     } finally {

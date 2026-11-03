@@ -11,8 +11,8 @@
 // 锁：①context 全量瘦轮次投影（member 归因 + root/subagent + 每 agent 窗口上限、
 // subagent 模型归一、无重负载字段）；
 // ②executions 镜像 session 端点形状（items/root/subagents + 技能挂接 + member 闸）；
-// ③turns light 投影新增 cache/context 字段 + 子代理模型归一 + 大页放行
-// （单成员与跨成员混排统一 20000 上限）。
+// ③turns light 投影新增 cache/context 字段 + 子代理模型归一 + 单成员大页放行
+// （跨成员混排恒 500 上限）。
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';

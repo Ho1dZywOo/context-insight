@@ -148,12 +148,9 @@ export function LakeSourceView() {
   const importRun = async (sid: string, recording: 'capture' | 'native'): Promise<{ error: string | null; insightUrl?: string | null }> => {
     try {
       const res = await lakeAction({ action: 'import', sid, recording });
-      const data = await res.json().catch(() => ({})) as { result?: { imported?: boolean; query?: string | null; reason?: 'imported' | 'imported-empty' | 'already-exists' | 'no-interactions'; framework?: string | null; version?: string | null }; insightUrl?: string; error?: string };
+      const data = await res.json().catch(() => ({})) as { result?: { ok?: boolean; reason?: string }; insightUrl?: string; error?: string };
       if (!res.ok) return { error: data.error ?? `HTTP ${res.status}` };
-      // 未真正写库（no-interactions：空/不可读捕获）不跳转——权威深链指向不存在
-      // 的行会 404；already-exists（imported:false 但 query 有值）深链仍指向既有行，
-      // 照常跳转
-      if (data.result?.reason === 'no-interactions') return { error: 'No parseable records (empty or unrecognized file)' };
+      if (data.result && data.result.ok === false) return { error: data.result.reason ?? 'Import failed' };
       setRefreshKey(k => k + 1);
       // 跳转只认响应回传的权威深链（framework = 刚落库行的记录类）
       return { error: null, insightUrl: data.insightUrl ?? null };

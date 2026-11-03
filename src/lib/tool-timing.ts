@@ -12,7 +12,14 @@
 // 派发类（task/agent）窗口 = subagent 整段执行，内含其 LLM 时间——不进工具时长
 // （防与 Σlatency 双计），但算并行度时是并行行为。同批多工具均分间隙（保守串行
 // 假设：Σ 正确，单调用时刻是近似）。末轮无后续请求的窗口拿不到间隙，不计。
-// 原生导入（无 wire 报文）不适用：评分层照旧无法评判，Perf 层退回 token 估算。
+// 时间戳模型（按窗口载体行与响应行的间隙符号逐窗判别）：
+// - 模型 A（proxy wire 捕获）：assistant 行 ts = 响应到达，载体行 ts = 下一请求
+//   → 窗口 = [响应行 ts, 载体行 ts]；
+// - 模型 B（cc-db-turn 原生导出，lake bundle .native）：assistant 行
+//   ts = 请求发出、duration_ms = 请求→响应，工具结果载体行与之同戳（间隙 ≤ 0
+//   无信息）→ 窗口 = [ts + duration_ms, 下一请求行（下一条 assistant 行）ts]。
+// 非 claude 格式（如原生 opencode 的消息时长已含 part 执行）不适用：评分层照旧
+// 无法评判，Perf 层退回 token 估算。
 
 import fs from 'node:fs';
 import { parseJsonlLines, listSubagentSessions, type ClaudeJsonlLine } from '@/lib/ingest/adapters/claude-jsonl';
@@ -50,9 +57,21 @@ interface ChainPass {
 }
 
 function passChain(lines: ClaudeJsonlLine[], chainSid: string): ChainPass {
-  interface Window { respTs: number; calls: Array<{ id: string; name: string }>; resultTs: number | null }
+  interface Window {
+    /** 本轮响应行时刻（模型 A：响应到达；模型 B：请求发出） */
+    respTs: number;
+    calls: Array<{ id: string; name: string }>;
+    /** 首个携带该批任一结果的载体行时刻 */
+    resultTs: number | null;
+    /** 请求→响应时长（模型 B 的响应完成锚点） */
+    durationMs: number | null;
+    /** 下一请求行（下一条 assistant 行）时刻（模型 B 的窗口闭合边界） */
+    nextReqTs: number | null;
+  }
   const byId = new Map<string, Window>();
   const windows: Window[] = [];
+  /** 最近一条带工具的 assistant 行的窗口（其后的下一条 assistant 行闭合它） */
+  let pending: Window | null = null;
   let llmMs = 0;
 
   for (const line of lines) {
@@ -62,16 +81,21 @@ function passChain(lines: ClaudeJsonlLine[], chainSid: string): ChainPass {
     if (!msg) continue;
     const blocks = Array.isArray(msg.content) ? msg.content.filter(b => b != null && typeof b === 'object') : [];
     if (line.type === 'assistant') {
-      llmMs += line.duration_ms ?? 0;
+      const durationMs = typeof line.duration_ms === 'number' ? line.duration_ms : null;
+      llmMs += durationMs ?? 0;
+      // 任意 assistant 行（无论是否带工具）都是一次新请求：闭合上一窗口
+      if (pending) pending.nextReqTs = ts;
       const calls = blocks
         .filter(b => (b as { type?: string }).type === 'tool_use')
         .map(b => {
           const u = b as { id?: unknown; name?: unknown };
           return { id: typeof u.id === 'string' ? u.id : '', name: typeof u.name === 'string' ? u.name : '?' };
         });
+      pending = null;
       if (calls.length === 0) continue;
-      const w: Window = { respTs: ts, calls, resultTs: null };
+      const w: Window = { respTs: ts, calls, resultTs: null, durationMs, nextReqTs: null };
       windows.push(w);
+      pending = w;
       for (const c of calls) if (c.id) byId.set(c.id, w);
     } else if (line.type === 'user') {
       for (const b of blocks) {
@@ -85,8 +109,19 @@ function passChain(lines: ClaudeJsonlLine[], chainSid: string): ChainPass {
 
   const intervals: ToolInterval[] = [];
   for (const w of windows) {
-    if (w.resultTs == null) continue;
-    const gap = w.resultTs - w.respTs;
+    if (w.resultTs == null) continue;                    // 结果未归还（末轮/截断）不计
+    let start: number, end: number;
+    if (w.resultTs > w.respTs) {
+      // 模型 A（proxy wire）：响应行 = 到达时刻，载体行 = 下一请求
+      start = w.respTs;
+      end = w.resultTs;
+    } else if (w.durationMs != null && w.durationMs > 0 && w.nextReqTs != null) {
+      // 模型 B（cc-db-turn 原生导出）：载体行与响应行同戳（间隙 ≤ 0 无信息），
+      // 响应完成 = 响应行 ts + duration_ms，窗口闭合于下一请求行
+      start = w.respTs + w.durationMs;
+      end = w.nextReqTs;
+    } else continue;                                     // 无诚实锚点可用
+    const gap = end - start;
     if (gap <= 0) continue;                              // 负间隙（乱序/时钟异常）不计
     const n = w.calls.length;
     w.calls.forEach((c, k) => {
@@ -95,8 +130,8 @@ function passChain(lines: ClaudeJsonlLine[], chainSid: string): ChainPass {
         toolUseId: c.id,
         toolName: c.name,
         chainSid,
-        startMs: w.respTs + Math.round((gap * k) / n),
-        endMs: w.respTs + Math.round((gap * (k + 1)) / n),
+        startMs: start + Math.round((gap * k) / n),
+        endMs: start + Math.round((gap * (k + 1)) / n),
         kind: DISPATCH_RE.test(c.name) ? 'dispatch' : 'local',
       });
     });
@@ -146,7 +181,12 @@ export function deriveToolTiming(sourcePath: string, taskId: string): ToolTiming
   return value;
 }
 
-/** Perf 页用：toolUseId → 执行毫秒（DB durationMs 为 0 时覆盖）。非 claude 格式（原生 opencode 无 wire）返回 null */
+/** Perf 页用：toolUseId → 执行毫秒（DB durationMs 为 0 时覆盖）。非 claude 格式
+ * （原生 opencode 无 wire）返回 null。框架门即内容门：lake 原生导出虽统一转
+ * claude 格式布局，但 opencode 源的导出把工具执行折叠进 duration_ms（消息时
+ * 长，实证：subagent 工具轮 dur 700–1000s、工具完成后到下一请求的间隙 Σ 仅
+ * 5s），post-completion 窗口是主链空转——按工具计会错，故 framework 保留原值
+ * 的会话一律不做 wire 增补（claude-code 源导出为纯 LLM 时长，走框架门放行）。 */
 export function wireToolDurations(
   sourcePath: string | null,
   taskId: string,

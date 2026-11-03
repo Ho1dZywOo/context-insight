@@ -20,8 +20,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { RunCanvas } from "@/components/run/RunCanvas";
 import { RunNodeDetail } from "@/components/run/RunNodeDetail";
 import { RunOverviewTab } from "@/components/run/RunOverviewTab";
-import { RunTabBar, RUN_TABS, RUN_TABS_DEFAULT_VISIBLE } from "@/components/run/RunTabBar";
-import { RunRetryLedger } from "@/components/run/RunRetryLedger";
+import { RunTabBar, RUN_TABS, RUN_TABS_DEFAULT_VISIBLE } from "@/components/run/RunTabBar";import { RunRetryLedger } from "@/components/run/RunRetryLedger";
 import { RunSubgraphDialog } from "@/components/run/RunSubgraphDialog";
 import { RunTrace } from "@/components/run/RunTrace";
 import { RunTurnsTab } from "@/components/run/RunTurnsTab";
@@ -36,6 +35,7 @@ import { RunReplayTab } from "@/components/run/RunReplayTab";
 import { runMemberRowsOf, type RunMemberRow } from "@/lib/run/member-rows";
 import { normalizeRunIdParam } from "@/lib/run/identity";
 import { prefetchRunOverview } from "@/lib/run/overview-data";
+import { RunDataEpochContext } from "@/lib/run/data-epoch";
 import { METRIC_EMPTY, METRIC_SCALE, REDUNDANCY_BANDS, RUN_COLORS, RUN_STATUS_META, WATER_CRITICAL_PCT, bandLabel } from "@/components/run/run-theme";
 import { LENS_META, type LensKey } from "@/lib/run/run-metrics";
 import { Button } from "@/components/ui/button";
@@ -295,20 +295,24 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
 
   // ── 刷新（session 页刷新能力在 run 工作台的对偶，刀J2 后补全）────────────
   // solo = 增量刷新成员会话源；bundle = 逐个刷新有源的成员会话。自取数 tab 经
-  // refreshEpoch 重挂载重取（tab/member/turnId 都是 URL 镜像态，重挂后原位恢复）。
+  // 数据纪元原地重取（RunDataEpochContext——tab 保持挂载，tab/member/turnId
+  // URL 镜像态与滚动/展开/搜索/详情仓等阅读态全部保持）；仅 fullRebuild（源
+  // 回溯变化、轮次可能重排）走身份 key 整树重挂。
   const [refreshing, setRefreshing] = useState(false);
   const [refreshEpoch, setRefreshEpoch] = useState(0);
+  const [identityEpoch, setIdentityEpoch] = useState(0);
   const refreshingRef = useRef(false);
 
-  const reloadRun = useCallback(async () => {
+  const reloadRun = useCallback(async (hard = false) => {
     try {
-      // 自取数 tab 经 refreshEpoch 重挂载：先换新 promise，重挂的 Overview 消费
-      // 缓存即取到刷新后数据（fresh 覆盖旧 promise，随后 setData + epoch bump）
+      // 自取数 tab 经数据纪元原地重取：先换新 promise，订阅纪元的 Overview 消费
+      // 缓存即取到刷新后数据（fresh 覆盖旧 promise，随后 setData + 纪元 bump）
       void prefetchRunOverview(runId, { fresh: true });
       const res = await fetch(`/api/observe/run/${encodeURIComponent(runId)}`);
       if (!res.ok) return;
       setData(await res.json());
-      setRefreshEpoch(e => e + 1);
+      if (hard) setIdentityEpoch(e => e + 1);
+      else setRefreshEpoch(e => e + 1);
     } catch {
       /* 重载失败保留旧数据 */
     }
@@ -349,7 +353,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
           ? `源回溯变化，全量重建 ${rebuilt} 轮`
           : added > 0 ? `新增 ${added} 轮，更新 ${updated} 轮` : "已是最新";
         toast.success(`${auto ? "自动同步" : "刷新完成"}: ${msg}`, { duration: 3000 });
-        await reloadRun();
+        await reloadRun(fullRebuild);
       }
     } finally {
       refreshingRef.current = false;
@@ -672,6 +676,9 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
           target={{ runId: run.runId, runName: run.name }}
         />
 
+        {/* 数据纪元提供者：刷新走「原地重取」（tab 保持挂载），阅读态不被重挂清场 */}
+        <RunDataEpochContext.Provider value={refreshEpoch}>
+
         {viewModel.warnings.length > 0 ? (
           <div className="shrink-0 animate-in fade-in slide-in-from-bottom-2 duration-300 rounded-xl bg-amber-500/[0.08] px-3.5 py-2.5 text-xs leading-5 text-amber-700 dark:text-amber-400">
             {viewModel.warnings.slice(0, 5).map(w => <p key={w}>⚠ {w}</p>)}
@@ -696,7 +703,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         <div data-run-tab="overview" className={tabPanelClass("overview")}>
           {data ? (
             <RunOverviewTab
-              key={refreshEpoch}
+              key={identityEpoch}
               runId={run.runId}
               run={run}
               viewModel={viewModel}
@@ -713,7 +720,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         {visitedTabs.has("turns") ? (
           <div data-run-tab="turns" className={tabPanelClass("turns")}>
             <RunTurnsTab
-              key={refreshEpoch}
+              key={identityEpoch}
               runId={run.runId}
               viewModel={viewModel}
               turnId={view.turnId}
@@ -725,7 +732,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         {visitedTabs.has("context") ? (
           <div data-run-tab="context" className={tabPanelClass("context")}>
             <RunContextTab
-              key={refreshEpoch}
+              key={identityEpoch}
               runId={run.runId}
               onNavigateToTurn={(turnId, member) => navigate({ tab: "turns", turnId, member: member ?? undefined })}
             />
@@ -735,7 +742,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         {visitedTabs.has("audit") ? (
           <div data-run-tab="audit" className={tabPanelClass("audit")}>
             <RunAuditTab
-              key={refreshEpoch}
+              key={identityEpoch}
               runId={run.runId}
               members={memberRows}
               onOpenTurn={(turnId, member) => navigate({ tab: "turns", turnId, member: member ?? undefined })}
@@ -745,14 +752,14 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
 
         {visitedTabs.has("perf") ? (
           <div data-run-tab="perf" className={tabPanelClass("perf")}>
-            <RunPerfTab key={refreshEpoch} runId={run.runId} onOpenTurn={turnId => navigate({ tab: "turns", turnId })} />
+            <RunPerfTab key={identityEpoch} runId={run.runId} onOpenTurn={turnId => navigate({ tab: "turns", turnId })} />
           </div>
         ) : null}
 
         {visitedTabs.has("skills") ? (
           <div data-run-tab="skills" className={tabPanelClass("skills")}>
             <RunSkillsTab
-              key={refreshEpoch}
+              key={identityEpoch}
               runId={run.runId}
               members={memberRows}
               onOpenTurn={turnId => navigate({ tab: "turns", turnId })}
@@ -762,14 +769,14 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
 
         {visitedTabs.has("files") ? (
           <div data-run-tab="files" className={tabPanelClass("files")}>
-            <RunFilesTab key={refreshEpoch} runId={run.runId} />
+            <RunFilesTab key={identityEpoch} runId={run.runId} />
           </div>
         ) : null}
 
         {visitedTabs.has("wire") ? (
           <div data-run-tab="wire" className={tabPanelClass("wire")}>
             <RunWireTab
-              key={refreshEpoch}
+              key={identityEpoch}
               runId={run.runId}
               members={memberRows}
               member={view.member}
@@ -781,7 +788,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         {visitedTabs.has("score") ? (
           <div data-run-tab="score" className={tabPanelClass("score")}>
             <RunScoreTab
-              key={refreshEpoch}
+              key={identityEpoch}
               runId={run.runId}
               members={memberRows}
               member={view.member}
@@ -794,7 +801,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         {visitedTabs.has("replay") ? (
           <div data-run-tab="replay" className={tabPanelClass("replay")}>
             <RunReplayTab
-              key={refreshEpoch}
+              key={identityEpoch}
               runId={run.runId}
               members={memberRows}
               member={view.member}
@@ -999,6 +1006,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
             </aside>
           </div>
         </div>
+        </RunDataEpochContext.Provider>
 
         <RunSubgraphDialog
           open={subgraphKey !== null}

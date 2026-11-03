@@ -314,15 +314,15 @@ describe("audit-skillsift route", () => {
     expect(last.msg).toMatch(/exit 2/)
   })
 
-  it("framework=context-insight → --transcript 结构化 JSON(不走 --db)", async () => {
-    fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.jsonl", framework: "context-insight" })
+  it("framework=cannbot-insight → --transcript 结构化 JSON(不走 --db)", async () => {
+    fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.jsonl", framework: "cannbot-insight" })
     seedSkillBody()
     fakePrisma.turn.findMany.mockResolvedValue([
       { id: "t1", turnIndex: 0, role: "assistant", content: "调用 skill", agentName: "kernel-developer" },
     ])
     spawnMock.mockImplementation(happySpawn())
     const res = await POST(
-      makeRequest({ taskId: "ses_1", skillName: "acme-crash-debug", framework: "context-insight" }),
+      makeRequest({ taskId: "ses_1", skillName: "acme-crash-debug", framework: "cannbot-insight" }),
     )
     expect(res.status).toBe(200)
     const [, args] = spawnMock.mock.calls[0]

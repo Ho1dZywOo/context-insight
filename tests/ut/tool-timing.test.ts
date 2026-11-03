@@ -62,6 +62,36 @@ beforeAll(() => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't5' }] },
     }),
   ].join('\n') + '\n');
+  // 模型 B（cc-db-turn 原生导出，lake bundle .native）：assistant 行
+  // ts = 请求发出、duration_ms = 请求→响应，工具结果载体行与响应行同戳——
+  // 窗口 = [ts + duration_ms, 下一请求行（下一条 assistant 行）ts]
+  fs.writeFileSync(path.join(TMP, 'cc-native-s2.jsonl'), [
+    w({
+      type: 'assistant', timestamp: ts(0), duration_ms: 5000,
+      message: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'b1', name: 'Read', input: {} },
+        { type: 'tool_use', id: 'b2', name: 'Bash', input: {} },
+      ] },
+    }),
+    w({
+      type: 'user', timestamp: ts(0),
+      message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'b1' }, { type: 'tool_result', tool_use_id: 'b2' },
+      ] },
+    }),
+    w({
+      type: 'assistant', timestamp: ts(14000), duration_ms: 3000,
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'b3', name: 'Bash', input: {} }] },
+    }),
+    w({
+      type: 'user', timestamp: ts(14000),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b3' }] },
+    }),
+    w({
+      type: 'assistant', timestamp: ts(22000), duration_ms: 1000,
+      message: { role: 'assistant', content: [{ type: 'text', text: '收尾' }] },
+    }),
+  ].join('\n') + '\n');
 });
 
 afterAll(() => {
@@ -101,16 +131,38 @@ describe('deriveToolTiming（wire 轮间隙）', () => {
   it('捕获缺失 → null（调用方走各自兜底）', () => {
     expect(deriveToolTiming(path.join(TMP, 'nope.jsonl'), 's1')).toBeNull();
   });
+
+  it('模型 B（cc-db-turn 原生导出：载体行同戳 gap=0）：窗口 = [响应行 ts + duration_ms, 下一请求行 ts]', () => {
+    const r = deriveToolTiming(path.join(TMP, 'cc-native-s2.jsonl'), 's2')!;
+    expect(r).not.toBeNull();
+    const byId = new Map(r.intervals.map(i => [i.toolUseId, i]));
+    // b1/b2：[0+5000, 14000] = 9000 均分 → 各 4500
+    const b1 = byId.get('b1')!, b2 = byId.get('b2')!;
+    expect(b1.startMs).toBe(T + 5000);
+    expect(b1.endMs).toBe(T + 9500);
+    expect(b2.startMs).toBe(T + 9500);
+    expect(b2.endMs).toBe(T + 14000);
+    // b3：[14000+3000, 22000] = 5000（闭合锚 = 下一条 assistant 行，含其后同戳载体行）
+    const b3 = byId.get('b3')!;
+    expect(b3.startMs).toBe(T + 17000);
+    expect(b3.endMs).toBe(T + 22000);
+    expect(b3.kind).toBe('local');
+    expect(r.localToolMs).toBe(9000 + 5000);
+  });
 });
 
 describe('wireToolDurations（Perf 侧门控）', () => {
-  it('claude 格式（含 -proxy 变体）出映射，原生 opencode 返回 null', () => {
+  it('claude 格式（含 -proxy 变体）出映射，原生 opencode 返回 null（lake 导出折叠语义不做增补）', () => {
     const main = path.join(TMP, 'cpx-s1.jsonl');
     const okMap = wireToolDurations(main, 's1', 'opencode-proxy', '1.0-opencode-proxy');
     expect(okMap).not.toBeNull();
     expect(okMap!.get('t1')).toBe(2000);
     expect(okMap!.get('t3')).toBe(100000);
+    // opencode 原生（含 lake 导出：cc-db-turn 信封但工具执行折叠进 duration_ms，
+    // 实证 subagent 工具轮 dur 700–1000s、post-completion 间隙 Σ 仅 5s——
+    // 窗口是主链空转，按工具计会错）一律不做 wire 增补
     expect(wireToolDurations(main, 's1', 'opencode', null)).toBeNull();
+    expect(wireToolDurations('/x/share/opencode/opencode.db', 's1', 'opencode', null)).toBeNull();
     expect(wireToolDurations(null, 's1', 'opencode-proxy', null)).toBeNull();
   });
 });

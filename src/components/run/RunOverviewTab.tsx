@@ -30,6 +30,7 @@ import type { RunViewModel } from "@/lib/run/view-model";
 import type { RunMemberIdentity, RunMemberStats } from "@/lib/collection/types";
 import { bandLabel } from "@/components/run/run-theme";
 import { computeLlmActiveMs } from "@/lib/session-duration";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 import { summarizeToolCallErrors } from "@/lib/tool-call-errors";
 
 /** 状态点色（run 身份药丸的 leading dot；running 带脉冲动画） */
@@ -84,18 +85,19 @@ export interface RunOverviewTabProps {
 
 export function RunOverviewTab({ runId, run, viewModel, memberStats, totalErrors, members, codeStats, onOpenTurns, onOpenSkills }: RunOverviewTabProps) {
   // 面板数据：页面挂载瞬间已由 page 预取（五端点全并行，见 overview-data），
-  // 此处消费缓存 promise——通常 tab 挂载时数据已就绪或已在途；refreshEpoch
-  // 重挂载消费 reloadRun 换新的 fresh promise。pending 驱动骨架屏（不再渲染
-  // 空态误导），失败保持总览头（服务端聚合指标照常展示）
+  // 此处消费缓存 promise——通常 tab 挂载时数据已就绪或已在途；数据纪元变化
+  // 消费 reloadRun 换新的 fresh promise（原地重取，tab 不重挂）。pending 驱动
+  // 骨架屏（不再渲染空态误导），失败保持总览头（服务端聚合指标照常展示）
   const [panel, setPanel] = useState<RunOverviewPanelData | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
+  const dataEpoch = useRunDataEpoch();
   useEffect(() => {
     let cancelled = false;
     prefetchRunOverview(runId)
       .then(d => { if (!cancelled) { setPanel(d); setPanelError(null) } })
       .catch(() => { if (!cancelled) setPanelError("run 总览加载失败") });
     return () => { cancelled = true };
-  }, [runId]);
+  }, [runId, dataEpoch]);
   const pending = panel == null && panelError == null;
 
   const rows = useMemo(() => runMemberRowsOf(viewModel), [viewModel]);

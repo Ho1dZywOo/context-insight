@@ -17,6 +17,7 @@
 import { useEffect, useState } from "react";
 import { ContextTracker, type TurnRowItem } from "@/components/observe/ContextTracker";
 import type { ContextAgentLimit, ContextTurnItem } from "@/lib/observe/collectors/context";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 interface ContextResponse {
   turns: ContextTurnItem[];
@@ -30,6 +31,7 @@ export interface RunContextTabProps {
 }
 
 export function RunContextTab({ runId, onNavigateToTurn }: RunContextTabProps) {
+  const dataEpoch = useRunDataEpoch();
   const [turns, setTurns] = useState<TurnRowItem[]>([]);
   const [limits, setLimits] = useState<Record<string, number> | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -53,7 +55,7 @@ export function RunContextTab({ runId, onNavigateToTurn }: RunContextTabProps) {
         setTurns([]); setLimits(null); setLoaded(true)
       })
     return () => { cancelled = true }
-  }, [runId])
+  }, [runId, dataEpoch])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-background shadow-sm">

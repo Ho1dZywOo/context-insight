@@ -22,6 +22,7 @@ import { TrajectoryScoring } from "@/components/scoring/TrajectoryScoring";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
 import { buildMainAgentTurnMap, type TurnDigest } from "@/lib/shared/turn-digest";
 import type { RunMemberRow } from "@/lib/run/member-rows";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 export interface RunScoreTabProps {
   runId: string;
@@ -32,6 +33,7 @@ export interface RunScoreTabProps {
 }
 
 export function RunScoreTab({ runId, members, member, onMemberChange, onOpenTurn }: RunScoreTabProps) {
+  const dataEpoch = useRunDataEpoch();
   const active = members.find(m => m.taskId === member) ?? members[0] ?? null;
   const [turnMap, setTurnMap] = useState<Map<number, string>>(() => new Map());
 
@@ -49,7 +51,7 @@ export function RunScoreTab({ runId, members, member, onMemberChange, onOpenTurn
         /* 映射取不到只损失跳转，评分卡本体不受影响 */
       });
     return () => { cancelled = true; };
-  }, [runId, active]);
+  }, [runId, active, dataEpoch]);
 
   const urlFor = useMemo(
     () => (active == null ? null : runMemberUrlFor(runId, active.taskId)),

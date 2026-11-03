@@ -103,6 +103,8 @@ const turnDetailBase = {
 const fetchCalls: string[] = [];
 // 详情延迟解析开关：验证点击轮次后的加载骨架（取数期间 → 详情落地）
 const slowDetail = { current: false, resolve: null as null | ((v: unknown) => void) };
+// 补拉段失败开关：验证自动拉齐中断后的「加载更多」手动重试
+const restFail = { current: false };
 
 vi.stubGlobal('fetch', vi.fn(async (url: string) => {
   fetchCalls.push(url);
@@ -120,13 +122,18 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
   }
   if (u.pathname === '/api/observe/run/minidemo01/turns') {
     const member = p.get('member');
-    // 成员B 分两页（total=2）：供「加载更多」分页续拉用例；首轮仍是 rop-t-b0
+    // 成员B 分两段（total=2）：首页 1 轮 + offset 补拉 1 轮，供「自动拉齐/
+    //  中断重试」用例；首轮仍是 rop-t-b0。restFail 打开时补拉段失败
     if (member === 'ses_mini_b') {
-      const page = Number(p.get('page') ?? 1);
-      return json({ items: page === 1 ? [turnB] : [turnB2], total: 2, page, pageSize: Number(p.get('pageSize') ?? 200) });
+      const offset = Number(p.get('offset') ?? -1);
+      if (offset >= 1) {
+        if (restFail.current) return { ok: false, json: async () => ({}) };
+        return json({ items: [turnB2], total: 2, page: 1, pageSize: Number(p.get('pageSize') ?? 200), offset });
+      }
+      return json({ items: [turnB], total: 2, page: 1, pageSize: Number(p.get('pageSize') ?? 200), offset: null });
     }
     const items = member === 'ses_mini_a' ? [turnA] : [turnA, turnB];
-    return json({ items, total: items.length, page: Number(p.get('page') ?? 1), pageSize: Number(p.get('pageSize') ?? 200) });
+    return json({ items, total: items.length, page: Number(p.get('page') ?? 1), pageSize: Number(p.get('pageSize') ?? 200), offset: null });
   }
   if (u.pathname === '/api/observe/run/minidemo01/bridges') {
     return json({ items: [], total: 0 });
@@ -188,6 +195,7 @@ afterEach(() => {
   act(() => root?.unmount());
   root = null;
   document.body.innerHTML = '';
+  restFail.current = false;
 });
 
 describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
@@ -412,20 +420,34 @@ describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
     }
   });
 
-  it('加载更多：续拉下一页追加渲染、取数收敛（loadMore 身份稳定不打散会话块 memo）', async () => {
+  it('自动拉齐：首页落地后剩余轮次按 offset 自动补齐、计数收敛且无手动入口', async () => {
     await renderPage('?tab=turns');
     const turnsTab = document.querySelector('[data-run-tab="turns"]')!;
-    // 成员B 首页 1/2：加载更多可见
+    // 补拉请求自动发出（offset 从已载边界续拉）并追加渲染
+    expect(fetchCalls.some(u => u.includes('member=ses_mini_b') && u.includes('offset=1'))).toBe(true);
+    expect(turnsTab.textContent).toContain('成员B的第二轮');
+    // 计数收敛：2/2 轮，手动「加载更多」不出现（不再有第 2 页页码续拉）
+    expect(turnsTab.textContent).toContain('2/2 轮');
+    expect(fetchCalls.some(u => u.includes('page=2'))).toBe(false);
+    expect([...turnsTab.querySelectorAll('button')].some(b => b.textContent === '加载更多')).toBe(false);
+  });
+
+  it('补拉中断兜底：「加载更多」手动重试重入链条，从已载边界续拉收敛（回调身份稳定）', async () => {
+    restFail.current = true;
+    await renderPage('?tab=turns');
+    const turnsTab = document.querySelector('[data-run-tab="turns"]')!;
+    // 补拉失败中断：计数停在 1/2，手动入口出现
+    expect(turnsTab.textContent).toContain('1/2 轮');
     const loadMoreBtn = [...turnsTab.querySelectorAll('button')].find(b => b.textContent === '加载更多')!;
     expect(loadMoreBtn).toBeTruthy();
+    restFail.current = false;
     await act(async () => {
       loadMoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       await new Promise(r => setTimeout(r, 20));
     });
-    // 第二页请求发出且追加渲染
-    expect(fetchCalls.some(u => u.includes('member=ses_mini_b') && u.includes('page=2'))).toBe(true);
+    // 重试收敛：全集到齐、入口消失
     expect(turnsTab.textContent).toContain('成员B的第二轮');
-    // 取数收敛：total 打满，入口消失
+    expect(turnsTab.textContent).toContain('2/2 轮');
     expect([...turnsTab.querySelectorAll('button')].some(b => b.textContent === '加载更多')).toBe(false);
   });
 
@@ -600,13 +622,9 @@ describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
       await renderPage('?tab=turns');
       const turnsTab = document.querySelector('[data-run-tab="turns"]')!;
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!;
-      // 成员B 加载第二页并选中 b1（当前会话 = 成员B，已加载 b0/b1 两轮）
-      await act(async () => {
-        const more = [...turnsTab.querySelectorAll('button')].find(b => b.textContent?.includes('加载更多'));
-        more!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        await new Promise(r => setTimeout(r, 20));
-      });
+      // 成员B 已自动拉齐到全集（b0/b1 两轮，当前会话 = 成员B），选中 b1
       const turnB2Row = [...turnsTab.querySelectorAll('button')].find(b => b.textContent?.includes('成员B的第二轮'))!;
+      expect(turnB2Row).toBeTruthy();
       await act(async () => {
         turnB2Row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
         await new Promise(r => setTimeout(r, 20));

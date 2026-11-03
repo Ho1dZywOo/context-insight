@@ -238,9 +238,49 @@ describe('skill-coverage API', () => {
     expect(res.status).toBe(200);
     const d = await res.json();
     expect(d.hasAvailableList).toBe(false);
+    // 细化文案：只说本框架（opencode）的原因 + 行动指引（经 cpx 代理捕获），
+    // 不再一条长句把 codex 原因一锅端
     expect(d.degradedReason).toContain('opencode 原生');
+    expect(d.degradedReason).toContain('经 cpx 代理捕获');
+    expect(d.degradedReason).not.toContain('codex');
     expect(d.items).toHaveLength(1);
     expect(d.items[0].status).toBe('invoked');
+  });
+
+  it('degraded copy is per-framework: codex native gets codex reason only (no opencode noise)', async () => {
+    const taskId = `cov-codex-native-${Date.now()}`;
+    const session = await prisma.session.create({
+      data: { taskId, framework: 'codex' },
+    });
+    createdSessionIds.push(session.id);
+
+    const res = await GET(
+      new NextRequest(`http://localhost/api/observe/session/skill-coverage?taskId=${taskId}`)
+    );
+    expect(res.status).toBe(200);
+    const d = await res.json();
+    expect(d.hasAvailableList).toBe(false);
+    expect(d.degradedReason).toContain('codex 原生');
+    expect(d.degradedReason).toContain('developer 消息');
+    expect(d.degradedReason).toContain('经 cpx 代理捕获');
+    expect(d.degradedReason).not.toContain('opencode');
+  });
+
+  it('degraded copy falls back to a generic source reason for other frameworks (dsh)', async () => {
+    const taskId = `cov-dsh-native-${Date.now()}`;
+    const session = await prisma.session.create({
+      data: { taskId, framework: 'dsh' },
+    });
+    createdSessionIds.push(session.id);
+
+    const res = await GET(
+      new NextRequest(`http://localhost/api/observe/session/skill-coverage?taskId=${taskId}`)
+    );
+    expect(res.status).toBe(200);
+    const d = await res.json();
+    expect(d.hasAvailableList).toBe(false);
+    expect(d.degradedReason).toContain('该来源');
+    expect(d.degradedReason).toContain('经 cpx 代理捕获');
   });
 
   it('native claude-code sessions also show coverage (system-line injected list is deterministic)', async () => {
