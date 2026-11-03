@@ -53,7 +53,9 @@ beforeAll(async () => {
     },
   });
   const native = await prisma.session.create({
-    data: { taskId: SID_NATIVE, framework: 'opencode', version: '2.0.24', sourcePath: path.join(TMP, `cpx-${SID_NATIVE}.jsonl`) },
+    // opencode 原生真实源形态是 opencode.db——无 wire（框架门，含 lake 导出
+    // 折叠语义一律不做增补）
+    data: { taskId: SID_NATIVE, framework: 'opencode', version: '2.0.24', sourcePath: path.join(TMP, 'opencode.db') },
   });
   const mkTurn = (sessionId: string, turnIndex: number, at: string) =>
     prisma.turn.create({
@@ -67,16 +69,13 @@ beforeAll(async () => {
       { turnId: proxyTurn.id, toolCallId: 't1', toolName: 'Bash', durationMs: 0 },
       { turnId: proxyTurn.id, toolCallId: 't2', toolName: 'Read', durationMs: 0 },
       { turnId: proxyTurn.id, toolCallId: 't9', toolName: 'Edit', durationMs: 1500 },
-      // 原生行：无 wire（isClaudeFormatSession 短路）→ 0 保持
+      // 原生行：无 wire（opencode 原生/lake 导出都不做增补）→ 0 保持
       { turnId: nativeTurn.id, toolCallId: 't1', toolName: 'Bash', durationMs: 0 },
     ],
   });
 });
 
-afterAll(async () => {
-  // 与 collection-list 的 afterAll 清理约定对齐：清掉 proxy/native 会话行
-  // （turn/toolCall 随会话级联删除），sourcePath 指向已删临时文件的残留行不污染并行断言
-  await prisma.session.deleteMany({ where: { taskId: { in: [SID_PROXY, SID_NATIVE] } } });
+afterAll(() => {
   fs.rmSync(TMP, { recursive: true, force: true });
 });
 
@@ -98,7 +97,7 @@ describe('run turns：wire 轮间隙时长增补（cpx 捕获）', () => {
     expect(dur.get('t9')).toBe(1500);
   });
 
-  it('原生成员：无 wire 保持 DB 0（非 claude-format 不推导）', async () => {
+  it('原生成员：无 wire 保持 DB 0（opencode 无 wire，框架门外）', async () => {
     const res = await get(`solo:${SID_NATIVE}`);
     expect(res.status).toBe(200);
     const data = await res.json();

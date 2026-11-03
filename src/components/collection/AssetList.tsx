@@ -18,7 +18,6 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { BRAND_NAME, BAY_NAME, isBrandSourceType } from '@/lib/branding'
 import { isProxyVersion, agentFrameworkOf } from '@/lib/shared/session-format'
-import { sessionHref } from '@/lib/shared/session-link'
 import type { AssetItem, AssetKindFilter, RunAssetItem, SessionAssetItem } from '@/lib/collection/types'
 import { displayModel } from '@/lib/collection/model-display'
 import { useRouter } from 'next/navigation';
@@ -226,7 +225,6 @@ export function AssetList({
 
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({})
   const [exportStatus, setExportStatus] = useState<Record<string, ExportStatus>>({})
-  const [uploadError, setUploadError] = useState<string | null>(null)
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null)
   // 上传弹窗（统一组件，刀3 合一）：kind + target 一体；结果经回调回填行内状态
   const [uploadRequest, setUploadRequest] = useState<{ key: string; kind: 'session' | 'run'; target: UploadTarget } | null>(null)
@@ -288,7 +286,7 @@ export function AssetList({
   async function handleDeleteSelected() {
     // 按 kind 分发：会话批量 delete-session；run 逐个走 observe/run 级联删除
     if (selectedSessions.length > 0) {
-      const entries = selectedSessions.map(i => ({ taskId: i.taskId, framework: i.framework ?? undefined }))
+      const entries = selectedSessions.map(i => ({ taskId: i.taskId, framework: i.framework ?? 'unknown' }))
       try {
         await fetch('/api/ingest/delete-session', {
           method: 'DELETE',
@@ -311,7 +309,7 @@ export function AssetList({
         const res = await fetch('/api/ingest/delete-session', {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId: item.taskId, framework: item.framework ?? undefined }),
+          body: JSON.stringify({ taskId: item.taskId, framework: item.framework ?? 'unknown' }),
         })
         if (res.ok) window.location.reload()
       } catch {}
@@ -497,10 +495,6 @@ export function AssetList({
         </div>
       </div>
 
-      {uploadError && (
-        <span className="text-xs text-red-500">{uploadError}</span>
-      )}
-
       <Dialog open={deleteMode !== null} onOpenChange={(open) => { if (!open) setDeleteMode(null) }}>
         <DialogContent>
           <DialogHeader>
@@ -553,11 +547,9 @@ export function AssetList({
         target={uploadRequest?.target ?? null}
         onUploadStart={() => {
           if (uploadRequest) setUploadStatus(prev => ({ ...prev, [uploadRequest.key]: 'uploading' }))
-          setUploadError(null)
         }}
-        onResult={({ ok, message }) => {
+        onResult={({ ok }) => {
           if (uploadRequest) setUploadStatus(prev => ({ ...prev, [uploadRequest.key]: ok ? 'done' : 'error' }))
-          if (!ok && message) setUploadError(message)
         }}
       />
       <div className="border rounded-lg">
@@ -686,7 +678,7 @@ export function AssetList({
                   </TableCell>
                   <TableCell className="max-w-[300px] truncate text-xs">
                     <Link
-                      href={sessionHref(item.taskId, item.framework)}
+                      href={`/run/solo:${encodeURIComponent(item.taskId)}`}
                       className="text-primary hover:underline"
                     >
                       {item.query ?? item.taskId}

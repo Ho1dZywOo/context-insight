@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"review the mini bundle session"}}
+{"type":"assistant","message":{"role":"assistant","id":"msg_sub_a_1","content":[{"type":"text","text":"mini bundle reviewed"}],"model":"claude-haiku-3-20250415","usage":{"input_tokens":8,"output_tokens":3}},"duration_ms":500}

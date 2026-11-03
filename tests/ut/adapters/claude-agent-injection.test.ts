@@ -65,8 +65,10 @@ describe('readSession（handback 协议混合夹具，端到端）', () => {
   const userTurns = interactions.filter(i => i.role === 'user');
 
   it('五类框架注入全部重分类 system 且内容为摘要', () => {
-    // 夹具注入：1 回放 + 1 背景事件 + 1 label + 1 状态查询（+1 total_tokens 本就是 system 行）
-    expect(systemTurns.length).toBe(5);
+    // 夹具注入：1 回放 + 1 背景事件 + 1 label + 1 状态查询。total_tokens
+    // 倒计时是 wire 簿记（claude-code 客户端逐请求注入 system 组件）——
+    // 读取层指纹跳过，不入对话时间线（wire 原文保真在捕获文件）
+    expect(systemTurns.length).toBe(4);
 
     const replay = systemTurns.find(t => t.content?.startsWith('[transcript 回放]'));
     expect(replay?.content).toBe('[transcript 回放] 3 行子代理记录——安全审查用副本，原文见子代理捕获');
@@ -76,7 +78,7 @@ describe('readSession（handback 协议混合夹具，端到端）', () => {
 
     expect(systemTurns.some(t => t.content?.startsWith('[label 请求]'))).toBe(true);
     expect(systemTurns.some(t => t.content?.startsWith('[状态查询] Current state: working'))).toBe(true);
-    expect(systemTurns.some(t => t.content?.startsWith('<total_tokens>'))).toBe(true);
+    expect(systemTurns.some(t => t.content?.startsWith('<total_tokens>'))).toBe(false);
   });
 
   it('注入原文不入 interactions（DB 无双份存储）', () => {

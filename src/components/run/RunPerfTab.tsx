@@ -14,6 +14,7 @@
 
 import { useMemo } from "react";
 import { PerfPanorama } from "@/components/observe/PerfPanorama";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 export interface RunPerfTabProps {
   runId: string;
@@ -22,6 +23,7 @@ export interface RunPerfTabProps {
 }
 
 export function RunPerfTab({ runId, onOpenTurn }: RunPerfTabProps) {
+  const dataEpoch = useRunDataEpoch();
   const endpoints = useMemo(() => {
     const base = `/api/observe/run/${encodeURIComponent(runId)}`;
     return {
@@ -30,7 +32,7 @@ export function RunPerfTab({ runId, onOpenTurn }: RunPerfTabProps) {
       bridges: `${base}/bridges`,
       lanes: `${base}/lanes`,
     };
-  }, [runId]);
+  }, [runId, dataEpoch]);
 
   return (
     <div className="flex flex-col gap-4 overflow-y-auto rounded-2xl bg-muted/30 p-4">

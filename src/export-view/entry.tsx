@@ -3,6 +3,7 @@
 import React from "react"
 import { createRoot } from "react-dom/client"
 import SessionDetailPage from "@/components/export-view/SessionExportViewer"
+import { UploadHudHost } from "@/components/collection/UploadResultHud"
 
 // file:// 下 EventSource/SSE 会报安全错误；导出快照无需实时刷新，no-op 掉
 class EventSourceShim {
@@ -105,6 +106,8 @@ function ExportRoot() {
   return (
     <React.Suspense fallback={<div className="p-4 text-muted-foreground">Loading…</div>}>
       <SessionDetailPage params={params} />
+      {/* 离线 bundle 同款结果 HUD：file:// 下上传必然网络失败，报错也要有反馈 */}
+      <UploadHudHost />
     </React.Suspense>
   )
 }

@@ -19,7 +19,7 @@
 // 消息行渲染与 LlmContextView 同源能力（reminder 子块、tool_calls 派发、
 // copy），块语法走 detail-blocks 统一文本块（与输出区同屏同口径：状态 =
 // 字色、发丝分节、灰底圆角块）。
-import { memo, useCallback, useMemo, useState } from "react"
+import { useState, useMemo } from "react"
 import { ZapIcon, LayersIcon, ShieldIcon, PlusIcon, ChevronRightIcon, WrenchIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { CopyButton } from "./CopyButton"
@@ -70,114 +70,6 @@ const ROLE_DOT_COLOR: Record<string, string> = {
 const sectionRow = "w-full flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer select-none py-1"
 const sectionChevron = "size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]"
 
-// 消息行提到模块级 + memo：杜绝每次父级重渲染都生成新的组件 type，
-// 否则 React 把 element type 变化当作「换组件」处理，整棵 MessageRow 子树
-// 卸载重挂（ExpandableText 的「展开全文」状态被重置、数百行 DOM 全量重挂）。
-// expanded/onToggle 经 props 传入：toggle 某行只重渲染受影响的行（memo 命中）。
-const MessageRow = memo(function MessageRow({
-  msg,
-  index,
-  expanded,
-  onToggle,
-}: {
-  msg: InputMessage
-  index: number
-  expanded: boolean
-  onToggle: (index: number) => void
-}) {
-  const isExpanded = expanded
-  const isContinuation = msg.agentName === "continuation"
-  const tokens = msgTokens(msg)
-  const rp = isExpanded && msg.content ? reminderPrefix(msg.content) : null
-
-  return (
-    <div key={index} className={BLOCK}>
-      <div className={cn(BLOCK_ROW, "text-sm")}>
-        <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isContinuation ? "bg-purple-500" : (ROLE_DOT_COLOR[msg.role] ?? "bg-gray-400"))} />
-        <span className={cn("text-xs font-medium shrink-0", isContinuation ? "text-purple-600 dark:text-purple-400" : (ROLE_TEXT_COLOR[msg.role] ?? "text-gray-600"))}>
-          {isContinuation ? "continuation" : msg.role}
-        </span>
-        {msg.name && <span className="text-xs text-muted-foreground truncate max-w-32">{msg.name}</span>}
-        {msg.tool_calls && msg.tool_calls.length > 0 && (
-          <span className="flex items-center gap-0.5 text-xs text-muted-foreground shrink-0" title="派发的工具调用">
-            <WrenchIcon className="size-3" />{msg.tool_calls.length}
-          </span>
-        )}
-        {!isExpanded && (
-          <span className="text-xs text-muted-foreground/70 truncate flex-1">{contentPreview(msg)}</span>
-        )}
-        <span className="flex-1" />
-        {tokens > 0 && <span className="text-xs text-muted-foreground tabular-nums shrink-0">{fmtTokens(tokens)}t</span>}
-        {msg.content && <CopyButton text={msg.content} className="size-4 text-muted-foreground hover:text-foreground shrink-0" />}
-        <span
-          role="button"
-          tabIndex={0}
-          className={BLOCK_TRI}
-          onClick={() => onToggle(index)}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onToggle(index) }}
-        >
-          {isExpanded ? "▼" : "▶"}
-        </span>
-      </div>
-
-      {isExpanded && msg.content && !rp && (
-        <div className={BLOCK_SUB}>
-          <ExpandableText clampPx={300} className="text-sm whitespace-pre-wrap break-words">
-            {msg.content}
-          </ExpandableText>
-        </div>
-      )}
-      {isExpanded && rp && (
-        <>
-          <div className={BLOCK_SUB}>
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="text-[11px] font-medium text-purple-600 dark:text-purple-400">system-reminder</span>
-              <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTokens(estimateTokensFromChars(rp.reminder.length))}t</span>
-            </div>
-            <ExpandableText clampPx={180}>
-              <pre className="text-xs font-mono whitespace-pre-wrap break-words text-foreground/70">{rp.reminder}</pre>
-            </ExpandableText>
-          </div>
-          {rp.prompt && (
-            <div className={BLOCK_SUB}>
-              <ExpandableText clampPx={300} className="text-sm whitespace-pre-wrap break-words">
-                {rp.prompt}
-              </ExpandableText>
-            </div>
-          )}
-        </>
-      )}
-
-      {isExpanded && msg.tool_calls && msg.tool_calls.length > 0 && msg.tool_calls.map((tc, tcIdx) => {
-        const tcTokens = Math.round(((tc.args?.length ?? 0) + (tc.result?.length ?? 0)) / 3.5)
-        return (
-          <div key={tcIdx} className={BLOCK_SUB}>
-            <div className="flex items-center gap-2 text-xs">
-              {tc.isSkillRelated && <ZapIcon className="size-3 shrink-0 text-amber-500" />}
-              <span className="font-medium">{tc.isSkillRelated ? `dispatch: ${tc.name}` : tc.name}</span>
-              <span className="text-muted-foreground">{tc.isSkillRelated ? "skill 派发" : "tool call"}</span>
-              {tcTokens > 0 && <span className="text-muted-foreground tabular-nums">{fmtTokens(tcTokens)}t</span>}
-              {(tc.args || tc.result) && <CopyButton text={[tc.args, tc.result].filter(Boolean).join("\n\n---\n\n")} className="ml-auto size-4 text-muted-foreground hover:text-foreground" />}
-            </div>
-            <div className="mt-1 space-y-1">
-              {tc.args && (
-                <ExpandableText clampPx={200} className="text-xs whitespace-pre-wrap break-words">
-                  <span className="font-medium text-muted-foreground">args:</span> {tc.args}
-                </ExpandableText>
-              )}
-              {tc.result && (
-                <ExpandableText clampPx={200} className="text-xs whitespace-pre-wrap break-words">
-                  <span className="font-medium text-muted-foreground">result:</span> {tc.result}
-                </ExpandableText>
-              )}
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-})
-
 export function TurnInputCard({
   inputMessagesJson,
   inputMessagesCount,
@@ -226,21 +118,114 @@ export function TurnInputCard({
     return set
   })
 
-  // 稳定引用：setExpandedMessages 来自 useState（身份恒定），空依赖即可
-  const toggleMessage = useCallback((index: number) => {
+  // 无输入可展示（hooks 之后再早退，保证 Hook 调用顺序稳定）
+  if (inputMessagesCount === 0 && messages.length === 0 && !inputMessagesJson) return null
+
+  function toggleMessage(index: number) {
     setExpandedMessages(prev => {
       const next = new Set(prev)
       if (next.has(index)) next.delete(index)
       else next.add(index)
       return next
     })
-  }, [])
-
-  // 无输入可展示（hooks 之后再早退，保证 Hook 调用顺序稳定）
-  if (inputMessagesCount === 0 && messages.length === 0 && !inputMessagesJson) return null
+  }
 
   const pct = contextWindowPct ?? 0
   const pctColor = pct > 80 ? "bg-red-500" : pct > 50 ? "bg-orange-500" : pct > 0 ? "bg-blue-500" : "bg-gray-300"
+
+  function MessageRow({ msg, index }: { msg: InputMessage; index: number }) {
+    const isExpanded = expandedMessages.has(index)
+    const isContinuation = msg.agentName === "continuation"
+    const tokens = msgTokens(msg)
+    const rp = isExpanded && msg.content ? reminderPrefix(msg.content) : null
+
+    return (
+      <div key={index} className={BLOCK}>
+        <div className={cn(BLOCK_ROW, "text-sm")}>
+          <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isContinuation ? "bg-purple-500" : (ROLE_DOT_COLOR[msg.role] ?? "bg-gray-400"))} />
+          <span className={cn("text-xs font-medium shrink-0", isContinuation ? "text-purple-600 dark:text-purple-400" : (ROLE_TEXT_COLOR[msg.role] ?? "text-gray-600"))}>
+            {isContinuation ? "continuation" : msg.role}
+          </span>
+          {msg.name && <span className="text-xs text-muted-foreground truncate max-w-32">{msg.name}</span>}
+          {msg.tool_calls && msg.tool_calls.length > 0 && (
+            <span className="flex items-center gap-0.5 text-xs text-muted-foreground shrink-0" title="派发的工具调用">
+              <WrenchIcon className="size-3" />{msg.tool_calls.length}
+            </span>
+          )}
+          {!isExpanded && (
+            <span className="text-xs text-muted-foreground/70 truncate flex-1">{contentPreview(msg)}</span>
+          )}
+          <span className="flex-1" />
+          {tokens > 0 && <span className="text-xs text-muted-foreground tabular-nums shrink-0">{fmtTokens(tokens)}t</span>}
+          {msg.content && <CopyButton text={msg.content} className="size-4 text-muted-foreground hover:text-foreground shrink-0" />}
+          <span
+            role="button"
+            tabIndex={0}
+            className={BLOCK_TRI}
+            onClick={() => toggleMessage(index)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleMessage(index) }}
+          >
+            {isExpanded ? "▼" : "▶"}
+          </span>
+        </div>
+
+        {isExpanded && msg.content && !rp && (
+          <div className={BLOCK_SUB}>
+            <ExpandableText clampPx={300} className="text-sm whitespace-pre-wrap break-words">
+              {msg.content}
+            </ExpandableText>
+          </div>
+        )}
+        {isExpanded && rp && (
+          <>
+            <div className={BLOCK_SUB}>
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="text-[11px] font-medium text-purple-600 dark:text-purple-400">system-reminder</span>
+                <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTokens(estimateTokensFromChars(rp.reminder.length))}t</span>
+              </div>
+              <ExpandableText clampPx={180}>
+                <pre className="text-xs font-mono whitespace-pre-wrap break-words text-foreground/70">{rp.reminder}</pre>
+              </ExpandableText>
+            </div>
+            {rp.prompt && (
+              <div className={BLOCK_SUB}>
+                <ExpandableText clampPx={300} className="text-sm whitespace-pre-wrap break-words">
+                  {rp.prompt}
+                </ExpandableText>
+              </div>
+            )}
+          </>
+        )}
+
+        {isExpanded && msg.tool_calls && msg.tool_calls.length > 0 && msg.tool_calls.map((tc, tcIdx) => {
+          const tcTokens = Math.round(((tc.args?.length ?? 0) + (tc.result?.length ?? 0)) / 3.5)
+          return (
+            <div key={tcIdx} className={BLOCK_SUB}>
+              <div className="flex items-center gap-2 text-xs">
+                {tc.isSkillRelated && <ZapIcon className="size-3 shrink-0 text-amber-500" />}
+                <span className="font-medium">{tc.isSkillRelated ? `dispatch: ${tc.name}` : tc.name}</span>
+                <span className="text-muted-foreground">{tc.isSkillRelated ? "skill 派发" : "tool call"}</span>
+                {tcTokens > 0 && <span className="text-muted-foreground tabular-nums">{fmtTokens(tcTokens)}t</span>}
+                {(tc.args || tc.result) && <CopyButton text={[tc.args, tc.result].filter(Boolean).join("\n\n---\n\n")} className="ml-auto size-4 text-muted-foreground hover:text-foreground" />}
+              </div>
+              <div className="mt-1 space-y-1">
+                {tc.args && (
+                  <ExpandableText clampPx={200} className="text-xs whitespace-pre-wrap break-words">
+                    <span className="font-medium text-muted-foreground">args:</span> {tc.args}
+                  </ExpandableText>
+                )}
+                {tc.result && (
+                  <ExpandableText clampPx={200} className="text-xs whitespace-pre-wrap break-words">
+                    <span className="font-medium text-muted-foreground">result:</span> {tc.result}
+                  </ExpandableText>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
 
   return (
     <div className="rounded-2xl bg-card">
@@ -282,10 +267,9 @@ export function TurnInputCard({
             </div>
             {newOpen && (
               <div className="space-y-1.5 pt-1">
-                {newMessages.map((msg, i) => {
-                  const idx = boundary + i
-                  return <MessageRow key={idx} msg={msg} index={idx} expanded={expandedMessages.has(idx)} onToggle={toggleMessage} />
-                })}
+                {newMessages.map((msg, i) => (
+                  <MessageRow key={boundary + i} msg={msg} index={boundary + i} />
+                ))}
               </div>
             )}
           </div>
@@ -309,7 +293,7 @@ export function TurnInputCard({
             {historyOpen && (
               <div className="space-y-1.5 pt-1">
                 {historyMessages.map((msg, i) => (
-                  <MessageRow key={i} msg={msg} index={i} expanded={expandedMessages.has(i)} onToggle={toggleMessage} />
+                  <MessageRow key={i} msg={msg} index={i} />
                 ))}
               </div>
             )}

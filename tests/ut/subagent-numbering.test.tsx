@@ -211,7 +211,7 @@ describe('会话块泳道 ↔ ContextTracker 编号一致', () => {
   it('两处 "general #1" 同指时间最早的 sub-b，#2/#3 依次对应', async () => {
     const timelineHtml = renderToStaticMarkup(createElement(SessionBlock, {
       session: soloSession('ses-shared'),
-      state: { turns: sharedTurns, total: sharedTurns.length, page: 1, loading: false },
+      state: { turns: sharedTurns, total: sharedTurns.length, loading: false },
       bridges: sharedBridges,
       selectedTurnId: null,
       onSelectTurn: () => {},
@@ -268,7 +268,7 @@ describe('唯一名 subagent 渲染无 #N 后缀', () => {
   it('泳道 chip 显示裸名（Volta 而非 Volta #1）', () => {
     const html = renderToStaticMarkup(createElement(SessionBlock, {
       session: soloSession('ses-codex'),
-      state: { turns: codexTurns, total: codexTurns.length, page: 1, loading: false },
+      state: { turns: codexTurns, total: codexTurns.length, loading: false },
       bridges: codexBridges,
       selectedTurnId: null,
       onSelectTurn: () => {},

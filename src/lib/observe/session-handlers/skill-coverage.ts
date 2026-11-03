@@ -11,8 +11,23 @@ import { prisma } from '@/lib/db';
 import { readAvailableSkills } from '@/lib/ingest/adapters/claude-jsonl-full-context';
 import type { SkillsListFormat } from '@/lib/ingest/adapters/system-structure';
 import { aggregateUsedSkills, buildCoverage } from '@/lib/skill-coverage';
-import { isProxyVersion, isClaudeFormatSession } from '@/lib/shared/session-format';
+import { isProxyVersion, isClaudeFormatSession, agentFrameworkOf } from '@/lib/shared/session-format';
 import { withRouteLog } from '@/lib/api-route';
+
+/** 非 claude 格式来源的降级文案：按会话实际框架给针对性原因 + 行动指引
+ *  （经 cpx 代理捕获的会话 wire 原样落盘系统提示，全集确定性恢复）。
+ *  此前一条长句把 opencode/codex 两框架原因一锅端，用户要在长句里找跟
+ *  自己相关的那半句——细化 = 只说本框架的原因，并给出可做的事。 */
+function degradedReasonForNonClaudeSource(framework: string | null): string {
+  const agent = agentFrameworkOf(framework);
+  if (agent === 'opencode' || agent === 'cannbot') {
+    return `${agent} 原生会话的系统提示只在运行时请求、不落盘，skills 全集不可恢复；经 cpx 代理捕获重跑该会话即可获得全集`;
+  }
+  if (agent === 'codex') {
+    return 'codex 原生会话的 rollout 布局里系统提示在 developer 消息内，读取暂未接入，skills 全集暂不可恢复；经 cpx 代理捕获重跑该会话即可获得全集';
+  }
+  return '该来源的会话系统提示不落盘，skills 全集不可恢复；经 cpx 代理捕获（wire 原样落盘）重跑该会话即可获得全集';
+}
 
 export const GET = withRouteLog('observe/session/skill-coverage', async (request: NextRequest) => {
   const { searchParams } = request.nextUrl;
@@ -53,14 +68,18 @@ export const GET = withRouteLog('observe/session/skill-coverage', async (request
   //   系统提示落盘，全集确定性恢复
   // - native claude-code：jsonl 的 type:system 行落盘系统注入（含 skills
   //   全集列表），同样确定性可解析（实测 native 会话 system 行含完整列表）
-  // - native opencode：系统提示只在运行时请求，db 不落盘 → 不可恢复
+  // - native opencode / cannbot：系统提示只在运行时请求，db 不落盘 → 不可恢复
+  // - native codex：rollout 布局里系统提示在 developer 消息内，读取暂未
+  //   接入 → 暂不可恢复
+  // 降级文案按会话实际框架分流（见 degradedReasonForNonClaudeSource）：
+  // 只说本框架的原因 + 行动指引（经 cpx 代理捕获重跑可得全集）。
   const isProxy = isProxyVersion(session.version);
   const isClaudeSource = isClaudeFormatSession(session.framework, session.version);
 
   if (!isClaudeSource) {
-    degradedReason = '仅 claude 格式来源（proxy 捕获 / native claude-code）展示 Skill 覆盖度；opencode 原生会话的系统提示不落盘，codex 原生会话的 rollout 布局读取暂未接入（系统提示在 developer 消息内），全集均不可恢复';
+    degradedReason = degradedReasonForNonClaudeSource(session.framework);
   } else if (!session.sourcePath) {
-    degradedReason = '源文件不可用（sourcePath 缺失或文件已移走）';
+    degradedReason = '源文件不可用（sourcePath 缺失或文件已移走）；重新导入该会话可恢复';
   } else {
     const parsed = readAvailableSkills(session.sourcePath);
     if (parsed) {

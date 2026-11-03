@@ -22,6 +22,7 @@ import type { ObserveScope } from '@/lib/observe/scope';
 import { memberByRowId, memberByTaskId } from '@/lib/observe/scope';
 import { joinSubagentIdentities, type TurnIdentity } from '@/lib/observe/turn-identity';
 import { isProxyVersion } from '@/lib/shared/session-format';
+import { turnWallMs } from '@/lib/observe/turn-duration';
 import { wireToolDurations } from '@/lib/tool-timing';
 import { fetchContentHeads } from '@/lib/observe/collectors/content-heads';
 import { summarizeToolCallErrors, toolCallErrorMessage, type TurnErrorDigest } from '@/lib/tool-call-errors';
@@ -65,6 +66,8 @@ export interface MergedTurnItem {
   inputMessagesCount: number;
   contextWindowPct: number | null;
   latencyMs: number;
+  /** 单轮耗时：生成 + 工具执行的墙钟口径（框架语义见 lib/observe/turn-duration） */
+  turnMs: number;
   createdAt: string | null;
   completedAt: string | null;
   model: string | null;
@@ -83,10 +86,14 @@ export interface MergedTurnItem {
 export interface CollectTurnsOptions {
   /** 成员 taskId 过滤（须在作用域内；调用方校验） */
   member?: string | null;
-  /** 1 起 */
+  /** 1 起（与 offset 二选一，offset 优先） */
   page?: number;
-  /** 默认 200，上限 20_000（刀F 统一；≤500 为 Turns tab UI 调用方自控，非 API 钳制） */
+  /** 默认 200，上限 20000（性能护栏：turns 恒分页） */
   pageSize?: number;
+  /** 0 起绝对偏移（补拉语义）：拉齐剩余轮次时剩余量随已载量变化，页码
+   *  算术（skip=(page-1)×pageSize）只能续接同页容序列，无法表达「从已载
+   *  边界起取 N 条」；offset 与 page 同传时 offset 优先 */
+  offset?: number | null;
   /** 工具调用结果原文（Error Turns 卡错误信息抽取）：轻投影缺省不带——
    *  Turns tab 单轮深钻走顶级 turn 端点；Overview 全量消费方请改用
    *  includeErrorDigest（服务端预算错误摘要，无需 18MB 级原文进响应） */
@@ -102,6 +109,8 @@ export interface CollectTurnsResult {
   total: number;
   page: number;
   pageSize: number;
+  /** 本次实际生效的绝对偏移（page 语义时为 null）——补拉链自校验用 */
+  offset: number | null;
 }
 
 const DEFAULT_PAGE_SIZE = 200;
@@ -124,12 +133,13 @@ export async function collectScopeTurns(
   const page = Number.isFinite(options.page) && (options.page ?? 1) > 0 ? Math.floor(options.page!) : 1;
   const requestedPageSize = Number.isFinite(options.pageSize) && (options.pageSize ?? 0) > 0 ? Math.floor(options.pageSize!) : DEFAULT_PAGE_SIZE;
   const pageSize = Math.min(requestedPageSize, MAX_PAGE_SIZE);
-  if (scope.members.length === 0) return { items: [], total: 0, page, pageSize };
+  const offset = Number.isFinite(options.offset) && (options.offset ?? 0) >= 0 ? Math.floor(options.offset!) : null;
+  if (scope.members.length === 0) return { items: [], total: 0, page, pageSize, offset };
 
   const memberRowIds = options.member
     ? [memberByTaskId(scope).get(options.member)?.rowId].filter((r): r is string => r != null)
     : scope.members.map(m => m.rowId);
-  if (memberRowIds.length === 0) return { items: [], total: 0, page, pageSize };
+  if (memberRowIds.length === 0) return { items: [], total: 0, page, pageSize, offset };
 
   const where = { sessionId: { in: memberRowIds } };
   // 显式轻投影（性能层）：不带顶层 select 时 Prisma 物化 Turn 全部标量列
@@ -155,7 +165,7 @@ export async function collectScopeTurns(
         toolCalls: { select: { toolCallId: true, toolName: true, state: true, durationMs: true, ...(options.includeToolResult ? { resultJson: true } : {}) } },
         skillEvents: { select: { skillName: true, eventType: true, success: true, errorMessage: true } },
       },
-      skip: (page - 1) * pageSize,
+      skip: offset ?? (page - 1) * pageSize,
       take: pageSize,
     }),
     prisma.turn.count({ where }),
@@ -273,6 +283,11 @@ export async function collectScopeTurns(
     : new Map<string, TurnErrorDigest>();
   const items: MergedTurnItem[] = rows.map(t => {
     const member = byRowId.get(t.sessionId);
+    // 工具有效时长（durationMs > 0 优先、wire 兜底）：turnMs 与 toolCalls
+    // 投影同源同值——单轮耗时 = 生成 + 最慢并行工具（框架语义见 turn-duration）
+    const effectiveToolDurations = t.toolCalls.map(tc => tc.durationMs > 0
+      ? tc.durationMs
+      : (wireOf(t.sessionId)?.get(tc.toolCallId) ?? tc.durationMs));
     return {
       turnId: t.id,
       turnIndex: t.turnIndex,
@@ -292,19 +307,23 @@ export async function collectScopeTurns(
       inputMessagesCount: t.inputMessagesCount,
       contextWindowPct: t.contextWindowPct,
       latencyMs: t.latencyMs,
+      turnMs: turnWallMs(
+        memberSessionByRowId.get(t.sessionId)?.framework ?? null,
+        memberSessionByRowId.get(t.sessionId)?.version ?? null,
+        t.latencyMs,
+        effectiveToolDurations,
+      ),
       createdAt: t.createdAt_ts?.toISOString() ?? t.createdAt.toISOString(),
       completedAt: t.completedAt?.toISOString() ?? null,
       model: t.model || (t.subagentSessionId ? subagentModels.get(t.subagentSessionId) ?? null : null),
       finishReason: t.finishReason,
       subagentType: identityBySession.get(t.subagentSessionId ?? '')?.subagentType ?? null,
       dispatchStep: identityBySession.get(t.subagentSessionId ?? '')?.step ?? null,
-      toolCalls: t.toolCalls.map(tc => ({
+      toolCalls: t.toolCalls.map((tc, i) => ({
         toolCallId: tc.toolCallId,
         toolName: tc.toolName,
         state: tc.state,
-        durationMs: tc.durationMs > 0
-          ? tc.durationMs
-          : (wireOf(t.sessionId)?.get(tc.toolCallId) ?? tc.durationMs),
+        durationMs: effectiveToolDurations[i],
         resultJson: (tc as { resultJson?: string | null }).resultJson,
       })),
       ...(digestByTurnId.has(t.id) ? { errorDigest: digestByTurnId.get(t.id)! } : {}),
@@ -317,5 +336,5 @@ export async function collectScopeTurns(
       member: member ? { taskId: member.taskId, label: member.label } : null,
     };
   });
-  return { items, total, page, pageSize };
+  return { items, total, page, pageSize, offset };
 }

@@ -135,7 +135,7 @@ describe("会话块并行派发 lane 展示（chip 行 + 就地展开）", () =>
     const html = renderToStaticMarkup(
       createElement(SessionBlock, {
         session: soloSession("ses-main"),
-        state: { turns, total: turns.length, page: 1, loading: false },
+        state: { turns, total: turns.length, loading: false },
         bridges,
         selectedTurnId: null,
         onSelectTurn: () => {},
@@ -165,7 +165,7 @@ describe("会话块并行派发 lane 展示（chip 行 + 就地展开）", () =>
     const html = renderToStaticMarkup(
       createElement(SessionBlock, {
         session: soloSession("ses-main"),
-        state: { turns: [failedDispatch], total: 1, page: 1, loading: false },
+        state: { turns: [failedDispatch], total: 1, loading: false },
         bridges: [],
         selectedTurnId: null,
         onSelectTurn: () => {},
@@ -320,7 +320,7 @@ describe("会话块并行派发 lane 展示（chip 行 + 就地展开）", () =>
     await act(async () => {
       root.render(createElement(SessionBlock, {
         session: soloSession("ses-main"),
-        state: { turns: turns3, total: turns3.length, page: 1, loading: false },
+        state: { turns: turns3, total: turns3.length, loading: false },
         bridges: bridges3,
         selectedTurnId: null,
         onSelectTurn: () => {},
@@ -355,7 +355,7 @@ describe("轮次行输出构成摘要（无正文轮不退化，工具轮可见�
     renderToStaticMarkup(
       createElement(SessionBlock, {
         session: soloSession("ses-main"),
-        state: { turns, total: turns.length, page: 1, loading: false },
+        state: { turns, total: turns.length, loading: false },
         bridges: [],
         selectedTurnId: null,
         onSelectTurn: () => {},
@@ -443,7 +443,7 @@ describe("换选渲染预算（会话块 memo：无关会话零重渲）", () =>
 
     const turnsA = [makeTurn(1, { contentSummary: "A-1" }), makeTurn(2, { contentSummary: "A-2" })]
     const sessionA = soloSession("ses-a")
-    const stateA = { turns: turnsA, total: turnsA.length, page: 1, loading: false }
+    const stateA = { turns: turnsA, total: turnsA.length, loading: false }
     const noBridges: TurnsBridge[] = []
     const handlers = { onSelectTurn: () => {}, onLoadMore: () => {} }
     const props = (selectedTurnId: string | null) => ({ session: sessionA, state: stateA, bridges: noBridges, selectedTurnId, ...handlers })

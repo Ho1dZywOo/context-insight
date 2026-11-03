@@ -391,9 +391,10 @@ export function splitIntoTurns(
         const isSkillRelated = isSkillToolCall(tc.toolName) || isAgentSkillDispatch(tc.toolName, tc.argsJson);
         const errMsg = extractErrorMessage(tc.resultJson);
 
-        // 工具起止：源携带真实时间戳（ToolCallInfo.startedAt/completedAt，claude-jsonl
-        // 与 opencode v1 填充）→ 落真实值 + durationMs；源没有（如 opencode v2 / 旧
-        // 导出件）→ 降级为既有行为（复制所属轮时间、durationMs=0），路径不劣化
+        // 工具起止：源携带真实时间戳（ToolCallInfo.startedAt/completedAt，claude-jsonl、
+        // opencode v1 part 表与 v2 tool 项 time 字段填充）→ 落真实值 + durationMs；
+        // 源没有（如旧导出件）→ 降级为既有行为（复制所属轮时间、durationMs=0），
+        // 路径不劣化
         const tcStartIso = tc.startedAt != null ? new Date(tc.startedAt).toISOString() : createdAt_ts;
         const tcEndIso = tc.completedAt != null ? new Date(tc.completedAt).toISOString() : (completedAt ?? createdAt_ts);
         const toolCallRow: ToolCallRow = {

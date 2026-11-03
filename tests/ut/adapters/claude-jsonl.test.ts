@@ -125,7 +125,10 @@ describe('claude-jsonl adapter', () => {
       expect(sessions.length).toBe(1);
       const s = sessions[0];
       expect(s.endedAt).toBe('2026-05-19T09:26:27.511Z');
-      expect(s.totalTokens).toBe(1500);
+      // 重放签名去重：样例 10 条带 usage 的 assistant 行只有 4 个唯一
+      // (message.id, usage) 签名（6 条是同 id 同 usage 的 verbatim 副本，
+      // 修复前重复计费 1500）——唯一响应口径 4 × 150 = 600
+      expect(s.totalTokens).toBe(600);
 
       const noTs = listSessions(FIXTURE_FILE).find(x => x.id === 'abc123');
       expect(noTs?.endedAt).toBeNull();
@@ -429,6 +432,74 @@ describe('claude-jsonl adapter', () => {
       // The 4th line is a client-side status event (top-level content string,
       // no message) — NOT model input, must not produce a turn.
       expect(interactions.some(i => i.content?.includes('Caveat:'))).toBe(false);
+    });
+  });
+
+  describe('wire 捕获 system 组件噪声治理（token 倒计时 + 重复注入去重）', () => {
+    // cpx 按请求原样落盘 system 数组（system 组件无 message.id，捕获侧无
+    // 法像 messages 历史那样按请求去重）：token 倒计时逐请求出现（同值/
+    // 变值均为 wire 簿记）、静态注入逐字重复——对话时间线收敛为「每种注入
+    // 一次、落在首现位置」，wire 原文保真不受影响（读 Turn 表的所有消费面
+    // 均不再见到簿记噪声）
+    const NOISE_FILE = path.join(FIXTURE_DIR, 'proxy-wire-system-noise.jsonl');
+
+    it('token 倒计时零入时间线：同值重复与变值首现都不产出 system 轮', () => {
+      const interactions = readSession(NOISE_FILE, 'wire-noise');
+      expect(interactions.some(i => (i.content ?? '').includes('tokens left'))).toBe(false);
+    });
+
+    it('重复 system 注入按内容去重：静态 Environment 首现保留、重复跳过', () => {
+      const interactions = readSession(NOISE_FILE, 'wire-noise');
+      const env = interactions.filter(i => (i.content ?? '').startsWith('# Environment'));
+      expect(env.length).toBe(1);
+    });
+
+    it('拼接载体剥除：Environment 材料化内容为剥除倒计时后的原文（变值倒计时不破坏去重）', () => {
+      // 真机形态：倒计时作为尾行拼接在静态提示字符串上，数字逐请求变化 →
+      // 整串各不相同。剥除倒计时后按剩余文本去重，材料化轮不含簿记行。
+      const interactions = readSession(NOISE_FILE, 'wire-noise');
+      const env = interactions.find(i => (i.content ?? '').startsWith('# Environment'));
+      expect(env?.content).toBe('# Environment\nYou have been invoked in the following environment: /tmp/wire-noise');
+    });
+
+    it('独立系统事件首现保留；user/assistant 轮不受影响', () => {
+      const interactions = readSession(NOISE_FILE, 'wire-noise');
+      const sys = interactions.filter(i => i.role === 'system');
+      expect(sys.length).toBe(2); // Environment 首现 + Context low 告警
+      expect(sys.some(t => (t.content ?? '').startsWith('[SYSTEM NOTIFICATION'))).toBe(true);
+      expect(interactions.filter(i => i.role === 'user').length).toBe(1);
+      expect(interactions.filter(i => i.role === 'assistant').length).toBe(2);
+    });
+
+    it('首现位置即时间线位置（Environment 在 user 后、告警在 assistant 之后）', () => {
+      const interactions = readSession(NOISE_FILE, 'wire-noise');
+      expect(interactions.map(i => i.role)).toEqual(['user', 'system', 'assistant', 'system', 'assistant']);
+    });
+  });
+
+  describe('wire 捕获 tool_result 历史重放（首现胜出）', () => {
+    // cpx 逐请求落盘 messages 历史：同一 tool_use_id 的结果行随每个后续请求
+    // 重复携带（真机实测：1007 个唯一结果被 2310 条载体行携带，73% 重放
+    // 2–5 次），首条载体行紧跟真实完成时刻、后续重放晚数小时/数天。首现
+    // 胜出——重放行不覆盖 completedAt（否则 42ms 的 Bash 被记成 50653.9s，
+    // 连带 nativeBoundary 的 toolEnd 推算与后续轮 latency 一并被撑爆）。
+    const REPLAY_FILE = path.join(FIXTURE_DIR, 'proxy-wire-tool-replay.jsonl');
+
+    it('completedAt 锚定首条载体行（42ms 窗口），不被 14h/15h 后的重放行覆盖', () => {
+      const interactions = readSession(REPLAY_FILE, 'wire-replay');
+      const toolTurn = interactions.find(i => i.role === 'assistant' && (i.tool_calls?.length ?? 0) > 0);
+      expect(toolTurn).toBeDefined();
+      const tc = toolTurn!.tool_calls![0];
+      expect(tc.startedAt).toBe(Date.parse('2026-10-27T13:14:48.004Z'));
+      expect(tc.completedAt).toBe(Date.parse('2026-10-27T13:14:48.046Z')); // 首现载体
+      expect(tc.completedAt).not.toBe(Date.parse('2026-10-28T03:19:01.857Z')); // 纯重放行
+      expect(tc.completedAt).not.toBe(Date.parse('2026-10-28T05:00:00.000Z')); // 重放 + 新提示
+    });
+
+    it('重放行不产生额外轮次：user 2（原始提示 + 重放请求的新提示）/ assistant 2', () => {
+      const interactions = readSession(REPLAY_FILE, 'wire-replay');
+      expect(interactions.filter(i => i.role === 'user').length).toBe(2);
+      expect(interactions.filter(i => i.role === 'assistant').length).toBe(2);
     });
   });
 

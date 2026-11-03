@@ -770,7 +770,7 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                               if (sc.content.has(selAgg.name) || sc.error.has(selAgg.name)) sc.clear(selAgg.name);
                               else if (!sc.loading.has(selAgg.name)) sc.fetchOne(selAgg.name);
                             }}
-                            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { if (sc.content.has(selAgg.name) || sc.error.has(selAgg.name)) sc.clear(selAgg.name); else if (!sc.loading.has(selAgg.name)) sc.fetchOne(selAgg.name); } }}
+                            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { if (sc.content.has(selAgg.name)) sc.clear(selAgg.name); else if (!sc.loading.has(selAgg.name)) sc.fetchOne(selAgg.name); } }}
                           >
                             <BookOpenIcon className="size-3" />
                             {sc.loading.has(selAgg.name) ? "加载中…" : sc.content.has(selAgg.name) ? "收起" : "全文"}
@@ -873,11 +873,8 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                             onKeyDown={e => {
                               if (e.key === "Enter" || e.key === " ") {
                                 const key = `agent:${selDispatchAgg.name}`;
-                                if (sc.content.has(key) || sc.error.has(key)) sc.clear(key);
-                                else if (!sc.loading.has(key)) {
-                                  const fw = selDispatchAgg.items.find(i => i.member?.framework)?.member?.framework;
-                                  sc.fetchAgent(selDispatchAgg.name, fw ?? undefined);
-                                }
+                                if (sc.content.has(key)) sc.clear(key);
+                                else if (!sc.loading.has(key)) sc.fetchAgent(selDispatchAgg.name);
                               }
                             }}
                           >

@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { SkillsPanorama, type SkillsPanoramaData, type SkillsMemberRef } from "@/components/observe/SkillsPanorama";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 export interface RunSkillsTabProps {
   runId: string;
@@ -24,6 +25,7 @@ export interface RunSkillsTabProps {
 }
 
 export function RunSkillsTab({ runId, members, onOpenTurn }: RunSkillsTabProps) {
+  const dataEpoch = useRunDataEpoch();
   const [data, setData] = useState<SkillsPanoramaData | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -42,7 +44,7 @@ export function RunSkillsTab({ runId, members, onOpenTurn }: RunSkillsTabProps) 
         setLoaded(true);
       });
     return () => { cancelled = true };
-  }, [runId]);
+  }, [runId, dataEpoch]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-2xl bg-muted/30 p-4">

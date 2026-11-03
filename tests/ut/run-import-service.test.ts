@@ -12,7 +12,8 @@
 //   claude-jsonl 缺省（claude-code）
 // - 未引用会话目录照样导入（用户决策 #2：导入即全量）
 // - 重跑幂等（(taskId, framework) 唯一索引 → existing 计数）
-// fixture：tests/ut/data/run/mini-bundle/（3 引用会话 + 1 未引用 + 回滚 + 子图）
+// fixture：tests/ut/data/run/mini-bundle/（3 引用会话 + 1 未引用 + 回滚 + 子图；
+// ses_mini_a.native/subagents/＝bundle 会话目录布局的子代理样本）
 
 import { describe, it, expect, afterAll } from 'vitest';
 import fs from 'node:fs';
@@ -29,6 +30,7 @@ import {
 } from '@/lib/run/import-service';
 import { readRun } from '@/lib/run/run-store';
 import { excludedSessionIds, deleteOwnedSessionRows } from '@/lib/run/session-scope';
+import { listSubagentSessions } from '@/lib/ingest/adapters/claude-jsonl';
 
 const BUNDLE = path.resolve(__dirname, './data/run/mini-bundle');
 const prisma = new PrismaClient();
@@ -383,6 +385,126 @@ describe('Sessions 域隔离（ownedSessions sidecar，用户决策：run 会话
       expect(remaining).toEqual([{ taskId: 'ses_mini_a', framework: 'custom-fw' }]);
     } finally {
       await prisma.session.delete({ where: { id: own.id } }).catch(() => {});
+    }
+  });
+});
+
+describe('bundle 子代理发现（会话目录布局：subagents/ 与主 jsonl 同目录）', () => {
+  const SUBFIX_SID = 'ses_subfix_a';
+  const SUBFIX_SUB = 'ses_subfix_sub';
+  const SUBFIX_MAIN_JSONL = [
+    '{"type":"user","message":{"role":"user","content":"run the fix"}}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"dispatching reviewer"}],"model":"claude-haiku-3-20250415","usage":{"input_tokens":10,"output_tokens":5}},"duration_ms":1000}',
+    '{"type":"result","subtype":"success","result":"ok","cost_usd":0.001,"duration_ms":2000}',
+  ].join('\n');
+  const SUBFIX_SUB_JSONL = [
+    '{"type":"user","message":{"role":"user","content":"review the fix"}}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"fix reviewed"}],"model":"claude-haiku-3-20250415","usage":{"input_tokens":8,"output_tokens":3}},"duration_ms":500}',
+  ].join('\n');
+
+  it('首导即并入：isSubagent 打标 + 泳道连接键 + 会话聚合，子代理不另建会话行', async () => {
+    // 前一 describe 的删除级联已清 mini 行：重导一轮重建（幂等）
+    const manifest = parseManifest(
+      JSON.parse(fs.readFileSync(path.join(BUNDLE, 'workflow.json'), 'utf-8')),
+    );
+    await runImportJob(freshState(manifest.id, BUNDLE), BUNDLE, manifest, { prisma, root: TMP_ROOT });
+
+    const row = await prisma.session.findFirst({
+      where: { taskId: 'ses_mini_a' },
+      include: { turns: { select: { isSubagent: true, subagentSessionId: true, subagentName: true } } },
+    });
+    expect(row).not.toBeNull();
+    const subTurns = row!.turns.filter(t => t.isSubagent);
+    expect(subTurns.length).toBeGreaterThan(0);
+    expect(subTurns.every(t => t.subagentSessionId === 'ses_mini_sub_a')).toBe(true);
+    expect(subTurns.some(t => t.subagentName === '审查 mini bundle（子代理）')).toBe(true);
+    expect(row!.totalSubagentCount).toBe(1);
+    expect(row!.turns.some(t => !t.isSubagent)).toBe(true);
+    expect(await prisma.session.count({ where: { taskId: 'ses_mini_sub_a' } })).toBe(0);
+  });
+
+  it('修复现场自愈：先导（无子代理）→ 补 subagents/ → 重导并入，主链轮不重不漏', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-subfix-bundle-'));
+    const sessionDir = path.join(dir, 'sessions', `${SUBFIX_SID}.native`);
+    const root = path.join(TMP_ROOT, 'subfix');
+    try {
+      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.writeFileSync(path.join(sessionDir, `${SUBFIX_SID}.jsonl`), SUBFIX_MAIN_JSONL);
+      fs.writeFileSync(
+        path.join(dir, 'workflow.json'),
+        JSON.stringify({
+          schema: 'workflow-bundle', version: 1, id: 'subfix01', kind: 'workflow', name: 'subfix',
+          data: {
+            exportDataComplete: true,
+            members: [{
+              id: 'S_SUBFIX', kind: 'session', name: '补导会话',
+              startedAt: null, finishedAt: null,
+              sessionId: SUBFIX_SID, location: `sessions/${SUBFIX_SID}.native`,
+              annotation: { graph: { role: 'execute', nodeId: 'n', generation: 0, attempt: 1 } },
+            }],
+            relations: [],
+          },
+        }),
+      );
+      writeBundleSchema(dir);
+      const manifest = parseManifest(
+        JSON.parse(fs.readFileSync(path.join(dir, 'workflow.json'), 'utf-8')),
+      );
+
+      await runImportJob(freshState(manifest.id, dir), dir, manifest, { prisma, root });
+      const first = await prisma.session.findFirst({
+        where: { taskId: SUBFIX_SID },
+        include: { turns: { select: { isSubagent: true } } },
+      });
+      expect(first!.turns.every(t => !t.isSubagent)).toBe(true);
+      const mainTurnCount = first!.turns.length;
+
+      const subDir = path.join(sessionDir, 'subagents');
+      fs.mkdirSync(subDir);
+      fs.writeFileSync(path.join(subDir, `${SUBFIX_SUB}.jsonl`), SUBFIX_SUB_JSONL);
+      fs.writeFileSync(
+        path.join(subDir, `${SUBFIX_SUB}.meta.json`),
+        JSON.stringify({
+          toolUseId: null,
+          name: '复查修复（bundle 子代理）',
+          agentType: null,
+          x_cannbay: {
+            schema: 'cc-subagent-meta',
+            version: 1,
+            data: {
+              toolUseId: null,
+              name: '复查修复（bundle 子代理）',
+              agentType: null,
+              subagentSessionId: SUBFIX_SUB,
+            },
+          },
+        }),
+      );
+
+      await runImportJob(freshState(manifest.id, dir), dir, manifest, { prisma, root });
+      const second = await prisma.session.findFirst({
+        where: { taskId: SUBFIX_SID },
+        include: { turns: { select: { isSubagent: true, subagentSessionId: true, subagentName: true } } },
+      });
+      const subTurns = second!.turns.filter(t => t.isSubagent);
+      expect(subTurns.length).toBeGreaterThan(0);
+      expect(subTurns.every(t => t.subagentSessionId === SUBFIX_SUB)).toBe(true);
+      expect(second!.turns.length).toBe(mainTurnCount + subTurns.length);
+      expect(second!.totalSubagentCount).toBe(1);
+    } finally {
+      await prisma.session.deleteMany({ where: { taskId: { in: [SUBFIX_SID, SUBFIX_SUB] } } }).catch(() => {});
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('负向：与主 jsonl 同目录的 subagents 若是文件（非目录）不误吞', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-subagents-file-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'main.jsonl'), '{}\n');
+      fs.writeFileSync(path.join(dir, 'subagents'), 'stray file');
+      expect(listSubagentSessions(path.join(dir, 'main.jsonl'), 'main')).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

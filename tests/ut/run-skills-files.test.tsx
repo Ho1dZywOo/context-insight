@@ -158,7 +158,7 @@ const coverageOk = {
 };
 const coverageDegraded = {
   taskId: 'ses_mini_b', framework: 'opencode', hasAvailableList: false, listFormat: null,
-  degradedReason: 'opencode 原生会话的系统提示不落盘，全集不可恢复',
+  degradedReason: 'opencode 原生会话的系统提示只在运行时请求、不落盘，skills 全集不可恢复；经 cpx 代理捕获重跑该会话即可获得全集',
   usedSkillCount: 0, items: [], stats: { availableTotal: 0, invoked: 0, loaded: 0, dispatched: 0, unused: 0, extra: 0, total: 0 },
 };
 

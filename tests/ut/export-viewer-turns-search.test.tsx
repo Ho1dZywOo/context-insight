@@ -198,6 +198,29 @@ describe('离线查看器 Turns 搜索（客户端 matchTurnSearch 同口径）'
     expect(hits2.textContent).toContain('摘要');
   });
 
+  it('工具名命中（第六路）：Overview Tool Calls 面板展示的名字可直接搜到——字段标签 + 调用预览', async () => {
+    await renderViewer('?tab=turns');
+    const panel = document.querySelector('[data-export-panel="true"]') ?? document;
+    const input = panel.querySelector('input[placeholder="搜索本 run…"]') as HTMLInputElement;
+
+    // 'Read' 只出现在 toolName（args 的 file_path 不含 read）——纯名字命中，
+    // 此前五路匹配下这里零命中（Overview 面板名字搜不到的根因回归锁）
+    await act(async () => {
+      setInputValue(input, 'Read');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      await new Promise(r => setTimeout(r, 20));
+    });
+    const hits = document.querySelector('[data-turns-hits]')!;
+    expect(hits).toBeTruthy();
+    expect(hits.textContent).toContain('Read');
+    // 字段标签落在命中条目内（过滤面 chip 也有「工具名」字样，须按条目断言）
+    const hit = document.querySelector('[data-hit="rop-v-t1"]')!;
+    expect(hit).toBeTruthy();
+    expect(hit.textContent).toContain('工具名');
+    // 上下文带调用预览（🔧 Read: {"file_path":…}）
+    expect(hit.textContent).toContain('file_path');
+  });
+
   it('一框两语法：#数字直达会话内轮次；未命中给提示', async () => {
     await renderViewer('?tab=turns');
     const input = document.querySelector('input[placeholder="搜索本 run…"]') as HTMLInputElement;

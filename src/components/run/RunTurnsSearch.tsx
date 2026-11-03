@@ -73,6 +73,7 @@ const FIELD_TAG: Record<TurnSearchItem["matchField"], { label: string; cls: stri
   toolResult: { label: "工具结果", cls: "text-violet-600 dark:text-violet-400" },
   toolArgs: { label: "工具参数", cls: "text-violet-600 dark:text-violet-400" },
   toolError: { label: "工具错误", cls: "text-red-600 dark:text-red-400" },
+  toolName: { label: "工具名", cls: "text-violet-600 dark:text-violet-400" },
 };
 
 // ── 命中过滤（旧 Trace 的 source/tools 筛选面恢复，run 页与离线查看器共用）──

@@ -18,13 +18,13 @@
 // ←/→ 沿「节点 × 成员会话 × 轮次」全序列连续走查，越过节点边界自动加载。
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 import { MessageSquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TurnDetail, type TurnDetailData } from "@/components/observe/TurnDetail";
 import { TurnDetailSkeleton } from "@/components/observe/TurnDetailSkeleton";
 import type { FilmstripTurn } from "@/components/observe/TurnFilmstrip";
-import { RunTurnsNodes, STATUS_DOT, type TurnsNode, type TurnsNodeSession, type MemberTurnsState } from "@/components/run/RunTurnsNodes";
-import { effectiveExpandedSet, toggleNodeExpansion } from "@/components/run/run-turns-display";
+import { RunTurnsNodes, STATUS_DOT, type TurnsNode, type TurnsNodeSession, type MemberTurnsState, type TurnsBlockTurn } from "@/components/run/RunTurnsNodes";
 import { RunTurnsRoleFilter, deriveRoleOptions, toggleRoleFilter } from "@/components/run/RunTurnsRoleFilter";
 import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState } from "@/components/run/RunTurnsSearch";
 import type { TurnHighlight } from "@/lib/shared/highlight";
@@ -33,7 +33,13 @@ import type { MergedBridgeItem } from "@/lib/observe/collectors/bridges";
 import type { NodeInstance, RunViewModel } from "@/lib/run/view-model";
 import type { SessionRef } from "@/lib/run/model";
 
+/** 首页页容量：小页快出首屏（快路径），剩余走补拉链 */
 const PAGE_SIZE = 200;
+/** 补拉单请求上限：对齐服务端 MAX_PAGE_SIZE 硬顶——超限会被服务端钳制
+ *  静默缩页，客户端按同值分块自管 */
+const REST_PAGE_SIZE = 20_000;
+/** 补拉链护栏：200 + 32×20000 轮的跑飞上限（真实单成员到不了） */
+const REST_CHAIN_LIMIT = 32;
 
 /** 详情骨架出场延迟：点击选轮的取数快于该值时不出骨架（保留旧内容直到
  *  新内容落地），超过才让位给骨架——快取数不闪、慢取数有信号 */
@@ -126,6 +132,7 @@ function firstContentNode(nodes: TurnsNode[]): TurnsNode | undefined {
 const EMPTY_SEARCH_ITEMS: TurnSearchItem[] = [];
 
 export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurnsTabProps) {
+  const dataEpoch = useRunDataEpoch();
   const nodes = useMemo(() => buildNodes(viewModel), [viewModel]);
   const flatSessions = useMemo(() => nodes.flatMap(c => c.sessions), [nodes]);
   const bands = useMemo(
@@ -164,13 +171,19 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
   const [enteredTurnId, setEnteredTurnId] = useState<string | null>(null);
   const walkSelectRef = useRef<string | null>(null);
   const skeletonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** 已取/在途的成员分页（`taskId:page`），懒加载去重闸 */
+  /** 已取/在途的成员首页（`taskId:1`），懒加载去重闸 */
   const fetchedPagesRef = useRef<Set<string>>(new Set());
+  /** 补拉链单飞闸（`taskId`）：首页落地后的自动续拉 / 中断手动重试共用 */
+  const restInflightRef = useRef<Set<string>>(new Set());
+  /** memberData 只读镜像（effect 提交后同步）：补拉链与重试读镜像而非闭包
+   *  捕获，回调身份保持稳定——会话块/行 memo 不被每次成员取数打散 */
+  const memberDataRef = useRef(memberData);
+  useEffect(() => { memberDataRef.current = memberData; }, [memberData]);
   /** 走查越过已加载边界时的待落地选择（目标会话加载完即选首/末轮） */
   const pendingWalk = useRef<{ taskId: string; dir: 1 | -1 } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // 桥（run 全量一次，小载荷元数据；节点内按派发轮归组）
+  // 桥（run 全量一次，小载荷元数据；节点内按派发轮归组；数据纪元原地重取）
   useEffect(() => {
     let cancelled = false;
     void fetch(`/api/observe/run/${encodeURIComponent(runId)}/bridges`)
@@ -178,50 +191,99 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
       .then(d => { if (!cancelled) setBridges(d?.items ?? []) })
       .catch(() => { /* 桥不可用时泳道缺席，轮次不受影响 */ });
     return () => { cancelled = true };
+  }, [runId, dataEpoch]);
+
+  /** 成员轮次自动拉齐（两段式）：首页 PAGE_SIZE 快出首屏 → 剩余按 offset
+   *  分块补拉到全集（块 ≤ REST_PAGE_SIZE，超出循环续拉）。补拉量随已载量
+   *  变化，页码算术只表达「同页容第 N 页」，表达不了「从已载边界起取 N 条」
+   *  ——offset 是补拉的唯一诚实语义。中断由会话块「加载更多」手动重试兜底，
+   *  重试重入链条从已载边界续拉（幂等） */
+  const fetchMemberRest = useCallback(async (taskId: string, loadedHint?: number, totalHint?: number) => {
+    if (restInflightRef.current.has(taskId)) return;
+    const seed = memberDataRef.current.get(taskId);
+    let loaded = loadedHint ?? seed?.turns.length ?? 0;
+    let total = totalHint ?? seed?.total ?? 0;
+    if (loaded >= total) return;
+    restInflightRef.current.add(taskId);
+    setMemberData(prev => {
+      const cur = prev.get(taskId);
+      if (!cur || cur.loading) return prev;
+      const next = new Map(prev);
+      next.set(taskId, { ...cur, loading: true });
+      return next;
+    });
+    try {
+      for (let i = 0; i < REST_CHAIN_LIMIT; i++) {
+        const take = Math.min(total - loaded, REST_PAGE_SIZE);
+        let d: { items?: TurnsBlockTurn[]; total?: number } | null = null;
+        try {
+          const r = await fetch(`/api/observe/run/${encodeURIComponent(runId)}/turns?member=${encodeURIComponent(taskId)}&offset=${loaded}&pageSize=${take}`);
+          d = r.ok ? await r.json().catch(() => null) : null;
+        } catch { /* 中断退出，手动重试兜底 */ }
+        const items = d && Array.isArray(d.items) ? d.items : null;
+        if (!items || items.length === 0) break;
+        const reported = d?.total;
+        if (typeof reported === 'number' && Number.isFinite(reported)) total = reported;
+        loaded += items.length;
+        setMemberData(prev => {
+          const cur = prev.get(taskId);
+          if (!cur) return prev;
+          // 服务端确定性排序（createdAt asc / id asc）保证 offset 续拉连续；
+          // turnId 去重追加兜底重入重叠（重复条目丢弃，顺序保持）
+          const seen = new Set(cur.turns.map(t => t.turnId));
+          const merged = cur.turns.concat(items.filter(t => !seen.has(t.turnId)));
+          const next = new Map(prev);
+          next.set(taskId, { turns: merged, total, loading: merged.length < total });
+          return next;
+        });
+        if (loaded >= total) break;
+      }
+    } finally {
+      restInflightRef.current.delete(taskId);
+      setMemberData(prev => {
+        const cur = prev.get(taskId);
+        if (!cur?.loading) return prev;
+        const next = new Map(prev);
+        next.set(taskId, { ...cur, loading: false });
+        return next;
+      });
+    }
   }, [runId]);
 
-  const fetchMemberPage = useCallback((taskId: string, page: number) => {
-    fetchedPagesRef.current.add(`${taskId}:${page}`);
-    void fetch(`/api/observe/run/${encodeURIComponent(runId)}/turns?member=${encodeURIComponent(taskId)}&page=${page}&pageSize=${PAGE_SIZE}`)
+  const fetchMemberFirst = useCallback((taskId: string) => {
+    fetchedPagesRef.current.add(`${taskId}:1`);
+    void fetch(`/api/observe/run/${encodeURIComponent(runId)}/turns?member=${encodeURIComponent(taskId)}&page=1&pageSize=${PAGE_SIZE}`)
       .then(r => (r.ok ? r.json() : null))
       .then(d => {
+        const items = d && Array.isArray(d.items) ? (d.items as TurnsBlockTurn[]) : null;
+        if (!items) {
+          // 首页失败：成员块以空态呈现（载入收敛，不触发补拉）
+          setMemberData(prev => (prev.has(taskId)
+            ? prev
+            : new Map(prev).set(taskId, { turns: [], total: 0, loading: false })));
+          return;
+        }
+        const total = Number.isFinite(d!.total) ? d!.total : items.length;
         setMemberData(prev => {
-          const cur = prev.get(taskId);
-          if (!d) {
-            if (cur?.loading) {
-              const next = new Map(prev);
-              next.set(taskId, { ...cur, loading: false });
-              return next;
-            }
-            if (!cur) {
-              const next = new Map(prev);
-              next.set(taskId, { turns: [], total: 0, page: 1, loading: false });
-              return next;
-            }
-            return prev;
-          }
-          const merged = page > 1 && cur ? [...cur.turns, ...(d.items ?? [])] : (d.items ?? []);
           const next = new Map(prev);
-          next.set(taskId, { turns: merged, total: d.total ?? merged.length, page, loading: false });
+          next.set(taskId, { turns: items, total, loading: items.length < total });
           return next;
         });
+        // 自动拉齐：首页未覆盖全集即从已载边界补齐剩余
+        if (items.length < total) void fetchMemberRest(taskId, items.length, total);
       })
       .catch(() => {
-        setMemberData(prev => {
-          const cur = prev.get(taskId);
-          if (!cur?.loading) return prev;
-          const next = new Map(prev);
-          next.set(taskId, { ...cur, loading: false });
-          return next;
-        });
+        setMemberData(prev => (prev.has(taskId)
+          ? prev
+          : new Map(prev).set(taskId, { turns: [], total: 0, loading: false })));
       });
-  }, [runId]);
+  }, [runId, fetchMemberRest]);
 
   /** 首页懒加载（effect/事件两用；在途去重走 ref，首屏以数据缺席呈现载入态） */
   const ensureMemberTurns = useCallback((taskId: string) => {
     if (fetchedPagesRef.current.has(`${taskId}:1`)) return;
-    fetchMemberPage(taskId, 1);
-  }, [fetchMemberPage]);
+    fetchMemberFirst(taskId);
+  }, [fetchMemberFirst]);
 
   /** Run 轨节点点击：只揭示不展开——节点块滚动到视野居中；展开仍由节点头
    *  独占（定位与展开是两种意图，不捆绑触发，也不预取成员分页） */
@@ -230,23 +292,25 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     if (node) revealIntoView(listRef.current, node);
   }, []);
 
-  /** memberData 只读镜像（effect 提交后同步）：loadMore 读镜像而非闭包捕获，
-   *  回调身份保持稳定——会话块/行 memo 不被每次成员取数打散 */
-  const memberDataRef = useRef(memberData);
-  useEffect(() => { memberDataRef.current = memberData; }, [memberData]);
+  const toggleNode = useCallback((key: string) => {
+    setToggledTurnsNodes(prev => (prev.has(key) ? prev : new Set(prev).add(key)));
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    const ch = nodes.find(c => c.key === key);
+    if (ch && !expanded.has(key)) for (const s of ch.sessions) ensureMemberTurns(s.taskId);
+  }, [nodes, ensureMemberTurns, expanded]);
 
+  /** 「加载更多」= 补拉链中断后的手动重试（点击重入链条，offset 从已载
+   *  边界续拉，幂等）；自动拉齐路径下平时不可见 */
   const loadMore = useCallback((taskId: string) => {
     const cur = memberDataRef.current.get(taskId);
     if (!cur || cur.loading || cur.turns.length >= cur.total) return;
-    setMemberData(prev => {
-      const c = prev.get(taskId);
-      if (!c) return prev;
-      const next = new Map(prev);
-      next.set(taskId, { ...c, loading: true });
-      return next;
-    });
-    fetchMemberPage(taskId, cur.page + 1);
-  }, [fetchMemberPage]);
+    void fetchMemberRest(taskId);
+  }, [fetchMemberRest]);
 
   // ── 选中即揭示（原语）──
   // 任何路径换选某轮（列表点击 / 胶片轨 / ←/→ 走查 / 深链 / 跨页跳转）都挂起
@@ -287,6 +351,18 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     const first = firstContentNode(nodes);
     if (first) for (const s of first.sessions) ensureMemberTurns(s.taskId);
   }, [nodes, ensureMemberTurns]);
+
+  // 数据纪元增量拉齐：刷新后按「已载边界」offset 续拉各已载成员——不重置任何
+  // 阅读态（滚动/展开/搜索/筛选/详情仓全保持；新轮次按 turnId 去重追加，
+  // 服务端确定性排序保证 offset 续拉连续）。totalHint=∞ 越过「已载 ≥ 已知
+  // 总量」早退闸——新轮次使 total 增长，旧值不再可信，首响应回报真实 total
+  // 即收敛。0 轮成员同样走此路（offset=0 = 从头拉首页）。
+  useEffect(() => {
+    if (dataEpoch === 0) return;
+    for (const [taskId, s] of memberDataRef.current) {
+      void fetchMemberRest(taskId, s.turns.length, Number.POSITIVE_INFINITY);
+    }
+  }, [dataEpoch, fetchMemberRest]);
 
   // 选中轮详情（turnId 全局唯一；详情仓缓存命中不重取，←/→ 走查零请求）
   const activeDetail = turnId != null ? (details.get(turnId) ?? null) : null;
@@ -337,6 +413,28 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
         if (skeletonTimerRef.current) { clearTimeout(skeletonTimerRef.current); skeletonTimerRef.current = null; }
       });
   }, [turnId, details, staleDetail]);
+
+  // 数据纪元：选中轮详情原地刷新（streaming 中的轮内容增长直接替换仓条
+  // 目；滚动不动——内容只向下延伸，不闪骨架不重放入场动画）。未选中不动
+  // 作；缓存里没有的轮由上方详情 effect 负责首取，此处只做已看内容的更新。
+  useEffect(() => {
+    if (dataEpoch === 0 || turnId == null) return;
+    const id = turnId;
+    if (inflightDetailRef.current.has(id)) return;
+    inflightDetailRef.current.add(id);
+    void fetch(`/api/observe/turn/${encodeURIComponent(id)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (!d || d.turnId !== id) return;
+        setDetails(prev => {
+          const next = new Map(prev);
+          next.set(id, d);
+          return next;
+        });
+      })
+      .catch(() => { /* 刷新失败保留旧详情 */ })
+      .finally(() => { inflightDetailRef.current.delete(id); });
+  }, [dataEpoch, turnId]);
 
   // 卸载时收尾骨架计时器
   useEffect(() => () => { if (skeletonTimerRef.current) clearTimeout(skeletonTimerRef.current) }, []);
@@ -438,22 +536,12 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
 
   /** 生效展开集 = 用户展开 ∪ 选中轮所在节点（未点过的节点跟随选中自动展开——
    * 深链/跨节点走查的展开是渲染期派生，不落 effect 改状态） */
-  const effectiveExpanded = useMemo(
-    () => effectiveExpandedSet(expanded, toggledNodes, ownerNodeKey),
-    [expanded, toggledNodes, ownerNodeKey],
-  );
-
-  /** 折叠/展开：按 effectiveExpandedSet 判定当前真实渲染态再翻转——自动展开的
-   *  选中轮节点不在 expanded 里，若按 expanded 判定会「点一下先加入 expanded、
-   *  再点才真正收起」；统一走纯函数，一次点击即收起自动展开节点 */
-  const toggleNode = useCallback((key: string) => {
-    const { expanded: nextExpanded, toggled: nextToggled, expanding } =
-      toggleNodeExpansion(expanded, toggledNodes, ownerNodeKey, key);
-    setToggledTurnsNodes(nextToggled);
-    setExpanded(nextExpanded);
-    const ch = nodes.find(c => c.key === key);
-    if (ch && expanding) for (const s of ch.sessions) ensureMemberTurns(s.taskId);
-  }, [nodes, ensureMemberTurns, expanded, toggledNodes, ownerNodeKey]);
+  const effectiveExpanded = useMemo(() => {
+    if (!ownerNodeKey || expanded.has(ownerNodeKey) || toggledNodes.has(ownerNodeKey)) return expanded;
+    const next = new Set(expanded);
+    next.add(ownerNodeKey);
+    return next;
+  }, [expanded, toggledNodes, ownerNodeKey]);
 
   // ── 选中即揭示：换选挂起 ──
   // prop 驱动的换选（深链 / 跨 tab / 上一层 select）在这里挂起意图；

@@ -137,6 +137,9 @@ describe('opencode v2 readSession（全类型映射）', () => {
     const skill = first.tool_calls![0]!;
     expect(skill).toMatchObject({ toolCallId: 'call_skill_001', toolName: 'skill', state: 'completed' });
     expect(JSON.parse(skill.argsJson!)).toEqual({ skill: 'demo-skill' });
+    // 工具真实起止：v2 tool 项 time 字段（created→completed，发起→终态完成）
+    expect(skill.startedAt).toBe(1790000000300);
+    expect(skill.completedAt).toBe(1790000000500);
     // 结果负载归一（词表）：v2 内容块数组取 text 拼接——历史缺陷：整体
     // stringify 落 JSON 壳（[{"type":"text","text":…}]），弱断言 toContain 掩盖
     expect(skill.resultJson).toBe('Skill demo-skill loaded with 3 instructions');
@@ -148,6 +151,9 @@ describe('opencode v2 readSession（全类型映射）', () => {
     expect(read).toMatchObject({ toolCallId: 'call_read_002', toolName: 'read', state: 'error' });
     expect(JSON.parse(read.argsJson!)).toEqual({ filePath: 'missing.txt' });
     expect(read.resultJson).toBe('{"message":"file not found: missing.txt"}');
+    // error 态同为终态：completedAt 取 time.completed
+    expect(read.startedAt).toBe(1790000004200);
+    expect(read.completedAt).toBe(1790000005000);
   });
 
   it('末段 assistant：finish=stop 无工具', () => {
@@ -226,6 +232,12 @@ describe('opencode v2 导入全链（adapter → turn-split → SkillEvent → �
     for (const name of ['skill', 'read', 'task', 'bash']) {
       expect(toolNames).toContain(name);
     }
+
+    // v2 工具时长落库：tool 项 time 字段经 turn-split 落真实 durationMs
+    //（skill 1790000000300→1790000000500=200ms；read error 800ms）
+    const durByName = new Map(toolCalls.map(t => [t.toolName, t.durationMs]));
+    expect(durByName.get('skill')).toBe(200);
+    expect(durByName.get('read')).toBe(800);
 
     const skillEvents = await prisma.skillEvent.findMany({ where: { turn: { sessionId: session.id } } });
     expect(skillEvents.map(e => e.skillName)).toContain('demo-skill');

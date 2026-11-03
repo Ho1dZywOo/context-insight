@@ -11,7 +11,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { use } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { isClaudeFormatSession } from "@/lib/shared/session-format"
-import { DEFAULT_CONTEXT_WINDOW_LIMIT } from "@/lib/shared/context-window"
 import { Button } from "@/components/ui/button"
 import { ArrowLeftIcon, LayoutDashboardIcon, MessageSquareIcon, SparklesIcon, BarChart3Icon, FileSearchIcon, FileTextIcon, PlayIcon, RefreshCwIcon, WifiIcon, ShieldCheckIcon, GaugeIcon, AwardIcon, UploadIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -19,10 +18,6 @@ import { toast } from "sonner"
 import { VERSION_DISPLAY } from "@/lib/version"
 import { BRAND_NAME, BAY_NAME } from "@/lib/branding"
 import { TurnDetail } from "@/components/observe/TurnDetail"
-// TODO(review-fix): 前向依赖标注——TurnDetailSkeleton、RunTurnsNodes(SessionBlock)、
-// RunTurnsSearch(TurnSearchField/TurnHitsPanel/useTurnsHitsFilter/TurnsSearchState)、
-// OverviewPanels、UploadDialog 由后续 UI 批次交付、暂未合入主线，本文件当前无法通过 typecheck。
-// 落地前须先合入对应后续批次，或将上述组件并入本批次。
 import { TurnDetailSkeleton } from "@/components/observe/TurnDetailSkeleton"
 import { SessionBlock } from "@/components/run/RunTurnsNodes"
 import { buildSubagentNumbers } from "@/lib/subagent-numbering"
@@ -127,6 +122,7 @@ interface TurnRowItem {
   contextWindowPct: number | null
   contextWindowLimit?: number
   latencyMs: number
+  turnMs?: number
   createdAt: string | null
   completedAt: string | null
   model: string | null
@@ -437,7 +433,7 @@ export default function SessionDetailPage({
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // 数据仓上传弹窗（共享组件，与主页面上传同款）：结果经 toast 呈现
+  // 数据仓上传弹窗（共享组件，与主页面上传同款）：结果统一由组件内顶部 HUD 呈现
   const [lakeUploadOpen, setLakeUploadOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const refreshingRef = useRef(false)
@@ -809,7 +805,7 @@ export default function SessionDetailPage({
     )
     if (nextTurn?.contextWindowPct != null) return nextTurn.contextWindowPct
     if (turn.contextWindowPct != null && turn.outputTokens > 0) {
-      const deltaPct = turn.outputTokens / DEFAULT_CONTEXT_WINDOW_LIMIT * 100
+      const deltaPct = turn.outputTokens / 200000 * 100
       return turn.contextWindowPct + deltaPct
     }
     return null
@@ -893,7 +889,7 @@ export default function SessionDetailPage({
       inputMessagesTokens: selectedTurnDetail?.inputMessagesTokens ?? 0,
       contextWindowPct: selectedTurnDetail?.contextWindowPct ?? null,
       endContextWindowPct: computeEndPct(selectedTurnItem),
-      contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
+      contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? 200000,
       systemOverheadTokens: selectedTurnDetail?.systemOverheadTokens ?? 0,
       systemPrompt: selectedTurnDetail?.systemPrompt ?? null,
       fullContext: selectedTurnDetail?.fullContext ?? null,
@@ -921,7 +917,7 @@ export default function SessionDetailPage({
         inputMessagesTokens: rootTurn?.inputMessagesTokens ?? 0,
         contextWindowPct: rootTurn?.contextWindowPct ?? null,
         endContextWindowPct: computeEndPct(rootTurn ?? null),
-        contextWindowLimit: rootTurn?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
+        contextWindowLimit: rootTurn?.contextWindowLimit ?? 200000,
         systemOverheadTokens: 0,
         systemPrompt: null,
         fullContext: null,
@@ -971,7 +967,7 @@ export default function SessionDetailPage({
             inputMessagesTokens: 0,
             contextWindowPct: lastSubTurn?.contextWindowPct ?? null,
             endContextWindowPct: computeEndPct(lastSubTurn ?? null),
-            contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
+            contextWindowLimit: selectedTurnDetail?.contextWindowLimit ?? 200000,
             systemOverheadTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
@@ -992,7 +988,7 @@ export default function SessionDetailPage({
           inputMessagesTokens: selectedTurnDetail.inputMessagesTokens ?? 0,
           contextWindowPct: selectedTurnDetail.contextWindowPct ?? null,
           endContextWindowPct: computeEndPct(selectedTurnItem),
-          contextWindowLimit: selectedTurnDetail.contextWindowLimit ?? DEFAULT_CONTEXT_WINDOW_LIMIT,
+          contextWindowLimit: selectedTurnDetail.contextWindowLimit ?? 200000,
           systemOverheadTokens: selectedTurnDetail.systemOverheadTokens ?? 0,
           systemPrompt: selectedTurnDetail.systemPrompt ?? null,
           fullContext: selectedTurnDetail.fullContext ?? null,
@@ -1117,7 +1113,7 @@ export default function SessionDetailPage({
             <div data-export-turn-list className="h-full overflow-y-auto px-2 py-2" inert={turnsSearch != null}>
               <SessionBlock
                 session={soloSession}
-                state={{ turns, total: turns.length, page: 1, loading: false }}
+                state={{ turns, total: turns.length, loading: false }}
                 bridges={bridgeItems}
                 selectedTurnId={selectedTurnId}
                 onSelectTurn={selectTurn}
@@ -1244,6 +1240,7 @@ export default function SessionDetailPage({
       inputMessagesTokens: t.inputMessagesTokens,
       outputTokens: t.outputTokens,
       latencyMs: t.latencyMs,
+      turnMs: t.turnMs,
       createdAt: t.createdAt,
       model: t.model,
       toolCalls: t.toolCalls.map(tc => ({
@@ -1443,10 +1440,6 @@ export default function SessionDetailPage({
           sourcePath: session.sourcePath,
           user: session.user,
         } : null}
-        onResult={({ ok, message }) => {
-          if (ok) toast.success(`已上传到 ${BAY_NAME}`)
-          else toast.error("上传失败", { description: message ?? "Unknown error" })
-        }}
       />
     </div>
   )

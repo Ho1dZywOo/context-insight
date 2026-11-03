@@ -35,6 +35,28 @@ export interface RunAuditEvent {
 /** skill 域的成员事件口径：invoke / use。 */
 const SKILL_EVENT_TYPES = new Set(["invoke", "use"])
 
+/** skills 端点派发种群项的审计消费切面（MergedDispatchItem 字段子集）。 */
+export interface RunAuditDispatch {
+  name: string
+  member: { taskId: string; label: string | null } | null
+  source: "event" | "member"
+}
+
+/** agent 域目标推导：派发种群 → agent 对账目标。真实派发段（事件源
+ *  dispatch SkillEvent，name=子代理名）才是 agent .md 声明对账的目标；member
+ *  源是工作流成员种群（opencode 等无派发事件框架按会话首 turn 推导），归
+ *  workflow/run 域整会话对账，且其名（nodeId·验收 等）不满足 agent 名约束。 */
+export function deriveAgentTargetsFromDispatches(dispatches: RunAuditDispatch[]): RunAuditTarget[] {
+  const events: RunAuditEvent[] = dispatches
+    .filter(d => d.name && d.source === "event")
+    .map(d => ({
+      skillName: d.name,
+      eventType: "dispatch",
+      member: d.member ? { taskId: d.member.taskId, label: d.member.label } : null,
+    }))
+  return deriveDomainTargets(events, "agent")
+}
+
 export function deriveDomainTargets(events: RunAuditEvent[], kind: "skill" | "agent"): RunAuditTarget[] {
   const wanted = kind === "skill" ? SKILL_EVENT_TYPES : new Set(["dispatch"])
   const byName = new Map<string, { members: Map<string, RunAuditTargetMember>; eventCount: number }>()

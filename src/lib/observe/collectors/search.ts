@@ -8,9 +8,12 @@
 
 // 轮次关键词搜索纯函数（design: docs/design/run-observe-parity/design.md §3.2）。
 // 从 /api/observe/session/turns/search 原位抽取：content / contentSummary /
-// 工具调用 args / result / error 五路匹配 + 「同 turn 先命中正文则不再出
-// 工具条目」去重 + 上下文截取。session 与 run 两个端点共用（run 侧跨成员
-// 全域搜索、按 sessionId 归因 member），匹配语义单点不复制。
+// 工具调用 args / result / error / 工具名 六路匹配 + 「同 turn 先命中正文则
+// 不再出工具条目」去重 + 上下文截取。session 与 run 两个端点共用（run 侧
+// 跨成员全域搜索、按 sessionId 归因 member），匹配语义单点不复制。
+// 工具名路：Overview 的 Tool Calls 面板把 toolName 当第一性标签展示（尤其
+// MCP 工具，名字不出现在 args/result 里），搜工具名必须可命中——否则面板
+// 展示的标签在搜索里零命中（跨页签可发现性断裂）。
 
 export interface TurnSearchRow {
   id: string;
@@ -47,7 +50,7 @@ export interface TurnSearchItem {
   subagentSessionId: string | null;
   contentSummary: string | null;
   matchContext: string;
-  matchField: 'content' | 'contentSummary' | 'toolResult' | 'toolError' | 'toolArgs';
+  matchField: 'content' | 'contentSummary' | 'toolResult' | 'toolError' | 'toolArgs' | 'toolName';
   toolName?: string;
   createdAt: string;
   hasDispatchBridge: boolean;
@@ -141,15 +144,19 @@ export function matchTurnSearch(rows: TurnSearchRow[], keyword: string, options:
       const argsMatch = argsLower.includes(normalizedKeyword);
       const resultMatch = resultLower.includes(normalizedKeyword);
       const errorMatch = errorLower.includes(normalizedKeyword);
+      const nameMatch = tc.toolName.toLowerCase().includes(normalizedKeyword);
 
-      if (argsMatch || resultMatch || errorMatch) {
+      if (argsMatch || resultMatch || errorMatch || nameMatch) {
         if (seenTurnIds.has(t.id) && items.some(it => it.turnId === t.id && (it.matchField === 'content' || it.matchField === 'contentSummary'))) continue;
         seenTurnIds.add(t.id);
         let matchText = '';
-        let field: 'toolArgs' | 'toolResult' | 'toolError' = 'toolArgs';
+        let field: 'toolArgs' | 'toolResult' | 'toolError' | 'toolName' = 'toolArgs';
+        // 载体优先级：args > result > error > 名。前三路命中时上下文更具体
+        //（关键词真出现在载体里）；纯名字命中时载体只作调用内容预览。
         if (argsMatch) { matchText = tc.argsJson ?? ''; field = 'toolArgs'; }
         else if (resultMatch) { matchText = tc.resultJson ?? ''; field = 'toolResult'; }
-        else { matchText = tc.errorMessage ?? ''; field = 'toolError'; }
+        else if (errorMatch) { matchText = tc.errorMessage ?? ''; field = 'toolError'; }
+        else { matchText = tc.argsJson ?? tc.resultJson ?? ''; field = 'toolName'; }
         items.push({
           turnId: t.id,
           turnIndex: t.turnIndex,
@@ -159,7 +166,7 @@ export function matchTurnSearch(rows: TurnSearchRow[], keyword: string, options:
           subagentName: t.subagentName,
           subagentSessionId: t.subagentSessionId,
           contentSummary: t.contentSummary ?? t.content?.substring(0, 200) ?? null,
-          matchContext: `🔧 ${tc.toolName}: ${extractMatchContext(matchText, keyword.trim())}`,
+          matchContext: matchText ? `🔧 ${tc.toolName}: ${extractMatchContext(matchText, keyword.trim())}` : `🔧 ${tc.toolName}`,
           matchField: field,
           toolName: tc.toolName,
           createdAt: t.createdAt_ts?.toISOString() ?? t.createdAt.toISOString(),

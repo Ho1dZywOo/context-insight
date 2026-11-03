@@ -21,7 +21,7 @@ import { ChevronRightIcon, LocateIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   PerfSegmented, computeTurnSegments, fmtMs, fmtTok, fmtOffset,
-  LANE_COLORS, PERF_COLORS, perfEntrance, PERF_CARD_SM, laneOrderValue,
+  LANE_COLORS, PERF_COLORS, perfEntrance, PERF_CARD_SM,
   type PerfLaneStat, type LaneExec,
 } from "./perf-shared"
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -44,7 +44,7 @@ export function PerfLaneList({ lanes, laneExecs, t0, onOpenTurn }: {
   const [showAllLanes, setShowAllLanes] = useState(false)
 
   const getVal = (s: PerfLaneStat, key: SortKey): number =>
-    key === "ms" ? s.totalMs : key === "tokens" ? s.totalTokens : laneOrderValue(s.turns)
+    key === "ms" ? s.totalMs : key === "tokens" ? s.totalTokens : s.turns[0]?.turnIndex ?? 0
 
   const sorted = [...lanes].sort((a, b) => {
     if (sortKey === "order") return getVal(a, sortKey) - getVal(b, sortKey)

@@ -25,6 +25,22 @@ export function parseTaskNotificationSummary(content: string): string {
   return `✅ ${label}${statusLabel}${detail}`;
 }
 
+// Token-budget countdown the claude-code client injects into every request's
+// system component: <total_tokens>N tokens left</total_tokens>. Pure wire
+// bookkeeping, never a conversation event. cpx records the system array per
+// request verbatim (system components carry no message.id, so the capture
+// side cannot dedup them the way the messages history is deduped) — and in
+// the wild the countdown rides three carrier shapes: a pure string of its
+// own, a single text block, or a trailing line appended to the static system
+// prompt string (the varying number defeats exact-dedup of the whole
+// component). Strip it wherever it appears; the caller skips a component
+// that becomes empty. The native-transcript counterpart is the attachment
+// subtype total_tokens_reminder (KNOWN_ATTACHMENT_SUBTYPES, already skipped
+// at read): same fingerprint, carrier shapes aligned at the read side.
+export function stripTokenBudgetReminders(text: string): string {
+  return text.replace(/ ?<total_tokens>\d+ tokens left<\/total_tokens>/g, '').trim();
+}
+
 // ── Agent 注入分类（claude-code ≥2.1 新协议，非人类输入）──
 // 逐条指纹识别，不按版本分支（协议灰度/混合会话天然兼容；版本号仅作展示
 // 徽标）。新协议（claude-code ≥2.1 handback）：子代理完成 → <transcript>

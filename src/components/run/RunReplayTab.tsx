@@ -20,6 +20,7 @@ import { RunMemberPicker } from "@/components/run/RunMemberPicker";
 import { ChatReplayView } from "@/components/observe/ChatReplayView";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
 import type { RunMemberRow } from "@/lib/run/member-rows";
+import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 export interface RunReplayTabProps {
   runId: string;
@@ -59,6 +60,7 @@ interface MemberTurnItem {
 }
 
 export function RunReplayTab({ runId, members, member, onMemberChange, onOpenTurn }: RunReplayTabProps) {
+  const dataEpoch = useRunDataEpoch();
   const active = members.find(m => m.taskId === member) ?? members[0] ?? null;
   // 成员域结果带成员标记：切换期间（member 不匹配）视为载入中——不在 effect
   // 内同步 setState（级联渲染），状态一律由 fetch 回调驱动
@@ -79,7 +81,7 @@ export function RunReplayTab({ runId, members, member, onMemberChange, onOpenTur
         setState({ member: active.taskId, turns: null });
       });
     return () => { cancelled = true; };
-  }, [runId, active]);
+  }, [runId, active, dataEpoch]);
 
   const current = state != null && state.member === active?.taskId ? state : null;
 
