@@ -49,6 +49,23 @@ describe('recoverAgentMdFromSystem（system 注入恢复——正常会话主路
     expect(recovered).toBe(19); // 正常会话：全部经 system 注入恢复（不依赖 Read）
   });
 
+  it('子代理 meta fixture 走规范 x_lake 信封（读侧单轨：机械改名回 legacy 键 x_cannbay 会被挡）', () => {
+    // 回归锁：这些 cc-subagent-meta fixture 必须携带规范键 x_lake（真实捕获形态），
+    // 不得回退到已退役的 legacy 键 x_cannbay——readEnvelope（只读 x_lake）的 lake
+    // 列表路径对 x_cannbay 单键会失明。负向验证：把任一 fixture 的 x_lake 改回
+    // x_cannbay，本用例必红。
+    const dir = path.join(FIXTURE_DIR, 'ses_norm_fixture', 'subagents');
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.meta.json'));
+    expect(files.length).toBe(19);
+    for (const f of files) {
+      const meta = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
+      const env = meta.x_lake;
+      expect(env?.schema).toBe('cc-subagent-meta');
+      expect(env?.data?.agentType).toBe(meta.agentType);
+      expect(meta.x_cannbay).toBeUndefined();
+    }
+  });
+
   it('恢复的正文是远端运行时版本（designer 8,606 字 ≠ 磁盘 demo 4,771 / glacier 6,793）', () => {
     const r = recoverAgentMdFromSystem(
       FIXTURE_MAIN,
