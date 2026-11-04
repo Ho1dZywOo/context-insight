@@ -26,7 +26,7 @@ export const GET = withRouteLog('observe/stats', async (request: NextRequest) =>
     const wallRows = await prisma.session.findMany({
       select: { startTime: true, endTime: true, totalLatencyMs: true },
     });
-    const durations = wallRows.map(s => sessionDurationMs(s.startTime, s.endTime, s.totalLatencyMs));
+    const durations = wallRows.map(s => sessionDurationMs(s.startTime, s.endTime, Number(s.totalLatencyMs)));
     const totalDurationMs = durations.reduce((a, b) => a + b, 0);
 
     return NextResponse.json({

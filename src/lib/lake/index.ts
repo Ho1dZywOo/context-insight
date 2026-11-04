@@ -455,7 +455,10 @@ async function annotateSessionMeta(
       );
       if (split != null) xb.data.activeMs = split.activeMs;
     } catch { /* turns 查询失败：跳过 activeMs，不阻断上传 */ }
-    if (Number.isFinite(session.totalTokens)) xb.data.totalTokens = session.totalTokens;
+    // roll-up 列已升 BigInt（读出 bigint）：Number.isFinite 只认 number，
+    // 直接套 bigint 恒 false → 字段被静默丢弃（lake e2e 捕获）。先转再验。
+    const totalTokensNum = Number(session.totalTokens);
+    if (Number.isFinite(totalTokensNum)) xb.data.totalTokens = totalTokensNum;
     if (typeof session.model === 'string' && session.model) xb.data.model = session.model;
     // 双名对称写回（setOpGen 同款）：此前仅胜出键被更新，另一键留旧值
     Object.assign(meta, envelopeFields(xb));

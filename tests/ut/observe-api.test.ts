@@ -38,7 +38,8 @@ describe('observe API routes', () => {
 
     const item = sessions[0];
     expect(item.taskId).toBeDefined();
-    expect(typeof item.totalTokens).toBe('number');
+    // roll-up 列已升 BigInt（Int32 溢出修复）：Prisma 读出为 bigint
+    expect(typeof item.totalTokens).toBe('bigint');
     expect(typeof item.totalCost).toBe('number');
     expect(typeof item.totalToolCallCount).toBe('number');
   });
@@ -70,7 +71,10 @@ describe('observe API routes', () => {
     });
 
     expect(typeof totalSessions).toBe('number');
-    expect(typeof (aggregates._sum.totalTokens ?? 0)).toBe('number');
+    // roll-up 列已升 BigInt：Σ 值非空即 bigint，空库为 null（?? 0 会把 bigint
+    // 和 number 揉成一态，这里锁真实读出形态）
+    const sumTokens = aggregates._sum.totalTokens;
+    expect(sumTokens === null || typeof sumTokens === 'bigint').toBe(true);
     expect(typeof (aggregates._sum.totalCost ?? 0)).toBe('number');
   });
 
@@ -97,10 +101,10 @@ describe('observe API routes', () => {
 
     if (rootExecs.length > 0) {
       const root = rootExecs[0];
-      expect(typeof root.tokens).toBe('number');
+      expect(typeof root.tokens).toBe('bigint');
       expect(typeof root.cost).toBe('number');
       expect(typeof root.toolCallCount).toBe('number');
-      expect(typeof root.latencyMs).toBe('number');
+      expect(typeof root.latencyMs).toBe('bigint');
     }
   });
 

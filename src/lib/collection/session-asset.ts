@@ -89,13 +89,20 @@ export async function listSessionRows(
   filter: SessionFilter & { take?: number; skip?: number },
   scope: { id: { notIn: string[] } } | null,
 ): Promise<SessionRow[]> {
-  return prisma.session.findMany({
+  // roll-up 列已升 BigInt（Prisma 读出 bigint）——SessionRow 是 API/导出侧
+  // 契约（number），在此边界统一转换（值域 < 2^53，无损）
+  const rows = await prisma.session.findMany({
     where: buildWhere(filter, scope),
     orderBy: { createdAt: 'desc' },
     ...(filter.skip != null ? { skip: filter.skip } : {}),
     ...(filter.take != null ? { take: filter.take } : {}),
     select: SESSION_SELECT,
   });
+  return rows.map(r => ({
+    ...r,
+    totalTokens: Number(r.totalTokens),
+    totalLatencyMs: Number(r.totalLatencyMs),
+  }));
 }
 
 export async function countSessions(
@@ -121,11 +128,11 @@ export async function sessionAggregates(
     select: { startTime: true, endTime: true, totalLatencyMs: true },
   });
   const totalDurationMs = wallRows.reduce(
-    (sum, s) => sum + sessionDurationMs(s.startTime, s.endTime, s.totalLatencyMs), 0,
+    (sum, s) => sum + sessionDurationMs(s.startTime, s.endTime, Number(s.totalLatencyMs)), 0,
   );
   return {
     count,
-    totalTokens: aggregates._sum.totalTokens ?? 0,
+    totalTokens: Number(aggregates._sum.totalTokens ?? 0),
     totalCost: aggregates._sum.totalCost ?? 0,
     totalDurationMs,
   };

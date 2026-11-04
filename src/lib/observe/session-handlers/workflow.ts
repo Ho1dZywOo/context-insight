@@ -130,8 +130,8 @@ export const GET = withRouteLog('observe/session/workflow', async (request: Next
     subagentType: b.subagentType,
     subagentName: b.subagentName,
     status: b.status,
-    subagentTokens: b.subagentTokens,
-    subagentLatencyMs: b.subagentLatencyMs,
+    subagentTokens: Number(b.subagentTokens),
+    subagentLatencyMs: Number(b.subagentLatencyMs),
   }));
 
   const workflow = splitWorkflow(turns, bridges, skillEvents, session.id);

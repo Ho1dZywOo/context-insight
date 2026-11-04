@@ -16,13 +16,25 @@ import Database from 'better-sqlite3'
 // 路径首建竞态、不依赖其它文件先跑（旧 existsSync 共享守卫的并行竞态由
 // PR #106 review 指出，统一收敛到本 helper）。用完由调用方在 afterAll 里
 // rmSync(path.dirname(dbPath)) 清理。
-export function materializeV1Fixture(tag: string): string {
+//
+// replaceSid（SID 私有化）：样例 SQL 是多个测试文件的共享源，但共享 sid 会让
+// 并行 worker 在同一 test.db 上争抢同一条 (taskId, framework) 行——现场：
+// lake.test.ts 的 beforeAll 清扫删掉 lake-native-upload ⑥ 导入到一半的行 →
+// 上传报 Session not found（状态 'failed'）。消费方各自改写出私有 sid 的副本，
+// 行归属彻底解耦；改写为全量字符串替换（覆盖 INSERT 键值与内容 blob 里的
+// 同串），SQL 语义不变。仅做测试库名义隔离，不落任何用户数据。
+export function materializeV1Fixture(
+  tag: string,
+  opts: { replaceSid?: { from: string; to: string } } = {},
+): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `opencode-v1-${tag}-`))
   const dbPath = path.join(dir, 'opencode-sample.db')
   const db = new Database(dbPath)
   try {
+    let sql = fs.readFileSync(path.resolve(__dirname, '../ut/data/e2e/opencode-sample.sql'), 'utf8')
+    if (opts.replaceSid) sql = sql.split(opts.replaceSid.from).join(opts.replaceSid.to)
     try {
-      db.exec(fs.readFileSync(path.resolve(__dirname, '../ut/data/e2e/opencode-sample.sql'), 'utf8'))
+      db.exec(sql)
     } finally {
       db.close()
     }

@@ -21,14 +21,19 @@ const CLAUDE_SKILL_JSONL = path.join(FIXTURE_DIR, 'claude-skill-dispatch.jsonl')
 // OAT: no binary files in repo. The opencode-sample.db fixture is gitignored and
 // materialized here as a private copy from the text SQL dump (source of truth) —
 // materializeV1Fixture（共享路径首建竞态由 review 指出后收敛）；afterAll 清理
-const OPENCODE_DB = materializeV1Fixture('e2e-import-observe');
+const OPENCODE_DB = materializeV1Fixture('e2e-import-observe', {
+  // sid 私有化：样例 sid 多文件共享时并行 worker 争抢 test.db 同一行（曾与
+  // lake.test.ts 互相删行撞 P2025，靠 withDbRaceRetry 压制）——改写出本文件
+  // 专属 sid 副本解耦；竞态重试保留为 SQLite 单写者锁的兜底
+  replaceSid: { from: 'ses_2051a32a4ffevX0jGBWVDDEqCk', to: 'ses_2051a32a4ffeEioPrivate001' },
+});
 
 afterAll(() => {
   fs.rmSync(path.dirname(OPENCODE_DB), { recursive: true, force: true });
 });
 
 const OPENCODE_SESSION_IDS = [
-  'ses_2051a32a4ffevX0jGBWVDDEqCk',
+  'ses_2051a32a4ffeEioPrivate001',
   'ses_1b2c24167ffewAAb9pq2Gt1sUh',
 ];
 const CLAUDE_SESSION_ID = 'd1ef6b6f-e86d-46dc-81c3-b285cea3ada5';
@@ -41,8 +46,9 @@ describe('E2E: opencode-db import → observe', () => {
 
   beforeAll(async () => {
     for (const sid of OPENCODE_SESSION_IDS) {
-      // lake.test.ts 并行操作同一 fixture 会话（导入后 deleteMany 再重导），
-      // 裸调会在其删除窗口内撞 P2025——与 lake 同用竞态重试
+      // sid 已私有化（replaceSid），与 lake.test.ts 等共享样例的文件不再争抢
+      // 同一行；withDbRaceRetry 保留为全量并行 worker 共写 test.db 时 SQLite
+      // 单写者锁（P2025 窗口）的兜底
       const result = await withDbRaceRetry(() => importSession(OPENCODE_DB, sid, prisma, OPENCODE_DB, 'opencode-db'));
       if (result.imported) importedSessionIds.push(sid);
     }

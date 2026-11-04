@@ -177,8 +177,8 @@ export async function collectScopeBridges(
       subagentName: b.subagentName,
       agentName: b.subagentType ?? b.subagentName ?? (b.subagentSessionId ? executionMap.get(b.subagentSessionId) ?? null : null),
       status: b.status,
-      subagentTokens: b.subagentTokens,
-      subagentLatencyMs: timing?.latencyMs ?? b.subagentLatencyMs,
+      subagentTokens: Number(b.subagentTokens),
+      subagentLatencyMs: timing?.latencyMs ?? Number(b.subagentLatencyMs),
       member: member ? { taskId: member.taskId, label: member.label } : null,
     };
   });

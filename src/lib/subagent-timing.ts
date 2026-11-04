@@ -26,9 +26,10 @@ export function subagentTiming(
   const dispatch = dispatchTimestamp ? new Date(dispatchTimestamp).getTime() : NaN;
   const start = Math.min(...starts, ...(Number.isFinite(dispatch) ? [dispatch] : []));
   const end = Math.max(...ends);
-  // schema 列为 Int(32 位)：时延跨 ~24.8 天即溢出（脏数据里出现过起点塌成 epoch 0、
-  // 时延=完整毫秒时间戳 1.78e12 的实例，SQLite 照存、Prisma 读取抛错）。上限钳到
-  // INT32_MAX 保底列不炸；正常子代理会话时延远小于该界，行为不变。
-  const latencyMs = Math.min(Math.max(end - start, 0), 2_147_483_647);
+  // 列已升 BigInt（64 位）：早期「起点塌成 epoch 0、时延=完整毫秒时间戳
+  // 1.78e12」的脏数据曾撑破 Int32 列，当时以 INT32_MAX 钳制保列不炸——
+  // 根因修复后（schema BigInt + bigint-json 序列化垫片）真实跨度原样入列，
+  // 长活会话（实测 44 天墙钟跨度）不再被静默截断成 24.8 天。
+  const latencyMs = Math.max(end - start, 0);
   return { responseTimestamp: new Date(end).toISOString(), latencyMs };
 }

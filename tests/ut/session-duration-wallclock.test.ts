@@ -64,7 +64,7 @@ describe('Session Duration 墙钟 + LLM Active 区间并集', () => {
     const row = await prisma.session.findFirst({ where: { taskId: SID } });
     expect(row).not.toBeNull();
     // 前置自检：夹具构造出「Σ latency(100s) ≫ 墙钟(3s)」的形态
-    expect(row!.totalLatencyMs).toBe(100000);
+    expect(Number(row!.totalLatencyMs)).toBe(100000);
     expect(row!.endTime!.getTime() - row!.startTime.getTime()).toBe(3000);
 
     // ① 列表 API：不派生 durationMs；start/end/Σ 三字段齐全供客户端自算墙钟；

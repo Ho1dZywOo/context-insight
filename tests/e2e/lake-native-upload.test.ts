@@ -96,8 +96,12 @@ const NATIVE_DB = writeFixture(`${SID_DB}-native.jsonl`, nativeLines('路由级�
 const CAP_MISS = writeFixture(`${SID_MISS}.jsonl`, captureLines('未找到场景首问', 'claude-proxy'));
 const CAP_PLAIN = writeFixture(`${SID_PLAIN}.jsonl`, captureLines('回归场景首问', 'claude-proxy'));
 const CAP_CODEX = writeFixture(`${CODEX_SID}.jsonl`, captureLines(ANCHOR, 'codex-proxy'));
-// ⑥ 框架字典序消歧：样例库里的真实 opencode 会话（原生行同 sid 共存场景）
-const CONTEXT_SID = 'ses_2051a32a4ffevX0jGBWVDDEqCk';
+// ⑥ 框架字典序消歧：样例库真实 opencode 会话（原生行同 sid 共存场景）。
+// sid 私有化：样例 sid 被多文件共享时，并行 worker 会争抢 test.db 同一条
+// (taskId, framework) 行（lake.test.ts 的 beforeAll 清扫曾删掉本文件导入到
+// 一半的行 → 上传 Session not found）——改写出本文件专属 sid 副本解耦。
+const CONTEXT_SID_SRC = 'ses_2051a32a4ffevX0jGBWVDDEqCk';
+const CONTEXT_SID = 'ses_2051a32a4ffeLnuPrivate001';
 const CAP_CANNBOT = writeFixture(`${CONTEXT_SID}.jsonl`, captureLines('cannbot 原生对位首问', 'cannbot-proxy'));
 
 // 磁盘 claude 原生日志（未导入——上传时组合层自动导入）
@@ -147,8 +151,10 @@ function makeRequest(body: unknown): NextRequest {
 }
 
 const ALL_SIDS = [SID_DISK, SID_DB, SID_MISS, SID_PLAIN, CODEX_SID, CODEX_UUID, CONTEXT_SID];
-// opencode 样例库（v1）独立副本：⑥ 框架字典序消歧场景的原生行来源
-const OPENCODE_NATIVE_DB = materializeV1Fixture('lake-native-cannbot');
+// opencode 样例库（v1）独立副本：⑥ 框架字典序消歧场景的原生行来源（sid 私有化）
+const OPENCODE_NATIVE_DB = materializeV1Fixture('lake-native-cannbot', {
+  replaceSid: { from: CONTEXT_SID_SRC, to: CONTEXT_SID },
+});
 
 afterAll(async () => {
   for (const sid of ALL_SIDS) {

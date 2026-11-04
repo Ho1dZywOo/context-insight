@@ -537,10 +537,10 @@ export async function exportSessionToMarkdown(
 
   const durationMs = session.endTime && session.startTime
     ? new Date(session.endTime).getTime() - new Date(session.startTime).getTime()
-    : session.totalLatencyMs;
+    : Number(session.totalLatencyMs);
 
   md.push(`**Session:** ${session.taskId} | **Framework:** ${session.framework} | **Model:** ${session.model ?? 'unknown'}`);
-  md.push(`**Duration:** ${fmtDuration(durationMs)} | **Tokens:** ${fmtTokens(session.totalTokens)} (in: ${fmtTokens(session.totalInputTokens)} / out: ${fmtTokens(session.totalOutputTokens)} / reasoning: ${fmtTokens(session.totalReasoningTokens)}) | **Cost:** ${fmtCost(session.totalCost)}`);
+  md.push(`**Duration:** ${fmtDuration(durationMs)} | **Tokens:** ${fmtTokens(Number(session.totalTokens))} (in: ${fmtTokens(Number(session.totalInputTokens))} / out: ${fmtTokens(Number(session.totalOutputTokens))} / reasoning: ${fmtTokens(Number(session.totalReasoningTokens))}) | **Cost:** ${fmtCost(session.totalCost)}`);
   md.push('');
   md.push('---');
   md.push('');
@@ -577,8 +577,8 @@ export async function exportSessionToMarkdown(
         const subTurns = subTurnsBySessionId.get(subId) ?? [];
         const subName = subTurns[0]?.subagentName ?? 'Unknown';
         const subExec = subagentExecs.find(e => e.agentSessionId === subId);
-        const subTokens = subExec?.tokens ?? subTurns.reduce((s, t) => s + t.totalTokens, 0);
-        const subLatency = subExec?.latencyMs ?? subTurns.reduce((s, t) => s + t.latencyMs, 0);
+        const subTokens = Number(subExec?.tokens ?? subTurns.reduce((s, t) => s + t.totalTokens, 0));
+        const subLatency = Number(subExec?.latencyMs ?? subTurns.reduce((s, t) => s + t.latencyMs, 0));
         const subNum = subNums.get(subId) ?? '?';
 
         md.push(renderSubagentSession(subNum, subName, subTurns, subTokens, subLatency));
@@ -595,8 +595,8 @@ export async function exportSessionToMarkdown(
     renderedSubagents.add(subId);
     const subName = subTurns[0]?.subagentName ?? 'Unknown';
     const subExec = subagentExecs.find(e => e.agentSessionId === subId);
-    const subTokens = subExec?.tokens ?? subTurns.reduce((s, t) => s + t.totalTokens, 0);
-    const subLatency = subExec?.latencyMs ?? subTurns.reduce((s, t) => s + t.latencyMs, 0);
+    const subTokens = Number(subExec?.tokens ?? subTurns.reduce((s, t) => s + t.totalTokens, 0));
+    const subLatency = Number(subExec?.latencyMs ?? subTurns.reduce((s, t) => s + t.latencyMs, 0));
     const subNum = subNums.get(subId) ?? '?';
 
     md.push(renderSubagentSession(subNum, subName, subTurns, subTokens, subLatency));
@@ -609,8 +609,8 @@ export async function exportSessionToMarkdown(
   md.push('');
 
   const rootExec = executions.find(e => !e.isSubagent);
-  const rootTokens = rootExec?.tokens ?? session.totalTokens;
-  const subTokens = subagentExecs.reduce((s, e) => s + e.tokens, 0);
+  const rootTokens = Number(rootExec?.tokens ?? session.totalTokens);
+  const subTokens = subagentExecs.reduce((s, e) => s + Number(e.tokens), 0);
   const rootCost = rootExec?.cost ?? session.totalCost;
   const subCost = subagentExecs.reduce((s, e) => s + e.cost, 0);
   const rootTurnCount = rootTurns.length;

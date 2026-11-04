@@ -105,19 +105,19 @@ export async function sessionRefsByTaskIds(
       framework: chosen.framework,
       rowId: chosen.id,
       turns: turnsByRow.get(chosen.id) ?? 0,
-      totalTokens: chosen.totalTokens,
+      totalTokens: Number(chosen.totalTokens),
       durationMs: chosen.endTime
         ? chosen.endTime.getTime() - chosen.startTime.getTime()
         : null,
       label: chosen.label,
       startTime: chosen.startTime ? chosen.startTime.toISOString() : null,
       endTime: chosen.endTime ? chosen.endTime.toISOString() : null,
-      cacheReadTokens: chosen.totalCacheReadTokens,
+      cacheReadTokens: Number(chosen.totalCacheReadTokens),
       contextPeakPct: contextPeakByRow.get(chosen.id) ?? null,
       model: chosen.model,
       totalCost: chosen.totalCost,
       version: chosen.version,
-      totalLatencyMs: chosen.totalLatencyMs,
+      totalLatencyMs: Number(chosen.totalLatencyMs),
       sourcePath: chosen.sourcePath,
     });
   }
