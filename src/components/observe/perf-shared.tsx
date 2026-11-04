@@ -235,23 +235,24 @@ export function PerfSegmented<T extends string>({ value, options, onChange, aria
 // 效率分布样本点：主 agent 轮的效率双镜头值 + 时刻
 type BenchPoint = { turnIndex: number; turnId?: string; createdAt: string | null; tpot: number; tps: number }
 
-// 效率分布图几何常量（viewBox 尺寸与内边距，geo memo 与 JSX 共用）
-const W = 720, H = 190
-const padL = 36, padR = 12, padT = 20, padB = 22
-const chartW = W - padL - padR
+// 效率分布图几何常量：高度与内边距固定，宽度不锁死——卡片实测像素宽
+// 直写 viewBox（绘图 1:1 满铺宽卡片，两侧不再因 meet 居中留白而显小）；
+// W_FALLBACK 供首帧与无测量环境（水合帧 / 无布局测试环境）兜底
+const W_FALLBACK = 720, H = 200
+const padL = 36, padR = 12, padT = 24, padB = 26
 const chartH = H - padT - padB
 
-// svg 按默认 preserveAspectRatio=meet 均匀缩放：宽卡片下元素远宽于
-// viewBox，绘图居中、两侧留白——像素 → viewBox 的 x 映射必须走缩放
-// 与居中偏移（无布局环境退化为恒等：viewBox 坐标 = 像素坐标）。
-// 通用版（任意 viewBox 尺寸，跨图复用）；viewXOf 是本图 720×190 特化
+// 宽度未测得（回退几何）时 svg 按默认 preserveAspectRatio=meet 均匀缩
+// 放：宽卡片下元素远宽于 viewBox，绘图居中、两侧留白——像素 → viewBox
+// 的 x 映射必须走缩放与居中偏移（无布局环境退化为恒等）。通用版（任意
+// viewBox 尺寸，跨图复用）；viewXOf / viewScaleOf 是本图特化（宽度随实测）
 export const svgViewX = (rect: DOMRect, clientX: number, w: number, h: number) => {
   if (rect.width <= 0) return clientX
   const scale = Math.min(rect.width / w, rect.height / h) || 1
   return (clientX - rect.left - (rect.width - w * scale) / 2) / scale
 }
-const viewXOf = (rect: DOMRect, clientX: number) => svgViewX(rect, clientX, W, H)
-const viewScaleOf = (rect: DOMRect) => (rect.width > 0 ? Math.min(rect.width / W, rect.height / H) || 1 : 1)
+const viewXOf = (rect: DOMRect, clientX: number, w: number) => svgViewX(rect, clientX, w, H)
+const viewScaleOf = (rect: DOMRect, w: number) => (rect.width > 0 ? Math.min(rect.width / w, rect.height / H) || 1 : 1)
 
 // 单图样本容量：超出即按时间桶聚合（均值成线 + min-max 包络带保峰），
 // 与观测工具的高密度时序呈现一致
@@ -290,7 +291,9 @@ function smoothPath(pts: { x: number; y: number }[], lead: "M" | "L" = "M"): str
 //    上取（轴覆盖全部数值，不做分位钳制）。时间窗缩放：Ctrl/⌘+滚轮锚定
 //    放大、拖拽平移、工具条适配——窗口内重新采样分桶，放大即细节；统计
 //    口径随窗口（可见范围即分析范围）。路径在 memo 内构建——悬停十字
-//    线/气泡只重渲染轻量子树；纯观测无跳转（归因下钻归热点排行）──────
+//    线/气泡只重渲染轻量子树；纯观测无跳转（归因下钻归热点排行）。
+//    呈现：宽度随卡片实测满铺（ResizeObserver 直写 viewBox）；入场动效
+//    走纯 CSS 一次性动画（描画/渐显/统计条错峰），指标切换重挂重放───
 export function PerfBenchmarkChart({ points }: {
   points: BenchPoint[]
 }) {
@@ -305,6 +308,12 @@ export function PerfBenchmarkChart({ points }: {
   const win = winState.pts === points ? winState.range : null
   const setWin = (range: [number, number] | null) => setWinState({ pts: points, range })
   const [dragging, setDragging] = useState(false)
+  // 实测绘图宽（0 = 未测得 → 回退 W_FALLBACK）：容器像素宽直写 viewBox，
+  // 宽卡片 1:1 满铺；步进阈值防抖（细微宽度抖动不触发重排），采样/路径
+  // 等重活随宽在 memo 内重算
+  const [wrapW, setWrapW] = useState(0)
+  const drawW = wrapW > 0 ? wrapW : W_FALLBACK
+  const cw = drawW - padL - padR
 
   const m = useMemo(() => metric === "tps"
     ? { key: "tps" as const, unit: "tok/s", color: TOKEN_COLORS.output }
@@ -323,15 +332,18 @@ export function PerfBenchmarkChart({ points }: {
   )
   const dragRef = useRef<{ x: number; v0: number; v1: number } | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  // 实测宽镜像：供一次性挂载的原生滚轮监听取最新值（避免闭包过期）
+  const drawWRef = useRef(W_FALLBACK)
   // 缩放回调经 ref 透传给一次性挂载的原生滚轮监听（恒取最新渲染闭包，
   // 免重挂监听）
   const zoomAtRef = useRef<(factor: number, vx: number) => void>(() => {})
 
   // 时间窗缩放：光标时刻锚定（缩放后该时刻的屏幕位置不动），窗口钳制
   // 在全程内；窗宽下限防退化，放大到全程即复位
-  const zoomAt = (factor: number, vx: number) => {
+  const zoomAt = (factor: number, vxRaw: number) => {
     const f = full
     if (!f || f.tMax - f.tMin <= 0) return
+    const vx = Math.min(drawW - padR, Math.max(padL, vxRaw))
     const w = win
     const v0 = w ? w[0] : f.tMin
     const v1 = w ? w[1] : f.tMax
@@ -340,14 +352,14 @@ export function PerfBenchmarkChart({ points }: {
     const next = Math.min(fullSpan, Math.max(Math.max(1000, fullSpan / 240), span / factor))
     if (next >= fullSpan - 1) { setWin(null); return }
     if (Math.abs(next - span) < 1) return
-    const ta = v0 + ((vx - padL) / chartW) * span
+    const ta = v0 + ((vx - padL) / cw) * span
     let n0 = ta - ((ta - v0) / span) * next
     let n1 = n0 + next
     if (n0 < f.tMin) { n0 = f.tMin; n1 = n0 + next }
     if (n1 > f.tMax) { n1 = f.tMax; n0 = n1 - next }
     setWin([n0, n1])
   }
-  useEffect(() => { zoomAtRef.current = zoomAt })
+  useEffect(() => { zoomAtRef.current = zoomAt; drawWRef.current = drawW })
 
   // Ctrl/⌘+滚轮锚定缩放：原生 non-passive 监听（React onWheel 走 passive
   // 通道，preventDefault 无效，手势会被浏览器页面缩放劫持）；挂在稳定包
@@ -359,8 +371,8 @@ export function PerfBenchmarkChart({ points }: {
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const rect = el.getBoundingClientRect()
-      const vx = viewXOf(rect, e.clientX)
-      zoomAtRef.current(e.deltaY < 0 ? 1.12 : 1 / 1.12, Math.min(W - padR, Math.max(padL, vx)))
+      const vx = svgViewX(rect, e.clientX, drawWRef.current, H)
+      zoomAtRef.current(e.deltaY < 0 ? 1.12 : 1 / 1.12, vx)
     }
     el.addEventListener("wheel", onWheel, { passive: false })
     return () => el.removeEventListener("wheel", onWheel)
@@ -403,8 +415,8 @@ export function PerfBenchmarkChart({ points }: {
           return (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag
         })()
       : 2
-    const xOf = (ts: number) => (tSpan > 0 ? padL + ((ts - v0) / tSpan) * chartW : padL + chartW / 2)
-    const tOf = (x: number) => (tSpan > 0 ? v0 + ((x - padL) / chartW) * tSpan : v0)
+    const xOf = (ts: number) => (tSpan > 0 ? padL + ((ts - v0) / tSpan) * cw : padL + cw / 2)
+    const tOf = (x: number) => (tSpan > 0 ? v0 + ((x - padL) / cw) * tSpan : v0)
     const toY = (v: number) => padT + chartH - (Math.min(v, yMax) / yMax) * chartH
     const avgY = toY(avgVal)
     const fmtVal = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(0)
@@ -417,8 +429,8 @@ export function PerfBenchmarkChart({ points }: {
       return `${two(d.getHours())}:${two(d.getMinutes())}`
     }
     const xTicks = Array.from({ length: 5 }, (_, i) => v0 + (tSpan * i) / 4)
-    // 气泡宽度按视觉列宽估算（CJK 双宽）
-    const textW = (s: string) => [...s].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e80 ? 10.8 : 5.4), 0)
+    // 气泡宽度按视觉列宽估算（CJK 双宽；10px 字号下的实测近似）
+    const textW = (s: string) => [...s].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e80 ? 12.6 : 6.3), 0)
     // 采样：稀疏序列逐点成线；超出容量按窗口时间桶聚合——均值成线，
     // min-max 成包络带（峰值不因聚合而抹平，轴与包络顶处处一致）
     const samples: { ts: number; v: number; lo: number; hi: number; cnt: number }[] = []
@@ -470,7 +482,23 @@ export function PerfBenchmarkChart({ points }: {
           { label: "轮次", v: String(n) },
         ]
     return { samples, lineD, areaD, bandD, single, empty: n === 0, iPeakS, maxVal, avgVal, yMax, xOf, tOf, toY, avgY, fmtVal, fmtTick, xTicks, textW, fmtTime, stats }
-  }, [sorted, m, win])
+  }, [sorted, m, win, cw])
+
+  // 容器宽实测：像素宽直写 viewBox（1:1 满铺，meet 留白退场）；无测量
+  // 环境保持回退几何。挂载点随数据在场与否变化（空态早退无 wrap div），
+  // 观测随其重建
+  const hasGeo = geo != null
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0].contentRect.width)
+      if (w <= 0) return
+      setWrapW(prev => (Math.abs(prev - w) < 4 ? prev : w))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [hasGeo])
 
   if (!geo) {
     return <div className="flex items-center justify-center h-32 text-xs text-muted-foreground">暂无性能数据</div>
@@ -504,18 +532,18 @@ export function PerfBenchmarkChart({ points }: {
     if (dragRef.current && full && full.tMax - full.tMin > 0) {
       const { x, v0, v1 } = dragRef.current
       const span = v1 - v0
-      const dxv = (e.clientX - x) / viewScaleOf(rect)
-      const n0 = Math.min(Math.max(v0 - (dxv / chartW) * span, full.tMin), full.tMax - span)
+      const dxv = (e.clientX - x) / viewScaleOf(rect, drawW)
+      const n0 = Math.min(Math.max(v0 - (dxv / cw) * span, full.tMin), full.tMax - span)
       dragRef.current = { x: e.clientX, v0: n0, v1: n0 + span }
       setWin([n0, n0 + span])
       return
     }
-    const vx = viewXOf(rect, e.clientX)
-    if (vx < padL - 2 || vx > W - padR + 2) {
+    const vx = viewXOf(rect, e.clientX, drawW)
+    if (vx < padL - 2 || vx > drawW - padR + 2) {
       setCursor(null)
       return
     }
-    setCursor(Math.round(Math.min(W - padR, Math.max(padL, vx))))
+    setCursor(Math.round(Math.min(drawW - padR, Math.max(padL, vx))))
   }
 
   const onDown = (e: ReactMouseEvent<SVGSVGElement>) => {
@@ -534,16 +562,17 @@ export function PerfBenchmarkChart({ points }: {
 
   return (
     <div>
-      {/* 统计条 + 指标切换：标签上/值下，互为倒数的双镜头单图呈现 */}
+      {/* 统计条 + 指标切换：标签上/值下，互为倒数的双镜头单图呈现；指标
+          切换重挂重放错峰上浮入场 */}
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 pb-3">
-        <div className="flex items-end gap-x-6">
-          {stats.map(s => (
-            <div key={s.label}>
-              <div className="text-[10px] text-muted-foreground">{s.label}</div>
-              <div className="text-sm font-semibold tabular-nums">{s.v}</div>
+        <div key={m.key} className="flex items-end gap-x-7 animate-in fade-in slide-in-from-bottom-1 duration-300">
+          {stats.map((s, i) => (
+            <div key={s.label} className="perf-stat-in" style={{ animationDelay: `${i * 45}ms` }}>
+              <div className="text-[10.5px] font-medium tracking-wide text-muted-foreground/80">{s.label}</div>
+              <div className="text-[17px] leading-6 font-semibold tabular-nums">{s.v}</div>
             </div>
           ))}
-          <div className="pb-0.5 text-[10px] text-muted-foreground/70">{m.unit}</div>
+          <div className="pb-1 text-[10.5px] text-muted-foreground/70">{m.unit}</div>
         </div>
         <PerfSegmented
           ariaLabel="效率指标切换"
@@ -557,7 +586,7 @@ export function PerfBenchmarkChart({ points }: {
         <svg
           key={m.key}
           data-bench=""
-          viewBox={`0 0 ${W} ${H}`}
+          viewBox={`0 0 ${drawW} ${H}`}
           width="100%"
           height={H}
           className={cn(
@@ -582,9 +611,9 @@ export function PerfBenchmarkChart({ points }: {
           return (
             <g key={i}>
               {v > 0
-                ? <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={PERF_COLORS.grid} strokeWidth={0.5} strokeDasharray="2 3" />
-                : <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={PERF_COLORS.axis} strokeWidth={0.8} />}
-              <text x={padL - 5} y={y + 3} textAnchor="end" fontSize="8.5" className="fill-muted-foreground tabular-nums">{fmtVal(v)}</text>
+                ? <line x1={padL} y1={y} x2={drawW - padR} y2={y} stroke={PERF_COLORS.grid} strokeWidth={0.5} strokeDasharray="2 3" />
+                : <line x1={padL} y1={y} x2={drawW - padR} y2={y} stroke={PERF_COLORS.axis} strokeWidth={1} />}
+              <text x={padL - 5} y={y + 3.5} textAnchor="end" fontSize="10" className="fill-muted-foreground tabular-nums">{fmtVal(v)}</text>
             </g>
           )
         })}
@@ -592,34 +621,36 @@ export function PerfBenchmarkChart({ points }: {
         {/* 均值参考线（空窗不给假数值） */}
         {!empty && (
           <>
-            <line x1={padL} y1={avgY} x2={W - padR} y2={avgY} stroke={m.color} strokeWidth={0.8} strokeDasharray="4 3" opacity={0.5} />
-            <text x={W - padR} y={avgY - 3} textAnchor="end" fontSize="8.5" fill={m.color} className="tabular-nums">均值 {fmtVal(avgVal)}</text>
+            <line x1={padL} y1={avgY} x2={drawW - padR} y2={avgY} stroke={m.color} strokeWidth={1} strokeDasharray="4 3" opacity={0.5} />
+            <text x={drawW - padR} y={avgY - 4} textAnchor="end" fontSize="10" fill={m.color} className="tabular-nums">均值 {fmtVal(avgVal)}</text>
           </>
         )}
 
         {/* min-max 包络带（样本聚合时）：离群峰不因平滑而抹平 */}
-        {bandD && <path d={bandD} fill={m.color} opacity={0.1} />}
+        {bandD && <path d={bandD} fill={m.color} opacity={0.12} className="perf-band-in" />}
 
-        {/* 平滑折线 + 线下渐变面积；单点退化为圆点 */}
+        {/* 平滑折线 + 线下渐变面积；单点退化为圆点。入场走归一化描画
+            （pathLength=1 + dash 动画），指标切换重挂重放 */}
         {empty ? null : single
           ? <circle cx={xOf(samples[0].ts)} cy={toY(samples[0].v)} r={3} fill={m.color} />
           : <>
-              <path d={areaD} fill={`url(#perf-bench-${m.key})`} />
-              <path d={lineD} fill="none" stroke={m.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              <path d={areaD} fill={`url(#perf-bench-${m.key})`} className="perf-area-in" />
+              <path d={lineD} fill="none" stroke={m.color} strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round" pathLength={1} strokeDasharray="1 1" className="perf-line-draw" />
             </>}
 
-        {/* 峰值点标值（峰值样本所在时刻） */}
+        {/* 峰值点标值（峰值样本所在时刻）：光晕环 + 实心点，弹出入场 */}
         {!empty && (() => {
           const s = samples[iPeakS]
           const px = xOf(s.ts)
           return (
-            <g>
+            <g className="perf-peak-in">
+              <circle cx={px} cy={toY(maxVal)} r={5} fill="none" stroke={m.color} strokeWidth={1} opacity={0.35} />
               <circle cx={px} cy={toY(maxVal)} r={2.5} fill={m.color} />
               <text
                 x={px}
-                y={toY(maxVal) - 6}
-                textAnchor={px > W - padR - 40 ? "end" : px < padL + 40 ? "start" : "middle"}
-                fontSize="8.5"
+                y={toY(maxVal) - 7}
+                textAnchor={px > drawW - padR - 44 ? "end" : px < padL + 44 ? "start" : "middle"}
+                fontSize="10.5"
                 fontWeight={600}
                 fill={m.color}
                 className="tabular-nums"
@@ -635,9 +666,9 @@ export function PerfBenchmarkChart({ points }: {
           <text
             key={i}
             x={xOf(ts)}
-            y={H - 6}
+            y={H - 8}
             textAnchor={i === 0 ? "start" : i === xTicks.length - 1 ? "end" : "middle"}
-            fontSize="8.5"
+            fontSize="10"
             className="fill-muted-foreground tabular-nums"
           >
             {fmtTick(ts)}
@@ -646,7 +677,7 @@ export function PerfBenchmarkChart({ points }: {
 
         {/* 空窗提示（缩放/平移到无轮次的时间段） */}
         {empty && (
-          <text x={padL + chartW / 2} y={padT + chartH / 2 + 3} textAnchor="middle" fontSize="9" className="fill-muted-foreground">
+          <text x={padL + cw / 2} y={padT + chartH / 2 + 3.5} textAnchor="middle" fontSize="10" className="fill-muted-foreground">
             该时间窗内无轮次
           </text>
         )}
@@ -661,17 +692,17 @@ export function PerfBenchmarkChart({ points }: {
           const tAt = tOf(dx)
           const l1 = tAt ? fmtTime(tAt) : "—"
           const l2 = r.near.cnt > 1 ? `均值 ${fmtVal(r.v)} · ${fmtVal(r.near.lo)}~${fmtVal(r.near.hi)} ${m.unit}` : `${fmtVal(r.v)} ${m.unit}`
-          const w = Math.max(textW(l1), textW(l2)) + 16
-          const bx = Math.max(padL, Math.min(W - padR - w, cursor - w / 2))
-          const by = Math.max(2, hy - 42)
+          const w = Math.max(textW(l1), textW(l2)) + 18
+          const bx = Math.max(padL, Math.min(drawW - padR - w, cursor - w / 2))
+          const by = Math.max(2, hy - 46)
           return (
             <g pointerEvents="none" className="animate-in fade-in duration-150">
-              <line x1={cursor} y1={padT} x2={cursor} y2={padT + chartH} stroke={PERF_COLORS.axis} strokeWidth={0.75} strokeDasharray="3 3" opacity={0.55} />
-              <circle cx={dx} cy={hy} r={6} fill={m.color} opacity={0.16} />
-              <circle cx={dx} cy={hy} r={2.5} fill={m.color} />
-              <rect x={bx} y={by} width={w} height={30} rx={8} className="fill-card" stroke={PERF_COLORS.axis} strokeOpacity={0.4} strokeWidth={1} />
-              <text x={bx + w / 2} y={by + 12} textAnchor="middle" fontSize="8.5" className="fill-muted-foreground tabular-nums">{l1}</text>
-              <text x={bx + w / 2} y={by + 24} textAnchor="middle" fontSize="10" fontWeight={700} fill={m.color} className="tabular-nums">{l2}</text>
+              <line x1={cursor} y1={padT} x2={cursor} y2={padT + chartH} stroke={PERF_COLORS.axis} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
+              <circle cx={dx} cy={hy} r={7} fill={m.color} opacity={0.14} />
+              <circle cx={dx} cy={hy} r={3} fill={m.color} />
+              <rect x={bx} y={by} width={w} height={34} rx={9} className="fill-card" stroke={PERF_COLORS.axis} strokeOpacity={0.4} strokeWidth={1} />
+              <text x={bx + w / 2} y={by + 13.5} textAnchor="middle" fontSize="10" className="fill-muted-foreground tabular-nums">{l1}</text>
+              <text x={bx + w / 2} y={by + 27.5} textAnchor="middle" fontSize="11.5" fontWeight={700} fill={m.color} className="tabular-nums">{l2}</text>
             </g>
           )
         })()}
@@ -681,7 +712,7 @@ export function PerfBenchmarkChart({ points }: {
         <div className="run-glass absolute right-2 bottom-2 flex items-center rounded-xl">
           <button
             type="button" title="缩小（Ctrl + 滚轮）" aria-label="缩小"
-            onClick={() => zoomAt(1 / 1.15, padL + chartW / 2)}
+            onClick={() => zoomAt(1 / 1.15, padL + cw / 2)}
             className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
           >
             <ZoomOutIcon className="size-3.5" />
@@ -689,7 +720,7 @@ export function PerfBenchmarkChart({ points }: {
           <span className="w-11 text-center text-[11px] tabular-nums text-[#57606a]" title="当前时间窗倍率">{ratio}%</span>
           <button
             type="button" title="放大（Ctrl + 滚轮）" aria-label="放大"
-            onClick={() => zoomAt(1.15, padL + chartW / 2)}
+            onClick={() => zoomAt(1.15, padL + cw / 2)}
             className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
           >
             <ZoomInIcon className="size-3.5" />

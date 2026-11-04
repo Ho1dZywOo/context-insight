@@ -325,6 +325,62 @@
   transform: scale(0.97);
 }
 
+/* ── 效率分布图（Perf TPS/TPOT）入场动效：纯 CSS 一次性动画（零 JS
+   定时器与帧循环开销），指标切换重挂 svg 时整体重放——与趋势图同构的
+   「数据生长」叙事：折线归一化描画 → 面积/包络带渐显 → 峰值点弹出，
+   统计条错峰上浮 ─────────────────────────────────────────────────── */
+@keyframes perf-line-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+.perf-line-draw {
+  animation: perf-line-draw 800ms var(--run-spring) both;
+  animation-delay: 120ms;
+}
+
+@keyframes perf-layer-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.perf-area-in {
+  animation: perf-layer-in 640ms ease-out both;
+  animation-delay: 200ms;
+}
+
+.perf-band-in {
+  animation: perf-layer-in 700ms ease-out both;
+  animation-delay: 320ms;
+}
+
+@keyframes perf-peak-in {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
+.perf-peak-in {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: perf-peak-in 520ms var(--run-spring) both;
+  animation-delay: 560ms;
+}
+
+@keyframes perf-stat-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+
+.perf-stat-in {
+  animation: perf-stat-in 420ms var(--run-spring) both;
+}
+
 /* 工具条按钮微交互：spring 缓动 + 按压回弹 + hover 发光内衬 */
 .run-tool-btn {
   transition:

@@ -118,8 +118,8 @@ describe('PerfBenchmarkChart', () => {
     ];
     act(() => { root.render(createElement(PerfBenchmarkChart, { points })) });
     const svg = container.querySelector('svg[data-bench]')!;
-    // 模拟 1440px 宽元素：720 绘图居中（两侧各 360px 留白），元素左缘在页面 x=100
-    const fakeRect = { x: 100, y: 0, left: 100, top: 0, right: 1540, bottom: 190, width: 1440, height: 190, toJSON: () => ({}) };
+    // 模拟 1440px 宽元素：720 回退几何 meet 居中（两侧各 360px 留白），元素左缘在页面 x=100
+    const fakeRect = { x: 100, y: 0, left: 100, top: 0, right: 1540, bottom: 200, width: 1440, height: 200, toJSON: () => ({}) };
     (svg as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = () => fakeRect as DOMRect;
     // 光标在绘图区首点（元素内 x = 360 + 36 = 396 → 页面 x = 496）
     act(() => { svg.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 496 })) });
@@ -224,5 +224,47 @@ describe('PerfBenchmarkChart', () => {
     expect(container.textContent).toContain('100%');
     act(() => { root.unmount() });
     document.body.removeChild(container);
+  });
+
+  it('宽卡片适配：容器实测宽直写 viewBox（1:1 满铺无 meet 留白），光标像素坐标恒等映射贴手', () => {
+    // 假 ResizeObserver：observe 即同步回报 1000px 容器宽（真 RO 在浏览器按帧回报）
+    class FakeRO {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe() {
+        this.cb([{ contentRect: { width: 1000 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    const g = globalThis as Record<string, unknown>;
+    const orig = g.ResizeObserver;
+    g.ResizeObserver = FakeRO;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      const points = [
+        { turnIndex: 0, turnId: 'bm-turn-0', createdAt: '2026-08-13T11:00:00Z', tpot: 120, tps: 40 },
+        { turnIndex: 1, turnId: 'bm-turn-1', createdAt: '2026-08-13T11:01:00Z', tpot: 100, tps: 50 },
+      ];
+      act(() => { root.render(createElement(PerfBenchmarkChart, { points })) });
+      const svg = container.querySelector('svg[data-bench]')!;
+      // 实测宽直写 viewBox：绘图横向 1:1，宽卡片两侧不再留白（高度恒定）
+      expect(svg.getAttribute('viewBox')).toBe('0 0 1000 200');
+      // 模拟 1000px 宽元素（左缘页面原点）：恒等映射——clientX 136 → viewBox x 136
+      const fakeRect = { x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 200, width: 1000, height: 200, toJSON: () => ({}) };
+      (svg as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = () => fakeRect as DOMRect;
+      act(() => { svg.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 136 })) });
+      expect([...svg.querySelectorAll('circle')].some(c => c.getAttribute('cx') === '136')).toBe(true);
+      expect(container.textContent).toContain('tok/s');
+      // 图宽中点 clientX 512 → 内插 45、焦点 cx=512（满铺后绘图区右缘到 988）
+      act(() => { svg.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 512 })) });
+      expect(container.textContent).toContain('45 tok/s');
+      expect([...svg.querySelectorAll('circle')].some(c => c.getAttribute('cx') === '512')).toBe(true);
+      act(() => { root.unmount() });
+    } finally {
+      g.ResizeObserver = orig;
+      document.body.removeChild(container);
+    }
   });
 });
