@@ -57,6 +57,10 @@ const viewerTurns = [
     toolCalls: [{ toolCallId: 'tc1', toolName: 'Read', argsJson: '{"file_path":"/src/main.ts"}', resultJson: null, state: 'completed', durationMs: 100 }],
   },
   { ...rowBase, turnId: 'rop-v-t2', turnIndex: 2, role: 'user', contentSummary: '评审 main.ts 的改动', createdAt: '2026-10-20T10:02:10.000Z', toolCalls: [] },
+  {
+    ...rowBase, turnId: 'rop-v-t3', turnIndex: 3, contentSummary: '构建失败，排查退出码', createdAt: '2026-10-20T10:03:10.000Z',
+    toolCalls: [{ toolCallId: 'tc3', toolName: 'Bash', argsJson: '{"cmd":"make build"}', resultJson: null, state: 'error', durationMs: 50, errorMessage: 'make: exit status 1' }],
+  },
 ];
 
 const detailBase = {
@@ -219,6 +223,37 @@ describe('离线查看器 Turns 搜索（客户端 matchTurnSearch 同口径）'
     expect(hit.textContent).toContain('工具名');
     // 上下文带调用预览（🔧 Read: {"file_path":…}）
     expect(hit.textContent).toContain('file_path');
+  });
+
+  it('全能语法离线同语义：多词 AND（摘要×工具载体）与 error:true 出错轮直列', async () => {
+    await renderViewer('?tab=turns');
+    const input = document.querySelector('input[placeholder="搜索本 run…"]') as HTMLInputElement;
+
+    // 多词 AND：评审 + main.ts —— t2 摘要两词同在；t1 只有 main.ts 缺「评审」
+    // （旧单词法下「评审 main.ts」按字面连串搜索零命中——最大易用性硬伤的
+    // 离线侧回归锁）
+    await act(async () => {
+      setInputValue(input, '评审 main.ts');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      await new Promise(r => setTimeout(r, 20));
+    });
+    const hits = document.querySelector('[data-turns-hits]')!;
+    expect(hits).toBeTruthy();
+    expect(hits.textContent).toContain('1 个命中');
+    expect(document.querySelector('[data-hit="rop-v-t2"]')).toBeTruthy();
+    expect(document.querySelector('[data-hit="rop-v-t1"]')).toBeNull();
+
+    // error:true —— 不知道错误文本也能直列出错轮（离线档案工具错误面透传，
+    // 此前列投影不含 errorMessage，离线侧错误路永久降级）
+    await act(async () => {
+      setInputValue(input, 'error:true');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      await new Promise(r => setTimeout(r, 20));
+    });
+    const hits2 = document.querySelector('[data-turns-hits]')!;
+    expect(hits2.textContent).toContain('1 个命中');
+    expect(document.querySelector('[data-hit="rop-v-t3"]')).toBeTruthy();
+    expect(document.querySelector('[data-hit="rop-v-t1"]')).toBeNull();
   });
 
   it('一框两语法：#数字直达会话内轮次；未命中给提示', async () => {

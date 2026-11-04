@@ -505,8 +505,10 @@ describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
         await new Promise(r => setTimeout(r, 20));
       });
-      // 服务端全域搜索（limit=50 命中护栏随行）
-      expect(fetchCalls.some(u => u.includes('/turns/search') && u.includes('keyword=') && u.includes('limit=50'))).toBe(true);
+      // 服务端全域搜索（不传 limit——命中全量返回、面板全量展示；截断契约
+      // 只留给显式传 limit 的调用方）
+      expect(fetchCalls.some(u => u.includes('/turns/search') && u.includes('keyword='))).toBe(true);
+      expect(fetchCalls.some(u => u.includes('/turns/search') && u.includes('limit='))).toBe(false);
       // 命中索引以玻璃浮层覆盖左列：节点列表常驻挂载（玻璃后虚化）但被
       // inert 盖住，浮层为覆盖式卡片（absolute + run-glass），首行起源标
       // 记 + 成员徽标
@@ -545,9 +547,19 @@ describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
       expect(turnsTab.querySelector('[data-turns-hits]')!.textContent).toContain('1 个命中 / 共 2');
       expect(turnsTab.querySelector('[data-hit="rop-t-b0"]')).toBeNull();
       expect(turnsTab.querySelector('[data-hit="rop-t-a0"]')).toBeTruthy();
-      // 工具过滤：read 仅 b0 在列
+      // 工具过滤叠加（多维 AND 回归锁）：旧语义是单维切换（点工具顶掉来
+      // 源），新语义跨维相与——用户引入 × read 无交集 → 0 命中且过滤面常驻
       await act(async () => {
         const chip = [...turnsTab.querySelectorAll('[data-hit-filter]')].find(b => b.textContent === 'read 1')!;
+        chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        await new Promise(r => setTimeout(r, 20));
+      });
+      expect(turnsTab.querySelector('[data-hit="rop-t-a0"]')).toBeNull();
+      expect(turnsTab.querySelector('[data-hit="rop-t-b0"]')).toBeNull();
+      expect(turnsTab.querySelector('[data-turns-hits]')!.textContent).toContain('当前过滤条件下无命中');
+      // 维内再点取消（用户引入关掉）→ 仅剩工具维：read 仅 b0 在列
+      await act(async () => {
+        const chip = [...turnsTab.querySelectorAll('[data-hit-filter]')].find(b => b.textContent?.includes('用户引入'))!;
         chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
         await new Promise(r => setTimeout(r, 20));
       });

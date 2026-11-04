@@ -102,37 +102,41 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
     setPrevKw(currentKw)
     if (currentKw && highlight) {
       const isToolMatch = highlight.matchField === "toolResult" || highlight.matchField === "toolError" || highlight.matchField === "toolArgs" || highlight.matchField === "toolName"
-      if (isToolMatch) {
-        const lower = currentKw.trim().toLowerCase()
-        if (lower) {
-          const toExpand = new Set<string>()
+      // 文本定位走查询解析出的正词（多词任一命中；算子与负词不参与）——
+      // 缺省回落原关键词
+      const lowers = (highlight.terms ?? [highlight.keyword])
+        .map(t => t.trim().toLowerCase())
+        .filter(t => t.length > 0)
+      if (isToolMatch && lowers.length > 0) {
+        const toExpand = new Set<string>()
+        for (const tc of nonSkillCalls) {
+          if (highlight.toolName && tc.toolName === highlight.toolName) {
+            toExpand.add(tc.id)
+            continue
+          }
+          if (
+            lowers.some(l =>
+              (tc.argsJson?.toLowerCase().includes(l) ?? false) ||
+              (tc.resultJson?.toLowerCase().includes(l) ?? false) ||
+              (tc.errorMessage?.toLowerCase().includes(l) ?? false),
+            )
+          ) {
+            toExpand.add(tc.id)
+          }
+        }
+        // 工具名命中：名字含任一正词的工具一并展开（关键词常是名字子串，
+        // 如搜 codebase-memory 命中同前缀的多个 MCP 工具）
+        if (highlight.matchField === "toolName") {
           for (const tc of nonSkillCalls) {
-            if (highlight.toolName && tc.toolName === highlight.toolName) {
-              toExpand.add(tc.id)
-              continue
-            }
-            if (
-              (tc.argsJson?.toLowerCase().includes(lower) ?? false) ||
-              (tc.resultJson?.toLowerCase().includes(lower) ?? false) ||
-              (tc.errorMessage?.toLowerCase().includes(lower) ?? false)
-            ) {
-              toExpand.add(tc.id)
-            }
+            if (lowers.some(l => tc.toolName.toLowerCase().includes(l))) toExpand.add(tc.id)
           }
-          // 工具名命中：名字含关键词的工具一并展开（关键词常是名字子串，
-          // 如搜 codebase-memory 命中同前缀的多个 MCP 工具）
-          if (highlight.matchField === "toolName") {
-            for (const tc of nonSkillCalls) {
-              if (tc.toolName.toLowerCase().includes(lower)) toExpand.add(tc.id)
-            }
-          }
-          if (toExpand.size > 0) {
-            setExpandedIds(prev => {
-              const next = new Set(prev)
-              for (const id of toExpand) next.add(id)
-              return next
-            })
-          }
+        }
+        if (toExpand.size > 0) {
+          setExpandedIds(prev => {
+            const next = new Set(prev)
+            for (const id of toExpand) next.add(id)
+            return next
+          })
         }
       }
     }
@@ -190,7 +194,7 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
               <>
                 {tc.errorMessage && (
                   <div className={cn(BLOCK_SUB, "text-xs leading-relaxed text-red-600 dark:text-red-400")}>
-                    {highlightKeyword(tc.errorMessage, highlight?.keyword)}
+                    {highlightKeyword(tc.errorMessage, highlight?.terms ?? highlight?.keyword)}
                   </div>
                 )}
                 {tc.argsJson && (
@@ -201,7 +205,7 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
                     </div>
                     <ExpandableText clampPx={200}>
                       <pre className="text-xs font-mono whitespace-pre-wrap break-words">
-                        {highlightKeyword(highlight?.keyword ? tc.argsJson : (truncateJson(tc.argsJson, 2000) ?? tc.argsJson), highlight?.keyword)}
+                        {highlightKeyword(highlight?.keyword ? tc.argsJson : (truncateJson(tc.argsJson, 2000) ?? tc.argsJson), highlight?.terms ?? highlight?.keyword)}
                       </pre>
                     </ExpandableText>
                   </div>
@@ -214,7 +218,7 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
                     </div>
                     <ExpandableText clampPx={200}>
                       <pre className="text-xs font-mono whitespace-pre-wrap break-words">
-                        {highlightKeyword(highlight?.keyword ? tc.resultJson : (truncateJson(tc.resultJson, 2000) ?? tc.resultJson), highlight?.keyword)}
+                        {highlightKeyword(highlight?.keyword ? tc.resultJson : (truncateJson(tc.resultJson, 2000) ?? tc.resultJson), highlight?.terms ?? highlight?.keyword)}
                       </pre>
                     </ExpandableText>
                   </div>

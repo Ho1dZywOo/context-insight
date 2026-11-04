@@ -21,9 +21,11 @@ import { withRouteLog } from '@/lib/api-route';
 import { prisma } from '@/lib/db';
 import { resolveRunScope } from '@/lib/run/observe/scope';
 import { memberByRowId } from '@/lib/observe/scope';
-import { matchTurnSearch } from '@/lib/observe/collectors/search';
+import { matchTurnSearch, type TurnSearchRow } from '@/lib/observe/collectors/search';
+import { parseTurnsQuery } from '@/lib/observe/collectors/turns-query';
+import { turnWallMs } from '@/lib/observe/turn-duration';
 
-/** 关键词可否安全下推到 SQL：matchTurnSearch 是 Unicode 不区分大小写的子串
+/** 文本词可否安全下推到 SQL：matchTurnSearch 是 Unicode 不区分大小写的子串
  * 匹配，而 SQLite LIKE 只对 ASCII 不区分大小写（西里尔/希腊等带大小写的非
  * ASCII 文字按字节比较）——含此类字符时下推会丢命中，须退回轻投影全量扫
  * 描保语义。% / _ 通配符只会让 LIKE 超匹配（超集无害，matchTurnSearch 仍
@@ -42,8 +44,9 @@ export const GET = withRouteLog(
     const { runId } = await params;
     const { searchParams } = request.nextUrl;
     const keyword = searchParams.get('keyword');
-    // 命中上限（可选，Turns 搜索驻留面板传 50）：total 恒为全量命中数，
-    // 截断由面板明示「已显示前 N」——不静默截
+    // 命中上限（可选 API 契约，暂无调用方传）：total 恒为全量命中数，
+    // 截断由调用方明示——不静默截；驻留面板不传 limit（命中全量返回全量
+    // 展示）
     const limitRaw = Number(searchParams.get('limit'));
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 200) : null;
 
@@ -59,28 +62,35 @@ export const GET = withRouteLog(
       return NextResponse.json({ items: [], total: 0 });
     }
 
-    // 六路候选下推（可安全时）：OR 覆盖 content / contentSummary / 工具
-    // args / result / error / 工具名——与 matchTurnSearch 的六路一一对应，
-    // DB 命中集 ⊇ 内存精确命中集，total 恒等于全量命中数（全量计数语义不变）。
-    const trimmed = keyword.trim();
-    const keywordFilter = canPushDownKeyword(trimmed)
+    // 查询词法解析（与 matchTurnSearch 同一单点）：正文本词逐词 AND 下推
+    //（可安全时，每词一个六路 OR 块）；任一词非 ASCII 安全则整体退回全量
+    // 轻投影扫描保语义；负词与结构化算子不下推——DB 候选是超集，内存精
+    // 滤保证与查询语义处处等价；纯算子查询（无正词）同样全量轻投影扫
+    const parsed = parseTurnsQuery(keyword);
+    const pushableTerms = parsed.terms
+      .filter(t => !t.negated)
+      .map(t => t.text.trim())
+      .filter(t => t.length > 0);
+    const keywordFilter = pushableTerms.length > 0 && pushableTerms.every(canPushDownKeyword)
       ? {
-          OR: [
-            { content: { contains: trimmed } },
-            { contentSummary: { contains: trimmed } },
-            {
-              toolCalls: {
-                some: {
-                  OR: [
-                    { argsJson: { contains: trimmed } },
-                    { resultJson: { contains: trimmed } },
-                    { errorMessage: { contains: trimmed } },
-                    { toolName: { contains: trimmed } },
-                  ],
+          AND: pushableTerms.map(trimmed => ({
+            OR: [
+              { content: { contains: trimmed } },
+              { contentSummary: { contains: trimmed } },
+              {
+                toolCalls: {
+                  some: {
+                    OR: [
+                      { argsJson: { contains: trimmed } },
+                      { resultJson: { contains: trimmed } },
+                      { errorMessage: { contains: trimmed } },
+                      { toolName: { contains: trimmed } },
+                    ],
+                  },
                 },
               },
-            },
-          ],
+            ],
+          })),
         }
       : undefined;
 
@@ -91,7 +101,9 @@ export const GET = withRouteLog(
       },
       orderBy: [{ turnIndex: 'asc' }],
       // 显式轻投影（性能层，同 collectors/turns.ts 范式）：TurnSearchRow 契约
-      // 之外的标量列（contentJson / inputMessagesJson / 各 token 计数…）不物化
+      // 之外的标量列（contentJson / inputMessagesJson / 各 token 计数…）不物
+      // 化；dur:/tokens: 算子所需列（latencyMs/totalTokens/工具 durationMs）
+      // 随查询语法进入契约
       select: {
         id: true,
         sessionId: true,
@@ -104,16 +116,55 @@ export const GET = withRouteLog(
         subagentName: true,
         subagentSessionId: true,
         reasoningTokens: true,
+        totalTokens: true,
+        latencyMs: true,
         createdAt_ts: true,
         createdAt: true,
         toolCalls: {
-          select: { toolCallId: true, toolName: true, dispatchBridgeId: true, argsJson: true, resultJson: true, errorMessage: true },
+          select: { toolCallId: true, toolName: true, dispatchBridgeId: true, argsJson: true, resultJson: true, errorMessage: true, durationMs: true },
         },
       },
     });
 
+    // 单轮耗时口径与 Turns 左列同源（turnWallMs：DB 工具正值 + 生成时长；
+    // wire 兜底不在此重放——该兜底只补 DB durationMs=0 且 wire 有值的少数
+    // 场景，缺兜底时这类轮的 dur: 阈值可能漏配，属诚实降级）
+    const sessionFrameworks = new Map(
+      (await prisma.session.findMany({
+        where: { id: { in: [...new Set(rows.map(r => r.sessionId))] } },
+        select: { id: true, framework: true, version: true },
+      })).map(s => [s.id, { framework: s.framework, version: s.version }]),
+    );
+    const searchRows: TurnSearchRow[] = rows.map(r => {
+      const meta = sessionFrameworks.get(r.sessionId);
+      const turnMs = turnWallMs(
+        meta?.framework ?? null,
+        meta?.version ?? null,
+        r.latencyMs,
+        r.toolCalls.map(tc => tc.durationMs),
+      );
+      return {
+        id: r.id,
+        sessionId: r.sessionId,
+        turnIndex: r.turnIndex,
+        role: r.role,
+        content: r.content,
+        contentSummary: r.contentSummary,
+        agentName: r.agentName,
+        isSubagent: r.isSubagent,
+        subagentName: r.subagentName,
+        subagentSessionId: r.subagentSessionId,
+        reasoningTokens: r.reasoningTokens,
+        totalTokens: r.totalTokens,
+        createdAt_ts: r.createdAt_ts,
+        createdAt: r.createdAt,
+        turnMs,
+        toolCalls: r.toolCalls,
+      };
+    });
+
     const byRowId = memberByRowId(scope);
-    let items = matchTurnSearch(rows, keyword, {
+    let items = matchTurnSearch(searchRows, keyword, {
       memberOf: sessionId => {
         const member = byRowId.get(sessionId);
         return member ? { taskId: member.taskId, label: member.label } : null;

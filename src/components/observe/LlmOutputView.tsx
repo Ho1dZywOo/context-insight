@@ -150,9 +150,13 @@ export const LlmOutputView = memo(function LlmOutputView({
     setPrevKw(currentKw)
     if (currentKw && highlight) {
       const isContentMatch = !highlight.matchField || highlight.matchField === "content" || highlight.matchField === "contentSummary"
-      if (isContentMatch) {
-        const lower = currentKw.trim().toLowerCase()
-        if (sections.some(s => s.type === "thinking" && s.content.toLowerCase().includes(lower))) {
+      // 文本定位走查询解析出的正词（多词/短语任一命中即展开；算子与负
+      // 词不参与）——缺省回落原关键词
+      const lowers = (highlight.terms ?? [highlight.keyword])
+        .map(t => t.trim().toLowerCase())
+        .filter(t => t.length > 0)
+      if (isContentMatch && lowers.length > 0) {
+        if (sections.some(s => s.type === "thinking" && lowers.some(l => s.content.toLowerCase().includes(l)))) {
           setIsThinkingExpanded(true)
         }
       }
@@ -216,7 +220,7 @@ export const LlmOutputView = memo(function LlmOutputView({
                   {isThinkingExpanded && (
                     <div className={BLOCK_SUB}>
                       <ExpandableText clampPx={400} className="text-sm whitespace-pre-wrap break-words text-muted-foreground">
-                        {highlightKeyword(section.content, highlight?.keyword)}
+                        {highlightKeyword(section.content, highlight?.terms ?? highlight?.keyword)}
                       </ExpandableText>
                     </div>
                   )}
@@ -236,7 +240,7 @@ export const LlmOutputView = memo(function LlmOutputView({
                   // 关键字命中态退回纯文本：<mark> 跳转依赖文本节点，markdown
                   // 结构化渲染会把命中词拆进不同节点（BashEscapeView 同款退路）
                   <ExpandableText clampPx={600} className="whitespace-pre-wrap break-words">
-                    {highlightKeyword(section.content, highlight?.keyword)}
+                    {highlightKeyword(section.content, highlight?.terms ?? highlight?.keyword)}
                   </ExpandableText>
                 ) : (
                   <ExpandableText clampPx={600}>

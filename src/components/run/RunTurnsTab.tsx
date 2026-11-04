@@ -29,6 +29,7 @@ import { RunTurnsRoleFilter, deriveRoleOptions, toggleRoleFilter } from "@/compo
 import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState } from "@/components/run/RunTurnsSearch";
 import type { TurnHighlight } from "@/lib/shared/highlight";
 import type { TurnSearchItem } from "@/lib/observe/collectors/search";
+import { parseTurnsQuery } from "@/lib/observe/collectors/turns-query";
 import type { MergedBridgeItem } from "@/lib/observe/collectors/bridges";
 import type { NodeInstance, RunViewModel } from "@/lib/run/view-model";
 import type { SessionRef } from "@/lib/run/model";
@@ -572,17 +573,25 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     [bridges],
   );
   // 命中过滤：键盘走查（↑↓/Enter）与过滤后列表对齐；改词重搜复位过滤
-  const { filter: hitFilter, setFilter: setHitFilter, visible: visibleHits, sourceOptions, thinkingOption, toolOptions } =
+  const { filter: hitFilter, toggle: toggleHitFilter, reset: resetHitFilter, visible: visibleHits, anyActive: hitFilterActive, sourceOptions, thinkingOption, toolOptions } =
     useTurnsHitsFilter(search?.items ?? EMPTY_SEARCH_ITEMS, bridgeResponseTurnIds);
+
+  // 过滤/改词收窄后活跃命中序号钳在界内（走查位置就近保持，不硬复位）——
+  // 渲染期 prop 变化模式（与详情自动展开同门，避免 effect 内同步 setState）
+  const [prevHitsLen, setPrevHitsLen] = useState(visibleHits.length);
+  if (prevHitsLen !== visibleHits.length) {
+    setPrevHitsLen(visibleHits.length);
+    setActiveHitIdx(i => Math.min(i, Math.max(visibleHits.length - 1, 0)));
+  }
 
   const runSearch = useCallback(async (kw: string) => {
     setSearch({ keyword: kw, loading: true, items: [], total: 0 });
     setActiveHitIdx(0);
     setVisitedHits(new Set());
-    setHitFilter(null);
+    resetHitFilter();
     try {
       const res = await fetch(
-        `/api/observe/run/${encodeURIComponent(runId)}/turns/search?keyword=${encodeURIComponent(kw)}&limit=50`,
+        `/api/observe/run/${encodeURIComponent(runId)}/turns/search?keyword=${encodeURIComponent(kw)}`,
       );
       const d = res.ok ? await res.json() : null;
       // 关键词已换（连续改词重搜）则丢弃迟到响应
@@ -594,16 +603,7 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     } catch {
       setSearch(prev => (prev ? { ...prev, loading: false } : prev));
     }
-  }, [runId, setHitFilter]);
-
-  /** 过滤切换：活跃命中序号随列表收窄复位 */
-  const changeHitFilter = useCallback(
-    (key: string | null) => {
-      setHitFilter(key);
-      setActiveHitIdx(0);
-    },
-    [setHitFilter],
-  );
+  }, [runId, resetHitFilter]);
 
   const exitSearch = useCallback(() => {
     setSearch(null);
@@ -620,7 +620,12 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
         next.add(item.turnId);
         return next;
       });
-      setHitHighlight({ keyword: search?.keyword ?? "", matchField: item.matchField, toolName: item.toolName });
+      setHitHighlight({
+        keyword: search?.keyword ?? "",
+        terms: parseTurnsQuery(search?.keyword ?? "").positiveTerms,
+        matchField: item.matchField,
+        toolName: item.toolName,
+      });
       handleSelectTurn(item.turnId);
     },
     [search, handleSelectTurn],
@@ -767,7 +772,9 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
               onSelect={openHit}
               onExit={exitSearch}
               filter={hitFilter}
-              onFilterChange={changeHitFilter}
+              onToggle={toggleHitFilter}
+              onReset={resetHitFilter}
+              anyActive={hitFilterActive}
               sourceOptions={sourceOptions}
               thinkingOption={thinkingOption}
               toolOptions={toolOptions}

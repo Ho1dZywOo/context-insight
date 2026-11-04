@@ -171,7 +171,9 @@ export async function GET(request: NextRequest) {
                 resultJson: true,
                 state: true,
                 errorType: includeDetail ? true : undefined,
-                errorMessage: includeDetail ? true : undefined,
+                // 工具错误面进工具详情视图（含离线导出档案——错误文本是
+                // 搜索六路之一，离线 error: 查询依赖它）
+                errorMessage: (includeDetail || includeToolDetail) ? true : undefined,
                 durationMs: true,
                 isSkillRelated: (includeDetail || includeToolDetail) ? true : undefined,
               }
@@ -431,7 +433,7 @@ export async function GET(request: NextRequest) {
           resultJson: (includeDetail || includeToolDetail) ? (detail.resultJson ?? null) : undefined,
           state: tc.state,
           errorType: includeDetail ? (detail.errorType ?? null) : undefined,
-          errorMessage: includeDetail ? (detail.errorMessage ?? null) : undefined,
+          errorMessage: (includeDetail || includeToolDetail) ? (detail.errorMessage ?? null) : undefined,
           // DB per-call duration 采集侧未回填（全 0）：wire 轮间隙推导覆盖（cpx 捕获）；
           // 无 wire（原生 opencode）保持 0，Perf 分段退回 token 估算
           durationMs: effectiveToolDurations[i],
