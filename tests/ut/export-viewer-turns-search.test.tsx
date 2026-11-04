@@ -266,7 +266,7 @@ describe('离线查看器 Turns 搜索（客户端 matchTurnSearch 同口径）'
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
       await new Promise(r => setTimeout(r, 20));
     });
-    expect(document.querySelector('[data-search-note]')?.textContent).toContain('当前会话未找到第 9 轮');
+    expect(document.querySelector('[data-search-note]')?.textContent).toContain('未找到第 9 轮');
 
     // #0 → 直达会话第 0 轮（详情端点直取）
     await act(async () => {

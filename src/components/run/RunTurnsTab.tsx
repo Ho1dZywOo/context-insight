@@ -26,7 +26,7 @@ import { TurnDetailSkeleton } from "@/components/observe/TurnDetailSkeleton";
 import type { FilmstripTurn } from "@/components/observe/TurnFilmstrip";
 import { RunTurnsNodes, STATUS_DOT, type TurnsNode, type TurnsNodeSession, type MemberTurnsState, type TurnsBlockTurn } from "@/components/run/RunTurnsNodes";
 import { RunTurnsRoleFilter, deriveRoleOptions, toggleRoleFilter } from "@/components/run/RunTurnsRoleFilter";
-import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState } from "@/components/run/RunTurnsSearch";
+import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState, type TurnJumpOutcome, type TurnJumpMatch } from "@/components/run/RunTurnsSearch";
 import type { TurnHighlight } from "@/lib/shared/highlight";
 import type { TurnSearchItem } from "@/lib/observe/collectors/search";
 import { parseTurnsQuery } from "@/lib/observe/collectors/turns-query";
@@ -632,15 +632,26 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
   );
 
   /** #N 直达：与胶片轨同基准——当前会话已加载轮内按序号定位 */
+  // ── #N 轮次直达（run 级解析）──
+  // 真相源在服务端（by-index 端点跨成员定位该轮次号）：客户端已加载分页
+  // 是窗口不是全集，未选中会话/加载窗口外的轮次在客户端解析不出（#25 误
+  // 报「未找到」的根因）。此处只负责解析（候选集 + 当前会话归因）；呈现与
+  // 选择归胶囊（单候选直接跳，多候选下钻），跳转动作走既有选中管线（详情
+  // 归属 → ensureMemberTurns → 揭示），目标行在加载窗口外时由补拉拉齐后落地
   const jumpTurnIndex = useCallback(
-    (idx: number) => {
-      if (!ownerTaskId) return false;
-      const t = [...(memberData.get(ownerTaskId)?.turns ?? [])].find(x => x.turnIndex === idx);
-      if (!t) return false;
-      handleSelectTurn(t.turnId);
-      return true;
+    async (idx: number): Promise<TurnJumpOutcome> => {
+      try {
+        const res = await fetch(`/api/observe/run/${encodeURIComponent(runId)}/turns/by-index?index=${idx}`);
+        if (!res.ok) return { found: false };
+        const d = await res.json();
+        const items: TurnJumpMatch[] = Array.isArray(d?.items) ? d.items : [];
+        if (items.length === 0) return { found: false };
+        return { found: true, matches: items, currentMemberTaskId: ownerTaskId };
+      } catch {
+        return { found: false };
+      }
     },
-    [ownerTaskId, memberData, handleSelectTurn],
+    [runId, ownerTaskId],
   );
 
   /** Run 轨点击：搜索驻留时先退出（命中索引让位），揭示意图滞后到列表回位 */
@@ -718,6 +729,7 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
           onSearch={runSearch}
           onExit={exitSearch}
           onJumpIndex={jumpTurnIndex}
+          onJumpTurn={handleSelectTurn}
           onStepHit={dir =>
             setActiveHitIdx(i => {
               const max = Math.max(visibleHits.length - 1, 0);

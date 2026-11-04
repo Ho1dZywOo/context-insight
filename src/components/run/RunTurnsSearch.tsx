@@ -9,8 +9,9 @@
 
 // Turns 搜索驻留面板（design: Trace 退役——搜索归 Turns，run 页与离线查看器共用）。
 // ① 搜索胶囊（Turns 头部右端）：一框两语法——文本 Enter = 跨成员搜索；
-// #数字 / 纯数字 = 当前会话轮次直达（与胶片轨同基准：已加载轮）。聚焦时
-// 下方浮出轻量气泡（最近搜索 + 语法提示），失焦即收；⌘K / Ctrl+K 全局聚焦。
+// #数字 / 纯数字 = 轮次直达（run 级解析：服务端真相源，单候选直接跳、多会
+// 话同号轮弹下钻选择，# 前缀输入期给即时提示）。胶囊正下方是锚定表面栈
+// （下钻 > # 提示 > 未命中提示 > 最近搜索，同材质互斥）。⌘K / Ctrl+K 全局聚焦。
 // ② 命中索引（玻璃浮层覆盖左列）：搜索驻留到用户主动关闭（✕ / Esc / 点
 // Run 轨）——节点列表在玻璃后常驻虚化（滚动位置保留），命中索引以毛玻璃
 // 卡片覆盖其上（覆盖感而非换页）。排查工作流里命中集是工作集，选中命中
@@ -186,14 +187,33 @@ export function useTurnsHitsFilter(items: TurnSearchItem[], bridgeResponseTurnId
   return { filter, toggle, reset, visible, anyActive, sourceOptions, thinkingOption, toolOptions };
 }
 
-export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex, onStepHit, onOpenHit }: {
+/** #N 直达解析出的候选（run 级）：成员归因 + 轮次摘要（下钻选择行预览） */
+export interface TurnJumpMatch {
+  turnId: string;
+  memberTaskId: string;
+  memberLabel: string;
+  contentSummary?: string | null;
+}
+
+/** #N 直达的解析结果（run 级）：found=false 全 run 无该轮；单候选由胶囊
+ *  直接跳转，多候选（多会话同号轮）弹出下钻列表由用户选择——不静默跳 */
+export interface TurnJumpOutcome {
+  found: boolean;
+  matches?: TurnJumpMatch[];
+  /** 当前会话（播放器所在成员）——下钻列表置顶与「当前」徽标依据 */
+  currentMemberTaskId?: string | null;
+}
+
+export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex, onJumpTurn, onStepHit, onOpenHit }: {
   /** 驻留搜索态（null = 空闲——胶囊仅作入口） */
   state: TurnsSearchState | null;
   hitCount: number;
   onSearch: (kw: string) => void;
   onExit: () => void;
-  /** #N 直达当前会话轮次；返回是否命中（未命中在胶囊下给一行提示） */
-  onJumpIndex: (idx: number) => boolean;
+  /** #N 直达（run 级解析，异步）：返回候选集——单候选胶囊直接跳，多候选弹下钻 */
+  onJumpIndex: (idx: number) => TurnJumpOutcome | Promise<TurnJumpOutcome>;
+  /** 执行跳转（解析与呈现分离——胶囊只管语法与选择，跳转动作归宿主） */
+  onJumpTurn: (turnId: string) => void;
   onStepHit: (dir: 1 | -1) => void;
   onOpenHit: () => void;
 }) {
@@ -202,6 +222,17 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
   const [focused, setFocused] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(() => loadRecents());
+  // #N 下钻选择面：多会话同号轮的候选列表（键盘 ↑↓/Enter、Esc/外点关闭）
+  const [jumpPicker, setJumpPicker] = useState<{ index: number; matches: TurnJumpMatch[]; currentMemberTaskId: string | null } | null>(null);
+  const [pickerIdx, setPickerIdx] = useState(0);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  // # 前缀即时提示（输入期引导，无取数）：刚敲下 # 还没输序号时告诉用户
+  // 这个语法做什么；序号一旦开始输即让位（引导不是驻留物）
+  const indexHint = value.trim() === "#";
+  const closePicker = useCallback(() => {
+    setJumpPicker(null);
+    setPickerIdx(0);
+  }, []);
 
   // 驻留关键词同步进输入框（改词重搜后回显最新词）；退出清空并复位提示
   const dockedKw = state?.keyword ?? null;
@@ -210,7 +241,18 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
     setPrevDocked(dockedKw);
     setValue(dockedKw ?? "");
     setNote(null);
+    closePicker();
   }
+
+  // 下钻面外点关闭（行按下不抢焦点，外点才收）
+  useEffect(() => {
+    if (!jumpPicker) return;
+    const h = (e: MouseEvent) => {
+      if (!pickerRef.current?.contains(e.target as Node)) closePicker();
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [jumpPicker, closePicker]);
 
   // ⌘K / Ctrl+K 全局聚焦
   useEffect(() => {
@@ -224,13 +266,33 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  const submit = () => {
+  const submit = async () => {
     const v = value.trim();
     if (!v) return;
-    // 语法二：#数字 / 纯数字 = 当前会话轮次直达
+    // 语法二：#数字 / 纯数字 = 轮次直达（run 级解析：服务端跨成员定位该轮
+    // 次号）。单候选直接跳；多候选（多会话同号轮）弹出下钻列表由用户选择
     if (/^#?\d+$/.test(v)) {
       const idx = Number(v.replace(/^#/, ""));
-      if (!onJumpIndex(idx)) setNote(`当前会话未找到第 ${idx} 轮`);
+      try {
+        const outcome = await onJumpIndex(idx);
+        const matches = outcome.matches ?? [];
+        if (!outcome.found || matches.length === 0) {
+          setNote(`未找到第 ${idx} 轮`);
+        } else if (matches.length === 1) {
+          onJumpTurn(matches[0].turnId);
+        } else {
+          // 当前会话置顶（连续走查意图）+「当前」徽标；其余按成员序
+          const current = outcome.currentMemberTaskId;
+          const sorted = current == null
+            ? matches
+            : [...matches].sort((a, b) => Number(b.memberTaskId === current) - Number(a.memberTaskId === current));
+          setNote(null);
+          setPickerIdx(0);
+          setJumpPicker({ index: idx, matches: sorted, currentMemberTaskId: current ?? null });
+        }
+      } catch {
+        setNote(`未找到第 ${idx} 轮`);
+      }
       return;
     }
     saveRecent(v);
@@ -241,10 +303,35 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.nativeEvent.isComposing) return;
+    // 下钻面键盘导航：↑↓ 走行、Enter 选行、Esc 关闭（打开期间优先于搜索态）
+    if (jumpPicker) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const n = jumpPicker.matches.length;
+        setPickerIdx(i => (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+        return;
+      }
+      if (e.key === "Enter") {
+        const m = jumpPicker.matches[pickerIdx];
+        if (m) {
+          onJumpTurn(m.turnId);
+          closePicker();
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        closePicker();
+        return;
+      }
+    }
     if (e.key === "Enter") {
       // Spotlight 语法：驻留中且输入未变 = 打开活跃命中；否则提交新搜索
       if (state && value.trim() === state.keyword) onOpenHit();
       else submit();
+      return;
+    }
+    if (e.key === "Escape" && note) {
+      setNote(null);
       return;
     }
     if (e.key === "Escape" && state) {
@@ -279,6 +366,7 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
           onChange={e => {
             setValue(e.target.value);
             setNote(null);
+            closePicker();
           }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
@@ -298,8 +386,80 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
         )}
       </div>
 
-      {/* 语法提示（直达未命中）：独立于气泡的一行提示，下次输入即消 */}
-      {note && (
+      {/* 锚定表面（胶囊正下方，互斥优先级：下钻 > # 提示 > 未命中提示 >
+          最近搜索）。#N 系表面用振实毛玻璃（bg-card/60 + blur-2xl +
+          saturate-150——底透才磨得出背景，饱和度补偿读作 iOS vibrancy），
+          动效纯 CSS */}
+
+      {/* #N 下钻选择面：多会话同号轮的用户选择（不静默跳）。当前会话置顶
+          + 徽标；行 = 成员点 + 名称 + 摘要预览；键盘 ↑↓/Enter、Esc/外点关闭 */}
+      {jumpPicker && (
+        <div
+          ref={pickerRef}
+          data-jump-picker
+          className="absolute right-0 top-[calc(100%+6px)] z-30 w-[300px] animate-in fade-in slide-in-from-top-1 duration-150 overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] backdrop-blur-2xl backdrop-saturate-150"
+        >
+          <div className="flex items-center justify-between px-3 pb-1 pt-2.5">
+            <span className="text-[10px] text-muted-foreground/70">
+              第 {jumpPicker.index} 轮 · {jumpPicker.matches.length} 个会话命中
+            </span>
+            <span
+              role="button"
+              tabIndex={0}
+              className="cursor-pointer rounded-full px-1.5 py-px text-[10px] text-muted-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+              onMouseDown={e => e.preventDefault()}
+              onClick={closePicker}
+            >
+              esc 关闭
+            </span>
+          </div>
+          <div className="max-h-[240px] overflow-y-auto pb-1.5">
+            {jumpPicker.matches.map((m, i) => (
+              <button
+                key={m.turnId}
+                type="button"
+                data-jump-item={m.turnId}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors duration-100",
+                  i === pickerIdx ? "bg-accent" : "hover:bg-accent/50",
+                )}
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => {
+                  onJumpTurn(m.turnId);
+                  closePicker();
+                }}
+              >
+                <span className="size-1.5 shrink-0 rounded-full bg-primary/70" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline gap-1.5">
+                    <span className="truncate text-[11px] font-medium text-foreground">{m.memberLabel}</span>
+                    {m.memberTaskId === jumpPicker.currentMemberTaskId && (
+                      <span className="shrink-0 rounded-full bg-primary/10 px-1 py-px text-[9px] leading-none text-primary">当前</span>
+                    )}
+                  </span>
+                  {m.contentSummary && (
+                    <span className="block truncate text-[10px] leading-relaxed text-muted-foreground/80">{m.contentSummary}</span>
+                  )}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* # 前缀即时提示：输入期引导（无取数）——告诉用户这个语法做什么 */}
+      {!jumpPicker && !note && indexHint && (
+        <div
+          data-jump-hint
+          className="absolute right-0 top-[calc(100%+6px)] z-30 flex items-center gap-2 animate-in fade-in slide-in-from-top-1 duration-150 rounded-full border border-border/70 bg-card/60 px-3 py-1.5 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] backdrop-blur-2xl backdrop-saturate-150"
+        >
+          <span className="text-[11px] font-semibold text-primary/80">#</span>
+          <span className="text-[11px] text-muted-foreground">请输入轮次序号，Enter 直达 · 多会话同号轮将给出选择</span>
+        </div>
+      )}
+
+      {/* 未命中提示（error 红）：下次输入即消，Esc 可关 */}
+      {!jumpPicker && note && (
         <p
           data-search-note
           className="absolute right-0 top-[calc(100%+6px)] z-30 animate-in fade-in slide-in-from-top-1 duration-150 rounded-lg border border-border/70 bg-card px-2.5 py-1.5 text-[11px] text-red-600 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] dark:text-red-400"
@@ -308,8 +468,8 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
         </p>
       )}
 
-      {/* 聚焦气泡：最近搜索 + 语法提示（毛玻璃、失焦即收） */}
-      {focused && recents.length > 0 && (
+      {/* 聚焦气泡：最近搜索 + 语法提示（毛玻璃、失焦即收；有提示让位） */}
+      {focused && recents.length > 0 && !note && !jumpPicker && !indexHint && (
         <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[300px] animate-in fade-in slide-in-from-top-1 duration-150 rounded-xl border border-border/70 bg-card/95 p-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] backdrop-blur-xl">
           <div className="flex flex-wrap gap-1">
             {recents.map(kw => (

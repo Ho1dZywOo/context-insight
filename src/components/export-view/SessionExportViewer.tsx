@@ -30,7 +30,7 @@ import type { AuditKind } from "@/lib/skill-audit-job"
 import { PerfPanorama } from "@/components/observe/PerfPanorama"
 import { ContextTracker } from "@/components/observe/ContextTracker"
 import { FileReadAnalysis } from "@/components/observe/FileReadAnalysis"
-import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState } from "@/components/run/RunTurnsSearch"
+import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState, type TurnJumpOutcome } from "@/components/run/RunTurnsSearch"
 import { matchTurnSearch, type TurnSearchRow, type TurnSearchItem } from "@/lib/observe/collectors/search"
 import { parseTurnsQuery } from "@/lib/observe/collectors/turns-query"
 import { OverviewPanels } from "@/components/observe/OverviewPanels"
@@ -393,16 +393,27 @@ export default function SessionDetailPage({
   }, [turnsSearch, select])
 
   /** #N 直达：会话内按序号定位（离线档案全量在册，无分页截断） */
-  const jumpTurnIndex = useCallback((idx: number) => {
+  /** #N 直达：会话内按序号定位（离线档案全量在册，无分页截断——单会话
+   *  无歧义，客户端解析即可；结果契约与 run 工作台同款 TurnJumpOutcome） */
+  const jumpTurnIndex = useCallback((idx: number): TurnJumpOutcome => {
     const t = [...turns].sort((a, b) => a.turnIndex - b.turnIndex).find(x => x.turnIndex === idx)
-    if (!t) return false
+    if (!t) return { found: false }
+    return {
+      found: true,
+      matches: [{ turnId: t.turnId, memberTaskId: t.turnId, memberLabel: `第 ${t.turnIndex} 轮`, contentSummary: t.contentSummary }],
+    }
+  }, [turns])
+
+  /** 跳转动作（与 run 工作台同契约：解析归胶囊，动作归宿主） */
+  const jumpTurn = useCallback((turnId: string) => {
+    const t = turns.find(x => x.turnId === turnId)
+    if (!t) return
     select({
       turnId: t.turnId,
       subagentHighlightId: t.isSubagent ? t.turnId : null,
       scrollTargetTurnId: t.turnId,
       searchHighlight: null,
     })
-    return true
   }, [turns, select])
   const [executions, setExecutions] = useState<ExecutionItem[]>([])
   const [allSkillEvents, setAllSkillEvents] = useState<SkillEventForDetail[]>([])
@@ -1104,6 +1115,7 @@ export default function SessionDetailPage({
               onSearch={runTurnsSearch}
               onExit={exitTurnsSearch}
               onJumpIndex={jumpTurnIndex}
+              onJumpTurn={jumpTurn}
               onStepHit={dir =>
                 setActiveHitIdx(i => {
                   const max = Math.max(visibleHits.length - 1, 0)

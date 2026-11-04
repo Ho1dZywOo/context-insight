@@ -14,7 +14,8 @@
 // TurnDetail）；②节点懒加载（未展开节点的成员不取数，member 过滤是列表
 // 唯一取形）；③跨成员搜索驻留（命中索引替换左列、点命中开 player 不消失、
 // 已读降透明、退出回节点列表并居中揭示）；④?tab=trace 深链别名落 Turns；
-// ⑤一框两语法（#数字直达当前会话轮次 / 未命中提示）。
+// ⑤一框两语法（# 即时提示 + #数字 run 级解析直达——服务端真相源、单候选
+// 直接跳、多会话同号轮下钻选择 / 未命中提示）。
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
@@ -153,6 +154,24 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
         reasoningTokens: 80, toolNames: ['read', 'bash'],
         member: { taskId: 'ses_mini_b', label: '成员B' } },
     ], total: 2 });
+  }
+  if (u.pathname === '/api/observe/run/minidemo01/turns/by-index') {
+    // #N run 级解析：#9 全 run 无该轮；#0 两成员都有（成员序 A 前——当前
+    // 会话 = 成员B 时验证置顶排序与「当前」徽标）；#1 仅成员B 有（单候选
+    // 直接跳路径）
+    const index = Number(p.get('index') ?? NaN);
+    if (index === 0) {
+      return json({ items: [
+        { turnId: 'rop-t-a0', memberTaskId: 'ses_mini_a', memberLabel: '成员A', contentSummary: '成员A的开始任务' },
+        { turnId: 'rop-t-b0', memberTaskId: 'ses_mini_b', memberLabel: '成员B', contentSummary: '成员B的回应' },
+      ] });
+    }
+    if (index === 1) {
+      return json({ items: [
+        { turnId: 'rop-t-b1', memberTaskId: 'ses_mini_b', memberLabel: '成员B', contentSummary: '成员B的第二轮' },
+      ] });
+    }
+    return json({ items: [] });
   }
   if (u.pathname === '/api/observe/turn/rop-t-a0' || u.pathname === '/api/observe/turn/rop-t-b0' || u.pathname === '/api/observe/turn/rop-t-b1') {
     if (slowDetail.current) {
@@ -627,14 +646,14 @@ describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
     }
   });
 
-  it('一框两语法：#数字直达当前会话轮次；未命中给提示且不触搜索端点', async () => {
+  it('一框两语法：# 即时提示 + #数字 run 级解析（单候选直接跳 / 多会话同号轮下钻选择）；未命中给提示且不触搜索端点', async () => {
     const origScroll = Element.prototype.scrollIntoView;
     Element.prototype.scrollIntoView = function () {};
     try {
       await renderPage('?tab=turns');
       const turnsTab = document.querySelector('[data-run-tab="turns"]')!;
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!;
-      // 成员B 已自动拉齐到全集（b0/b1 两轮，当前会话 = 成员B），选中 b1
+      // 成员B 已自动拉齐到全集（b0/b1 两轮），选中 b1 —— 当前会话 = 成员B
       const turnB2Row = [...turnsTab.querySelectorAll('button')].find(b => b.textContent?.includes('成员B的第二轮'))!;
       expect(turnB2Row).toBeTruthy();
       await act(async () => {
@@ -642,25 +661,60 @@ describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
         await new Promise(r => setTimeout(r, 20));
       });
       const input = turnsTab.querySelector('input[placeholder="搜索本 run…"]') as HTMLInputElement;
-      // 未加载的序号 → 提示（不取数、不换选）
-      await act(async () => {
-        setter.set!.call(input, '#9');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-        await new Promise(r => setTimeout(r, 20));
-      });
-      expect(turnsTab.querySelector('[data-search-note]')?.textContent).toContain('当前会话未找到第 9 轮');
+      const type = async (v: string) => {
+        await act(async () => {
+          setter.set!.call(input, v);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise(r => setTimeout(r, 10));
+        });
+      };
+      const press = async (key: string) => {
+        await act(async () => {
+          input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+          await new Promise(r => setTimeout(r, 20));
+        });
+      };
+      // 刚敲下 # → 即时提示（输入期引导，无取数）
+      await type('#');
+      expect(turnsTab.querySelector('[data-jump-hint]')?.textContent).toContain('请输入轮次序号');
+      // #9 全 run 无该轮 → 未命中提示（不取详情、不换选、不触搜索端点——
+      // 解析走 by-index 服务端真相源；序号已开始输，# 提示让位）
+      await type('#9');
+      await press('Enter');
+      expect(turnsTab.querySelector('[data-search-note]')?.textContent).toContain('未找到第 9 轮');
+      expect(turnsTab.querySelector('[data-jump-hint]')).toBeNull();
+      expect(fetchCalls.some(u => u.includes('/turns/by-index') && u.includes('index=9'))).toBe(true);
       expect(fetchCalls.some(u => u.includes('/turns/search'))).toBe(false);
       expect(document.getElementById('turn-detail-top')?.textContent).toContain('成员B的第二轮');
-      // #0 → 直达当前会话第 0 轮（成员B 的 b0，跨轮换选可见）
-      await act(async () => {
-        setter.set!.call(input, '#0');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-        await new Promise(r => setTimeout(r, 20));
-      });
-      expect(document.getElementById('turn-detail-top')?.textContent).toContain('成员B的回应');
+      // #1 仅成员B 有 → 单候选直接跳（无下钻面、无提示）
+      await type('#1');
+      await press('Enter');
+      expect(document.getElementById('turn-detail-top')?.textContent).toContain('成员B的第二轮');
+      expect(turnsTab.querySelector('[data-jump-picker]')).toBeNull();
       expect(turnsTab.querySelector('[data-search-note]')).toBeNull();
+      // #0 两成员都有 → 下钻选择面：当前会话（成员B）置顶带「当前」徽标
+      await type('#0');
+      await press('Enter');
+      const picker = turnsTab.querySelector('[data-jump-picker]')!;
+      expect(picker.textContent).toContain('2 个会话命中');
+      const rows = [...picker.querySelectorAll('[data-jump-item]')];
+      expect(rows).toHaveLength(2);
+      expect(rows[0].getAttribute('data-jump-item')).toBe('rop-t-b0');
+      expect(rows[0].textContent).toContain('成员B');
+      expect(rows[0].textContent).toContain('当前');
+      expect(rows[1].getAttribute('data-jump-item')).toBe('rop-t-a0');
+      // 键盘 Enter 选默认行（当前会话置顶）→ 跳 b0，下钻自动关闭
+      await press('Enter');
+      expect(document.getElementById('turn-detail-top')?.textContent).toContain('成员B的回应');
+      expect(turnsTab.querySelector('[data-jump-picker]')).toBeNull();
+      // 再次 #0 → 下钻；↓ 走到成员A 行 + Enter → 跨会话跳 a0
+      await type('#0');
+      await press('Enter');
+      expect(turnsTab.querySelector('[data-jump-picker]')).toBeTruthy();
+      await press('ArrowDown');
+      await press('Enter');
+      expect(document.getElementById('turn-detail-top')?.textContent).toContain('成员A的开始任务');
+      expect(fetchCalls).toContain('/api/observe/turn/rop-t-a0');
     } finally {
       Element.prototype.scrollIntoView = origScroll;
     }
