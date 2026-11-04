@@ -1,12 +1,11 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// This program is free software; you can redistribute it and/or modify it under the terms of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// Please refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
@@ -41,59 +40,41 @@ export function formatLatency(ms: number): string {
   return `${ms}ms`;
 }
 
+// 总览条（iOS widget 带）：5 张碎卡合一块毛玻璃横幅——去盒噪一行读完，
+// 大号 tabular 数字 + 小字距标签；Errors 非零时整格红调。取值元素保持
+// p.text-2xl ×5（顺序 Sessions/Tokens/Cost/Duration/Errors——IT 契约）
+function Metric({ label, value, error, children }: { label: string; value: string; error?: boolean; children?: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1 px-5 py-4">
+      <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
+      <p className={cn('text-2xl font-bold tabular-nums tracking-tight', error ? 'text-red-600 dark:text-red-400' : 'text-foreground')}>{value}</p>
+      {children}
+    </div>
+  );
+}
+
 export function MetricCards({ totalSessions, runCount, runMemberSessions, totalTokens, totalCost, totalDurationMs, totalErrors }: MetricCardsProps) {
   return (
-    <div className={cn("grid gap-4", totalErrors !== undefined ? "grid-cols-5" : "grid-cols-4")}>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Sessions</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{totalSessions}</p>
+    <section
+      data-metric-strip
+      className="animate-in fade-in slide-in-from-bottom-2 duration-300 rounded-2xl border border-border/70 bg-card/60 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] backdrop-blur-2xl backdrop-saturate-150"
+    >
+      <div className={cn('grid grid-cols-2 sm:grid-cols-3', totalErrors !== undefined ? 'lg:grid-cols-5' : 'lg:grid-cols-4', 'lg:divide-x lg:divide-border/50')}>
+        <Metric label="Sessions" value={String(totalSessions)}>
           {runCount != null && runCount > 0 && (
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <p className="text-xs text-muted-foreground">
               + {runCount} <Link href="/?kind=run" className="hover:underline">Runs</Link>
               {runMemberSessions != null && runMemberSessions > 0 && ` · ${runMemberSessions} member sessions`}
             </p>
           )}
-        </CardContent>
-      </Card>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Total Tokens</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{formatTokens(totalTokens)}</p>
-        </CardContent>
-      </Card>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Total Cost</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{formatCost(totalCost)}</p>
-        </CardContent>
-      </Card>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Total Duration</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{formatLatency(totalDurationMs)}</p>
-        </CardContent>
-      </Card>
-      {totalErrors !== undefined && (
-        <Card size="sm" className={totalErrors > 0 ? "border-red-200 dark:border-red-500/30" : ""}>
-          <CardHeader>
-            <CardTitle className={totalErrors > 0 ? "text-red-600 dark:text-red-400" : ""}>Errors</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className={`text-2xl font-bold ${totalErrors > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
-              {totalErrors}
-            </p>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+        </Metric>
+        <Metric label="Total Tokens" value={formatTokens(totalTokens)} />
+        <Metric label="Total Cost" value={formatCost(totalCost)} />
+        <Metric label="Total Duration" value={formatLatency(totalDurationMs)} />
+        {totalErrors !== undefined && (
+          <Metric label="Errors" value={String(totalErrors)} error={totalErrors > 0} />
+        )}
+      </div>
+    </section>
   );
 }

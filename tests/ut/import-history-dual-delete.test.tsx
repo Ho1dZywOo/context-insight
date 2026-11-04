@@ -129,7 +129,7 @@ describe('Recent Imports 同 sid 双记录删除', () => {
     await act(async () => { root!.render(createElement(ImportHistory)) })
     await flush()
 
-    const rows = [...document.querySelectorAll('tr')].filter(r => r.querySelector('button[title="Delete from Insight"]'))
+    const rows = [...document.querySelectorAll('[data-import-row]')]
     expect(rows.length).toBe(2)
     // dbMeta 按行定位键：capture 行带 proxy 徽标（version 带 -proxy marker），
     // native 行不带——旧行为两条都查首行（capture），native 错显 proxy

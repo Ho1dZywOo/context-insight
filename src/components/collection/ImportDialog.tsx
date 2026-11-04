@@ -901,7 +901,7 @@ export function ImportDialog() {
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetState(); }}>
       <DialogTrigger render={
-        <button type="button" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/80 text-sm font-medium transition-colors">
+        <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground shadow-[0_1px_3px_rgba(0,0,0,0.12)] transition-colors hover:bg-primary/90">
           <DownloadIcon className="size-4" />
           Import
         </button>

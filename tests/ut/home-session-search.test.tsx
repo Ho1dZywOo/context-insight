@@ -110,7 +110,7 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
   })
 
   function rowOf(el: Element): { taskId: string }[] {
-    return [...el.querySelectorAll('tbody tr')].filter(r => r.querySelector('input[type="checkbox"]')).map(r => ({ taskId: r.textContent ?? '' }))
+    return [...el.querySelectorAll('[data-asset-row]')].map(r => ({ taskId: r.textContent ?? '' }))
   }
 
   it('搜索：输入防抖触发客户端取数（无整页刷新），URL replaceState 同步 ?q=', async () => {
@@ -128,7 +128,7 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
         items: payloads[''].items, total: 61, page: 1, pageSize: 20, totalCount: 61,
       }))
     })
-    expect(container.querySelectorAll('tbody tr').length).toBe(2)
+    expect(container.querySelectorAll('[data-asset-row]').length).toBe(2)
 
     // 输入 → 防抖 400ms 后自动搜索
     const input = [...container.querySelectorAll('input')].find(i => i.placeholder?.includes('keyword or session ID')) as HTMLInputElement
@@ -175,6 +175,46 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
     await act(async () => { await new Promise(r => setTimeout(r, 50)) })
     expect(fetchCalls.some(u => u.includes('page=2'))).toBe(true)
     expect(window.location.search).toContain('page=2')
+
+    root.unmount()
+    container.remove()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('选择模式（iOS 编辑模式语义）：图标位变形对勾 + 底部浮动操作条（滑入），两会话可对比', async () => {
+    payloads = { '': { items: [makeItem('sel-a', '会话A'), makeItem('sel-b', '会话B')], total: 2, totalCount: 2 } }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createClientRoot(container)
+    await act(async () => {
+      root.render(createElement(AssetList, {
+        items: payloads[''].items, total: 2, page: 1, pageSize: 20, totalCount: 2,
+      }))
+    })
+    const checks = [...container.querySelectorAll('[data-asset-check]')] as HTMLButtonElement[]
+    expect(checks.length).toBe(2)
+    // 未选中：无浮动条；图标位 aria-checked=false
+    expect(container.querySelector('[data-selection-bar]')).toBeNull()
+    expect(checks[0].getAttribute('aria-checked')).toBe('false')
+    // 点第一行图标位 → 选中变形 + 浮动条（已选 1，无对比按钮）
+    await act(async () => { checks[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    const bar1 = container.querySelector('[data-selection-bar]')!
+    expect(bar1).toBeTruthy()
+    expect(bar1.textContent).toContain('已选 1 项')
+    expect([...bar1.querySelectorAll('button')].some(b => b.textContent?.includes('对比'))).toBe(false)
+    expect(checks[0].getAttribute('aria-checked')).toBe('true')
+    // 第二行也选 → 已选 2 · 可对比（Compare 仅 2 会话）
+    await act(async () => { checks[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    const bar2 = container.querySelector('[data-selection-bar]')!
+    expect(bar2.textContent).toContain('已选 2 项')
+    expect(bar2.textContent).toContain('可对比')
+    expect([...bar2.querySelectorAll('button')].some(b => b.textContent?.includes('对比'))).toBe(true)
+    // 取消选择 → 浮动条收起、全部行复位
+    const cancel = [...bar2.querySelectorAll('button')].find(b => b.title === '取消选择') as HTMLButtonElement
+    await act(async () => { cancel.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    expect(container.querySelector('[data-selection-bar]')).toBeNull()
+    expect(checks[0].getAttribute('aria-checked')).toBe('false')
+    expect(checks[1].getAttribute('aria-checked')).toBe('false')
 
     root.unmount()
     container.remove()

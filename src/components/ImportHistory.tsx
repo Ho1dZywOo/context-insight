@@ -10,15 +10,7 @@
 import { useState, useEffect } from "react"
 import { BRAND_NAME, BRAND_SOURCE_TYPE, isBrandSourceType } from '@/lib/branding'
 import { isProxyVersion, agentFrameworkOf } from '@/lib/shared/session-format'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
+import { AssetIcon, type AssetIconId } from '@/components/collection/AssetIcon'
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TrashIcon } from "lucide-react"
@@ -130,8 +122,8 @@ export function ImportHistory() {
   if (history === null) {
     return (
       <div className="space-y-3">
-        <h2 className="text-lg font-semibold">Recent Imports</h2>
-        <div className="h-8 rounded-md bg-muted/30 animate-pulse" />
+        <h2 className="text-lg font-semibold tracking-tight">最近导入</h2>
+        <div className="h-14 rounded-2xl bg-muted/30 animate-pulse" />
       </div>
     )
   }
@@ -203,108 +195,109 @@ export function ImportHistory() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Recent Imports ({history.length})</h2>        <Button
-          variant="destructive"
+        <h2 className="text-lg font-semibold tracking-tight">最近导入 ({history.length})</h2>
+        <Button
+          variant="outline"
           size="sm"
+          className="rounded-full border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
           disabled={deletingAll}
           onClick={handleDeleteAll}
         >
           {deletingAll ? "Deleting..." : "Delete All"}
         </Button>
       </div>
-      <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="text-xs">File Path</TableHead>
-              <TableHead className="text-xs">Query</TableHead>
-              <TableHead className="text-xs whitespace-nowrap">Import Time</TableHead>
-              <TableHead className="text-xs">Type</TableHead>
-              <TableHead className="text-xs">Status</TableHead>
-              <TableHead className="w-[40px]"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {history.map((entry, i) => {
-              // 类型徽标事实源优先级：DB（挂载时拉取）> 条目自带字段（新前端
-              // 写入）> 路径启发式（历史 localStorage 兜底）。DB 查找按行定位
-              // 键（双记录共享 taskId，framework 精确到行；旧条目回落裸键）
-              const db = dbMeta.get(historyKeyOf(entry))
-              const fwSource = db?.framework ?? entry.framework ?? null
-              const vSource = db?.version ?? entry.version ?? null
-              // 方案一：捕获行 framework 带 -proxy 记录后缀（claude-code-proxy
-              // 等）——剥后缀归一到 agent 框架后进白名单，proxy 徽标仍走 version
-              const agentFw = agentFrameworkOf(fwSource)
-              // 品牌容器标识（含存量旧值 cannbot-insight）归一为当前 BRAND_SOURCE_TYPE，
-              // 使下游 knownFramework/徽标分支按同一值命中——品牌更名不丢存量行的容器徽标
-              const brandFw = isBrandSourceType(agentFw) ? BRAND_SOURCE_TYPE : agentFw
-              const knownFramework = brandFw === "opencode" || brandFw === "claude-code" || brandFw === "cannbot" || brandFw === "dsh" || brandFw === "codex" || brandFw === BRAND_SOURCE_TYPE
-                ? brandFw
-                : null
-              const isProxy = isProxyVersion(vSource)
-              const isProxyCapture = (entry.sourceType === "claude-jsonl" || entry.sourceType === "jsonl") && (entry.filePath?.includes("/proxy/") ?? false)
-              const legacyOpencode = isProxyCapture && /cpx-ses_[^/]*\.jsonl$/.test(entry.filePath ?? "")
-              const showOpencode = knownFramework === "opencode" || (!knownFramework && legacyOpencode)
-              const showProxy = knownFramework ? isProxy : isProxyCapture
-              return (
-              <TableRow key={`${entry.taskId}-${i}`}>
-                <TableCell className="max-w-[400px] truncate text-xs font-mono text-muted-foreground" title={entry.filePath ?? ""}>{entry.filePath ?? "—"}</TableCell>
-                <TableCell className="max-w-[260px] truncate text-xs" title={entry.query ?? entry.taskId}>{entry.query ?? entry.taskId}</TableCell>
-                <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatTime(entry.importedAt)}</TableCell>
-                <TableCell className="text-xs">
-                  {entry.kind === "run" ? (
-                    <Badge variant="purple">Run</Badge>
-                  ) : knownFramework === BRAND_SOURCE_TYPE ? (
-                    <Badge variant="purple">{BRAND_NAME}</Badge>
-                  ) : knownFramework ? (
-                    <span className="inline-flex items-center gap-1">
-                      {knownFramework === "cannbot" ? <Badge variant="green">CANNBot</Badge>
-                        : knownFramework === "dsh" ? <Badge variant="purple">DSH</Badge>
-                        : knownFramework === "codex" ? <Badge variant="slate">Codex</Badge>
-                        : showOpencode ? <Badge variant="blue">OpenCode</Badge> : <Badge variant="orange">Claude</Badge>}
-                      {showProxy && <Badge variant="yellow">proxy</Badge>}
-                    </span>
-                  ) : entry.sourceType === "opencode-db" ? (
-                    <Badge variant="blue">OpenCode</Badge>
-                  ) : entry.sourceType === "claude-jsonl" ? (
-                    isProxyCapture ? (
-                      <span className="inline-flex items-center gap-1">
-                        {legacyOpencode ? <Badge variant="blue">OpenCode</Badge> : <Badge variant="orange">Claude</Badge>}
-                        <Badge variant="yellow">proxy</Badge>
-                      </span>
-                    ) : (
-                      <Badge variant="orange">Claude</Badge>
-                    )
-                  ) : entry.sourceType === "codex-jsonl" ? (
-                    <Badge variant="slate">Codex</Badge>
-                  ) : entry.sourceType === "jsonl" ? (
-                    <Badge variant="gray">JSONL</Badge>
-                  ) : "—"}
-                </TableCell>
-                <TableCell className="text-xs">
-                  {entry.status === "success" ? (
-                    <Badge variant="green">OK</Badge>
-                  ) : (
-                    <Badge variant="red">error</Badge>
-                  )}
-                </TableCell>
-                <TableCell className="px-2 text-right">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-6 text-muted-foreground hover:text-red-600"
-                    disabled={deleting === historyKeyOf(entry)}
-                    onClick={() => doDeleteEntry(entry)}
-                    title="Delete from Insight"
-                  >
-                    {deleting === historyKeyOf(entry) ? <span className="text-xs">…</span> : <TrashIcon className="size-3.5" />}
-                  </Button>
-                </TableCell>
-              </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
+      <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 overflow-hidden rounded-2xl border border-border/70 bg-card/70 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] backdrop-blur-2xl backdrop-saturate-150">
+        <div className="divide-y divide-border/50">
+          {history.map((entry, i) => {
+            // 类型徽标事实源优先级：DB（挂载时拉取）> 条目自带字段（新前端
+            // 写入）> 路径启发式（历史 localStorage 兜底）。DB 查找按行定位
+            // 键（双记录共享 taskId，framework 精确到行；旧条目回落裸键）
+            const db = dbMeta.get(historyKeyOf(entry))
+            const fwSource = db?.framework ?? entry.framework ?? null
+            const vSource = db?.version ?? entry.version ?? null
+            // 方案一：捕获行 framework 带 -proxy 记录后缀（claude-code-proxy
+            // 等）——剥后缀归一到 agent 框架后进白名单，proxy 徽标仍走 version
+            const agentFw = agentFrameworkOf(fwSource)
+            // 品牌容器标识（含存量旧值 cannbot-insight）归一为当前 BRAND_SOURCE_TYPE，
+            // 使下游 knownFramework/图标分支按同一值命中——品牌更名不丢存量行的容器徽标
+            const brandFw = isBrandSourceType(agentFw) ? BRAND_SOURCE_TYPE : agentFw
+            const knownFramework = brandFw === "opencode" || brandFw === "claude-code" || brandFw === "cannbot" || brandFw === "dsh" || brandFw === "codex" || brandFw === BRAND_SOURCE_TYPE
+              ? brandFw
+              : null
+            const isProxy = isProxyVersion(vSource)
+            const isProxyCapture = (entry.sourceType === "claude-jsonl" || entry.sourceType === "jsonl") && (entry.filePath?.includes("/proxy/") ?? false)
+            const legacyOpencode = isProxyCapture && /cpx-ses_[^/]*\.jsonl$/.test(entry.filePath ?? "")
+            const showOpencode = knownFramework === "opencode" || (!knownFramework && legacyOpencode)
+            const showProxy = knownFramework ? isProxy : isProxyCapture
+            // 图标 id：run / 已知框架（agent 归一）/ 品牌容器 / 源类型兜底
+            const iconId: AssetIconId = entry.kind === "run"
+              ? "run"
+              : knownFramework === BRAND_SOURCE_TYPE
+                ? "brand"
+                : knownFramework === "opencode" || (!knownFramework && showOpencode)
+                  ? "opencode"
+                  : knownFramework === "claude-code" || (knownFramework == null && entry.sourceType === "claude-jsonl")
+                    ? "claude-code"
+                    : knownFramework === "cannbot"
+                      ? "cannbot"
+                      : knownFramework === "dsh"
+                        ? "dsh"
+                        : knownFramework === "codex" || entry.sourceType === "codex-jsonl"
+                          ? "codex"
+                          : entry.sourceType === "opencode-db"
+                            ? "opencode"
+                            : entry.sourceType === "jsonl"
+                              ? "jsonl"
+                              : "unknown"
+            const typeLabel = entry.kind === "run"
+              ? "Run"
+              : knownFramework === BRAND_SOURCE_TYPE
+                ? BRAND_NAME
+                : knownFramework === "cannbot"
+                  ? "CANNBot"
+                  : knownFramework === "dsh"
+                    ? "DSH"
+                    : knownFramework === "codex"
+                      ? "Codex"
+                      : showOpencode
+                        ? "OpenCode"
+                        : entry.sourceType === "claude-jsonl"
+                          ? "Claude"
+                          : entry.sourceType === "opencode-db"
+                            ? "OpenCode"
+                            : entry.sourceType === "codex-jsonl"
+                              ? "Codex"
+                              : entry.sourceType === "jsonl"
+                                ? "JSONL"
+                                : "—"
+            return (
+              <div key={`${entry.taskId}-${i}`} data-import-row className="group flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 hover:bg-accent/40">
+                <AssetIcon id={iconId} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-mono text-xs text-foreground/80" title={entry.filePath ?? ""}>{entry.filePath ?? "—"}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground" title={entry.query ?? entry.taskId}>
+                    {entry.query ?? entry.taskId} · {formatTime(entry.importedAt)} · {typeLabel}
+                    {showProxy && <span className="ml-1 rounded-full bg-yellow-500/15 px-1.5 py-px text-[10px] font-medium text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400">proxy</span>}
+                  </p>
+                </div>
+                <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] ${entry.status === "success" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+                  <span className={`size-1.5 rounded-full ${entry.status === "success" ? "bg-green-500" : "bg-red-500"}`} />
+                  {entry.status === "success" ? "OK" : "error"}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 shrink-0 text-muted-foreground/70 opacity-0 transition-opacity hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100"
+                  disabled={deleting === historyKeyOf(entry)}
+                  onClick={() => doDeleteEntry(entry)}
+                  title="Delete from Insight"
+                >
+                  {deleting === historyKeyOf(entry) ? <span className="text-xs">…</span> : <TrashIcon className="size-3.5" />}
+                </Button>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {/* 旧条目（无 framework 消歧）删除多行确认：delete-session 检出该

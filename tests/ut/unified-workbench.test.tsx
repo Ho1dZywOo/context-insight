@@ -207,33 +207,33 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     });
     await settle();
 
-    const runRow = document.querySelector('a[href="/run/minidemo01"]')?.closest('tr') as HTMLTableRowElement | null;
+    const runRow = document.querySelector('a[href="/run/minidemo01"]')?.closest('[data-asset-row]') as HTMLElement | null;
     expect(runRow).not.toBeNull();
-    const cells = [...runRow!.querySelectorAll('td')].map(td => td.textContent ?? '');
+    const runText = runRow!.textContent ?? '';
+    const stat = (name: string): string => runRow!.querySelector(`[data-stat="${name}"]`)?.textContent ?? '';
 
-    // Model 列：主模型（按会话计数、去 provider 前缀归一）glm-4.7，多模型 +1
-    expect(cells.some(c => c.includes('glm-4.7') && c.includes('+1'))).toBe(true);
+    // Model：主模型（按会话计数、去 provider 前缀归一）glm-4.7，多模型 +1
+    expect(runText.includes('glm-4.7') && runText.includes('+1')).toBe(true);
     // Start → End：manifest 无起止 → 成员会话极值兜底（earliest → latest，本地时区格式）
     const fmt = (iso: string): string => {
       const d = new Date(iso);
       const p = (n: number) => String(n).padStart(2, '0');
       return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
     };
-    const startEnd = cells.find(c => c.includes('→')) ?? '';
-    expect(startEnd).toContain(fmt('2026-10-14T09:00:00.000Z'));
-    expect(startEnd).toContain(fmt('2026-10-14T11:04:00.000Z'));
+    expect(runText).toContain(fmt('2026-10-14T09:00:00.000Z'));
+    expect(runText).toContain(fmt('2026-10-14T11:04:00.000Z'));
     // ΣTokens 2300 → 2.3K；ΣCost → $0.20
-    expect(cells.some(c => c.includes('2.3K'))).toBe(true);
-    expect(cells.some(c => c.includes('$0.20'))).toBe(true);
+    expect(stat('Tokens')).toBe('2.3K');
+    expect(stat('Cost')).toBe('$0.20');
     // Active / Wall：Σ成员活跃 18.5min / Run 跨度墙钟 2.1h（09:00→11:04）
-    expect(cells.some(c => c.includes('18.5min / 2.1h'))).toBe(true);
+    expect(stat('Active / Wall')).toBe('18.5min / 2.1h');
 
-    // 会话行 Model 列：展示口径去 provider 前缀（悬停 title 保留原始值）
-    const sesRow = document.querySelector('a[href^="/run/solo:uw-ses-model"]')?.closest('tr') as HTMLTableRowElement | null;
+    // 会话行 Model：展示口径去 provider 前缀（悬停 title 保留原始值）
+    const sesRow = document.querySelector('a[href^="/run/solo:uw-ses-model"]')?.closest('[data-asset-row]') as HTMLElement | null;
     expect(sesRow).not.toBeNull();
-    const sesCells = [...sesRow!.querySelectorAll('td')].map(td => td.textContent ?? '');
-    expect(sesCells.some(c => c.includes('deepseek-v4-pro'))).toBe(true);
-    expect(sesCells.some(c => c.includes('volc-gateway'))).toBe(false);
+    const sesText = sesRow!.textContent ?? '';
+    expect(sesText.includes('deepseek-v4-pro')).toBe(true);
+    expect(sesText.includes('volc-gateway')).toBe(false);
     expect(sesRow!.querySelector('span[title="volc-gateway/deepseek-v4-pro"]')).not.toBeNull();
 
     // memberStats = null（join 失败 / 无 prisma）→ 指标列降级 —
@@ -245,11 +245,10 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
       root!.render(createElement(AssetList, { items: [{ ...runItem, memberStats: null }], total: 1, page: 1, pageSize: 20, kind: 'all' }));
     });
     await settle();
-    const row2 = document.querySelector('a[href="/run/minidemo01"]')?.closest('tr') as HTMLTableRowElement | null;
+    const row2 = document.querySelector('a[href="/run/minidemo01"]')?.closest('[data-asset-row]') as HTMLElement | null;
     expect(row2).not.toBeNull();
-    const cells2 = [...row2!.querySelectorAll('td')].map(td => td.textContent ?? '');
-    expect(cells2.some(c => c.includes('— → —'))).toBe(true);
-    expect(cells2.some(c => c.trim() === '—')).toBe(true);
+    expect(row2!.textContent ?? '').toContain('— → —');
+    expect(row2!.querySelector('[data-stat="Tokens"]')?.textContent ?? '').toBe('—');
   })
 
   it('指标卡系统总消耗口径：Σtokens/Σcost/平均时长/Errors = 独立会话 + run 成员（页面层）', async () => {

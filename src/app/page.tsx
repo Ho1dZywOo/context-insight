@@ -38,16 +38,16 @@ export default async function Home({
   if (isLakeSource) {
     return (
       <div className="flex min-h-screen flex-col bg-background">
-        <main className="flex w-full max-w-7xl flex-col gap-6 px-6 py-8 mx-auto">
+        <main className="flex w-full max-w-7xl flex-col gap-8 px-6 py-10 mx-auto">
           <AppHeader
             actions={
               <>
                 <ImportDialog />
-                <Link href="/" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium hover:bg-accent/30 transition-colors">
+                <Link href="/" className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-4 text-sm font-medium transition-colors hover:bg-accent/50">
                   <ArrowLeftIcon className="size-4 text-muted-foreground" />
                   本地洞察库
                 </Link>
-                <a href="/settings" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium hover:bg-accent/30 transition-colors">
+                <a href="/settings" className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-4 text-sm font-medium transition-colors hover:bg-accent/50">
                   <SettingsIcon className="size-4 text-muted-foreground" />
                   Settings
                 </a>
@@ -86,16 +86,16 @@ export default async function Home({
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <main className="flex w-full max-w-7xl flex-col gap-6 px-6 py-8 mx-auto">
+      <main className="flex w-full max-w-7xl flex-col gap-8 px-6 py-10 mx-auto">
         <AppHeader
           actions={
             <>
               <ImportDialog />
-              <Link href="/?src=lake" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium hover:bg-accent/30 transition-colors">
+              <Link href="/?src=lake" className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-4 text-sm font-medium transition-colors hover:bg-accent/50">
                 <EyeIcon className="size-4 text-cyan-500" />
                 {BAY_VIEWER_NAME}
               </Link>
-              <a href="/settings" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium hover:bg-accent/30 transition-colors">
+              <a href="/settings" className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-4 text-sm font-medium transition-colors hover:bg-accent/50">
                 <SettingsIcon className="size-4 text-muted-foreground" />
                 Settings
               </a>
