@@ -11,6 +11,8 @@ import { PrismaClient } from "@prisma/client";
 import fs from "node:fs";
 import path from "node:path";
 import { isEnvFileLeakedUrl } from "./db-env-guard";
+// BigInt JSON 垫片：roll-up BigInt 列配套，测试进程内全局生效（见 src/lib/bigint-json.ts）
+import "../src/lib/bigint-json";
 
 // 测试库隔离默认值：测试一律写独立 prisma/test.db（pretest 每次重建）。真实
 // prisma/dev.db 由常驻 server 独占——夹具会话从物理上不可能再泄进用户数据

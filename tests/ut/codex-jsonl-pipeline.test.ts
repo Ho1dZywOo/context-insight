@@ -268,7 +268,7 @@ describe('codex-jsonl 全链路导入（rollout → adapter → normalize → tu
     const session = await prisma.session.findFirst({ where: { taskId: MAIN, framework: 'codex' } });
     expect(session).not.toBeNull();
     expect(session!.query).toContain('请派发子代理'); // firstQuery 跳过注入
-    expect(session!.totalTokens).toBe(1835); // 1345 + (135+150) + (100+105)，与列表预览同口径
+    expect(Number(session!.totalTokens)).toBe(1835); // 1345 + (135+150) + (100+105)，与列表预览同口径
 
     const turns = await prisma.turn.findMany({
       where: { sessionId: session!.id },

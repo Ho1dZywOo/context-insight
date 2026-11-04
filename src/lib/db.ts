@@ -8,6 +8,10 @@
 
 import { PrismaClient } from '@prisma/client';
 
+// BigInt JSON 垫片（roll-up BigInt 列配套）：任何经本单例触库的入口
+// （脚本/CLI/测试）都连带获得 bigint→number 的序列化安全，详见模块头。
+import './bigint-json';
+
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };

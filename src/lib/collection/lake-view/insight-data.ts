@@ -77,7 +77,7 @@ export async function listInsightSessions(): Promise<Map<string, InsightSession[
         taskId: s.taskId,
         startTime: s.startTime ? s.startTime.toISOString() : null,
         endTime: s.endTime ? s.endTime.toISOString() : null,
-        totalTokens: s.totalTokens,
+        totalTokens: Number(s.totalTokens),
         framework: s.framework,
         version: s.version,
         model: s.model,

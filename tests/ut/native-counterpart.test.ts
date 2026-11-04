@@ -21,8 +21,12 @@ import { resolveNativeCounterpart, defaultNativeDiscoveryRoots } from '../../src
 import { materializeV1Fixture } from '../helpers/materialize-v1-fixture';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'native-counterpart-it-'));
-const OPENCODE_DB = materializeV1Fixture('native-counterpart');
-const OPENCODE_SID = 'ses_2051a32a4ffevX0jGBWVDDEqCk';
+// sid 私有化（replaceSid）：样例 sid 多文件共享时并行 worker 争抢 test.db
+// 同一行（互相 beforeAll 清扫删行），改写出本文件专属 sid 副本解耦
+const OPENCODE_DB = materializeV1Fixture('native-counterpart', {
+  replaceSid: { from: 'ses_2051a32a4ffevX0jGBWVDDEqCk', to: 'ses_2051a32a4ffeNcPrivate001' },
+});
+const OPENCODE_SID = 'ses_2051a32a4ffeNcPrivate001';
 
 const CLAUDE_SID = 'nc-it-claude-0001';
 const DSH_SID = 'nc-it-dsh-0001';

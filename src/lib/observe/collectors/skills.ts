@@ -269,12 +269,12 @@ export async function collectScopeSkills(
     const sidByRowId = new Map(scope.members.map(m => [m.rowId, m.taskId] as const));
     for (const r of memberTokRows) {
       const sid = sidByRowId.get(r.id);
-      if (sid != null && r.totalTokens != null) tokensBySid.set(sid, r.totalTokens);
+      if (sid != null && r.totalTokens != null) tokensBySid.set(sid, Number(r.totalTokens));
     }
     const extMax = new Map<string, number>();
     for (const r of extTokRows) {
       if (r.totalTokens == null) continue;
-      extMax.set(r.taskId, Math.max(extMax.get(r.taskId) ?? 0, r.totalTokens));
+      extMax.set(r.taskId, Math.max(extMax.get(r.taskId) ?? 0, Number(r.totalTokens)));
     }
     for (const [sid, tok] of extMax) if (!tokensBySid.has(sid)) tokensBySid.set(sid, tok);
     for (const d of dispatches) {

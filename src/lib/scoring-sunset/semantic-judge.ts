@@ -187,7 +187,7 @@ export async function runSemanticJudge(
   });
 
   const turnDigest = buildTurnDigest(turns.map(t => ({ ...t, createdAt_ts: t.createdAt_ts ? t.createdAt_ts.toISOString() : null })));
-  const bridgeDigest = buildBridgeDigest(bridges.map(b => ({ ...b, dispatchTimestamp: b.dispatchTimestamp ? b.dispatchTimestamp.toISOString() : null })));
+  const bridgeDigest = buildBridgeDigest(bridges.map(b => ({ ...b, dispatchTimestamp: b.dispatchTimestamp ? b.dispatchTimestamp.toISOString() : null, subagentTokens: Number(b.subagentTokens), subagentLatencyMs: Number(b.subagentLatencyMs) })));
   const system = buildSemanticSystemPrompt();
   const user = buildSemanticUserPrompt(turnDigest, bridgeDigest);
 

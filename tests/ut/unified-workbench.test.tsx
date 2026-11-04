@@ -269,9 +269,9 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
       document.body.innerHTML = '';
       rows = await readRows();
     }
-    const expTokens = rows.reduce((s, r) => s + r.totalTokens, 0);
+    const expTokens = rows.reduce((s, r) => s + Number(r.totalTokens), 0);
     const expCost = rows.reduce((s, r) => s + r.totalCost, 0);
-    const expTotalMs = rows.reduce((s, r) => s + sessionDurationMs(r.startTime, r.endTime, r.totalLatencyMs), 0);
+    const expTotalMs = rows.reduce((s, r) => s + sessionDurationMs(r.startTime, r.endTime, Number(r.totalLatencyMs)), 0);
 
     const values = [...document.querySelectorAll('p.text-2xl')].map(el => el.textContent ?? '');
     expect(values.length).toBe(5); // Sessions / Tokens / Cost / Total Duration / Errors

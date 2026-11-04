@@ -260,8 +260,8 @@ export async function analyzeWorkflow(
     subagentType: b.subagentType,
     subagentName: b.subagentName,
     status: b.status,
-    subagentTokens: b.subagentTokens,
-    subagentLatencyMs: b.subagentLatencyMs,
+    subagentTokens: Number(b.subagentTokens),
+    subagentLatencyMs: Number(b.subagentLatencyMs),
     dispatchTurnId: b.dispatchTurnId,
   })));
 
@@ -379,8 +379,8 @@ export async function analyzeWorkflow(
           iterationName: range.iterationIndex ? `迭代${range.iterationIndex}` : null,
           startTime: dispatchTurn?.createdAt_ts?.toISOString() ?? dispatchTurn?.createdAt.toISOString() ?? bridge.dispatchTimestamp?.toISOString() ?? null,
           endTime: bridge.responseTimestamp?.toISOString() ?? null,
-          durationMs: bridge.subagentLatencyMs,
-          totalTokens: bridge.subagentTokens,
+          durationMs: Number(bridge.subagentLatencyMs),
+          totalTokens: Number(bridge.subagentTokens),
           totalCost: 0,
           toolCallCount: 0,
           bridgeId: bridge.id,

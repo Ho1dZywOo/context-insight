@@ -102,8 +102,13 @@ fs.writeFileSync(path.join(FIXTURES, SID, 'subagents', 'stray-notes.txt'), 'DASH
 // .sql（source of truth）物化本文件私有副本——无共享路径首建竞态、不依赖其它
 // 文件先跑（原共享路径 existsSync 守卫的并行首建竞态由 review 指出后收敛到
 // materializeV1Fixture），afterAll 清理
-const OPENCODE_DB = materializeV1Fixture('lake-e2e');
-const OPENCODE_SID = 'ses_2051a32a4ffevX0jGBWVDDEqCk';
+const OPENCODE_DB = materializeV1Fixture('lake-e2e', {
+  // sid 私有化：样例 sid 多文件共享时并行 worker 争抢 test.db 同一行（湖上传
+  // 与其他文件的 beforeAll 清扫互相删行 → Session not found / P2025 抖动），
+  // 改写出本文件专属 sid 副本解耦（e2e-import-observe 侧的竞态重试随之降为兜底）
+  replaceSid: { from: 'ses_2051a32a4ffevX0jGBWVDDEqCk', to: 'ses_2051a32a4ffeLakeItPrivate1' },
+});
+const OPENCODE_SID = 'ses_2051a32a4ffeLakeItPrivate1';
 
 const prisma = new PrismaClient();
 

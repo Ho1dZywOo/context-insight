@@ -14,6 +14,8 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   if (process.env.NEXT_PHASE === 'phase-production-build') return;
   const { logInfo, loggerConfigSnapshot } = await import('@/lib/logger');
+  // BigInt JSON 垫片：roll-up BigInt 列配套，先于任何路由/序列化装上（幂等）
+  await import('@/lib/bigint-json');
   const cfg = loggerConfigSnapshot();
   logInfo('logger', 'boot 日志配置', { enabled: cfg.enabled, level: cfg.level, file: cfg.file, stdout: cfg.stdout, dir: cfg.dir });
   // wire 工具时长预热（性能层，后台不阻塞启动）：捕获冷读是秒级同步阻塞，

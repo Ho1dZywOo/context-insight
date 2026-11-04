@@ -191,9 +191,14 @@ export async function buildAgentIO(taskId: string, prisma: PrismaClient, framewo
   const session = await prisma.session.findFirst({ where })
   if (!session) throw new Error(`Session not found: "${taskId}"`)
 
+  // subagent roll-up 列已升 BigInt：BridgeRow（number 契约）边界转换
   const bridges = (await prisma.interactionBridge.findMany({
     where: { sessionId: session.id },
     orderBy: [{ dispatchTimestamp: "asc" }],
+  })).map(b => ({
+    ...b,
+    subagentTokens: b.subagentTokens == null ? null : Number(b.subagentTokens),
+    subagentLatencyMs: b.subagentLatencyMs == null ? null : Number(b.subagentLatencyMs),
   })) as BridgeRow[]
 
   const allTurns = (await prisma.turn.findMany({

@@ -136,7 +136,7 @@ describe('E2E: claude-code 原生日志重放去重（proxy/原生 token 统计�
       where: { taskId: SESSION_ID, framework: 'claude-code' },
       select: { totalTokens: true },
     });
-    expect(s?.totalTokens).toBe(EXPECTED_TURN_TOKENS);
+    expect(Number(s?.totalTokens)).toBe(EXPECTED_TURN_TOKENS);
   });
 
   it('listSessions 预览同口径去重（导入前预览 ≠ 导入后实际）', () => {

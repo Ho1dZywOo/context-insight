@@ -170,7 +170,7 @@ describe('统一资产列表：单表混排', () => {
       where: { taskId: { in: ['cl-mini_a', 'cl-mini_c'] } },
       select: { id: true, taskId: true, totalTokens: true, totalCost: true, model: true, startTime: true, endTime: true, version: true },
     });
-    const expectSum = rows.reduce((s, r) => s + r.totalTokens, 0);
+    const expectSum = rows.reduce((s, r) => s + Number(r.totalTokens), 0);
     const expectCost = rows.reduce((s, r) => s + r.totalCost, 0);
     // 期望活跃 Σ 直接从同款拆分实现推导（锁「聚合 = Active 列同口径 Σ」）
     const activeMap = await getActiveSplitMap(rows);

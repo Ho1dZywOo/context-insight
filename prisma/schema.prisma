@@ -26,14 +26,17 @@ model Session {
   startTime DateTime  @default(now())
   endTime   DateTime?
 
-  totalTokens           Int     @default(0)
-  totalInputTokens      Int     @default(0)
-  totalOutputTokens     Int     @default(0)
-  totalReasoningTokens  Int     @default(0)
-  totalCacheReadTokens  Int     @default(0)
-  totalCacheWriteTokens Int     @default(0)
+  // roll-up 列域无界（长活会话 token 累计/墙钟跨度实测可破 Int32 的 2.147B，
+  // 见 bigint-json 模块头），统一 BigInt（SQLite INTEGER 本就 64 位，升型对
+  // 存量数据零改写）；单轮/单调用粒度列（Turn/ToolCall）物理有界保持 Int。
+  totalTokens           BigInt  @default(0)
+  totalInputTokens      BigInt  @default(0)
+  totalOutputTokens     BigInt  @default(0)
+  totalReasoningTokens  BigInt  @default(0)
+  totalCacheReadTokens  BigInt  @default(0)
+  totalCacheWriteTokens BigInt  @default(0)
   totalCost             Float   @default(0)
-  totalLatencyMs        Int     @default(0)
+  totalLatencyMs        BigInt  @default(0)
   totalToolCallCount    Int     @default(0)
   totalLlmCallCount     Int     @default(0)
   totalSkillLoadCount   Int     @default(0)
@@ -180,15 +183,15 @@ model Execution {
   rootExecutionId   String?
   depth             Int     @default(0)
 
-  tokens                   Int   @default(0)
-  inputTokens              Int   @default(0)
-  outputTokens             Int   @default(0)
-  reasoningTokens          Int   @default(0)
-  cacheReadInputTokens     Int   @default(0)
-  cacheCreationInputTokens Int   @default(0)
-  maxSingleCallTokens      Int   @default(0)
+  tokens                   BigInt @default(0)
+  inputTokens              BigInt @default(0)
+  outputTokens             BigInt @default(0)
+  reasoningTokens          BigInt @default(0)
+  cacheReadInputTokens     BigInt @default(0)
+  cacheCreationInputTokens BigInt @default(0)
+  maxSingleCallTokens      BigInt @default(0)
   cost                     Float @default(0)
-  latencyMs                Int   @default(0)
+  latencyMs                BigInt @default(0)
   toolCallCount            Int   @default(0)
   toolCallErrorCount       Int   @default(0)
   llmCallCount             Int   @default(0)
@@ -261,8 +264,8 @@ model InteractionBridge {
   subagentName      String?
   status            String  @default("dispatched")
 
-  subagentTokens    Int @default(0)
-  subagentLatencyMs Int @default(0)
+  subagentTokens    BigInt @default(0)
+  subagentLatencyMs BigInt @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
