@@ -19,17 +19,19 @@ export function subagentTiming(
     const end = turn.completedAt
       ? new Date(turn.completedAt).getTime()
       : start + Math.max(turn.latencyMs, 0);
-    if (Number.isFinite(start)) starts.push(start);
-    if (Number.isFinite(end)) ends.push(end);
+    // epoch 0（1970-01-01）是「起点塌陷」脏数据标记：语义同「缺失」而非真实
+    // 时刻，参与 min 聚合会把时延放大成完整毫秒时间戳（1.78e12 ms ≈ 56 年）。
+    // 与 NaN 同路剔除（> 0 才视为真实事件时间），长活会话（44 天墙钟跨度）不受影响。
+    if (Number.isFinite(start) && start > 0) starts.push(start);
+    if (Number.isFinite(end) && end > 0) ends.push(end);
   }
   if (!starts.length || !ends.length) return null;
   const dispatch = dispatchTimestamp ? new Date(dispatchTimestamp).getTime() : NaN;
   const start = Math.min(...starts, ...(Number.isFinite(dispatch) ? [dispatch] : []));
   const end = Math.max(...ends);
-  // 列已升 BigInt（64 位）：早期「起点塌成 epoch 0、时延=完整毫秒时间戳
-  // 1.78e12」的脏数据曾撑破 Int32 列，当时以 INT32_MAX 钳制保列不炸——
-  // 根因修复后（schema BigInt + bigint-json 序列化垫片）真实跨度原样入列，
-  // 长活会话（实测 44 天墙钟跨度）不再被静默截断成 24.8 天。
+  // 列已升 BigInt（64 位）：epoch 0 脏数据在聚合层即被剔除（见上），不再需要
+  // INT32_MAX 钳制保列不炸——真实跨度原样入列，长活会话（实测 44 天墙钟跨度）
+  // 不再被静默截断成 24.8 天。
   const latencyMs = Math.max(end - start, 0);
   return { responseTimestamp: new Date(end).toISOString(), latencyMs };
 }

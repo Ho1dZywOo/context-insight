@@ -21,8 +21,9 @@
 //
 // 精度依据：token 计数与时延毫秒的真实域远小于 2^53（≈9e15，JS number 的
 // 精确整数上界；3.8B ms ≈ 44 天会话跨度也才 3.8e9），Number() 无损。超出
-// 2^53 的值只可能是脏数据（如起点塌成 epoch 0 的整段时间戳），显示层四舍
-// 五入无害——列本身的 64 位精度不受影响。
+// 2^53 的 bigint（如未来真 64 位 hash/id）Number() 会静默丢精度——toJSON 内
+// 加 Number.isSafeInteger 守卫生，越界即抛错（响亮失败而非静默吞精度），逼
+// 上层在真实序列化边界用 replacer / 字符串显式处理，垫片不替真 64 位值兜底。
 //
 // 安装点：Next 服务端 instrumentation.register（src/instrumentation.ts）、
 // 测试 setup（tests/setup.ts）、db 单例（src/lib/db.ts，覆盖绕过 Next 的
@@ -34,7 +35,17 @@ const bigintProto = BigInt.prototype as unknown as { toJSON?: () => number };
 if (typeof bigintProto.toJSON !== 'function') {
   Object.defineProperty(bigintProto, 'toJSON', {
     value: function (this: bigint): number {
-      return Number(this);
+      const n = Number(this);
+      // 精度守卫生：token/时延真实域远小于 2^53，Number() 无损；超出安全整数界
+      // 的 bigint（如未来真 64 位 hash/id）若静默 Number() 会丢精度且零报错——
+      // 这里显式抛错，把「静默丢精度」变成「响亮失败」，逼上层在序列化边界用
+      // replacer / 字符串显式处理，而不是靠这个垫片兜底。
+      if (!Number.isSafeInteger(n)) {
+        throw new TypeError(
+          `Cannot serialize BigInt ${this} to JSON: exceeds Number.MAX_SAFE_INTEGER (±2^53), precision would be lost`,
+        );
+      }
+      return n;
     },
     writable: true,
     configurable: true,
