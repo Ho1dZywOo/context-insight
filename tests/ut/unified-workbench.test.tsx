@@ -330,7 +330,7 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
         root!.render(createElement(AssetList, { items: [], total: 0, page: 1, pageSize: 20, kind: 'all' }))
       })
       // 切到 Run：行过滤器触发客户端取数（kind=run），行内渲染 run 数据
-      await act(async () => { click([...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Run')!) })
+      await act(async () => { click([...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Runs')!) })
       await settle()
       expect(fetchUrls.some(u => u.includes('kind=run'))).toBe(true)
       expect(document.body.textContent).toContain('mini-bundle')

@@ -122,7 +122,7 @@ export function ImportHistory() {
   if (history === null) {
     return (
       <div className="space-y-3">
-        <h2 className="text-lg font-semibold tracking-tight">最近导入</h2>
+        <h2 className="text-lg font-semibold tracking-tight">Recent Imports</h2>
         <div className="h-14 rounded-2xl bg-muted/30 animate-pulse" />
       </div>
     )
@@ -195,7 +195,7 @@ export function ImportHistory() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold tracking-tight">最近导入 ({history.length})</h2>
+        <h2 className="text-lg font-semibold tracking-tight">Recent Imports ({history.length})</h2>
         <Button
           variant="outline"
           size="sm"

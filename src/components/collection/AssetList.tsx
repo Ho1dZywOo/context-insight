@@ -60,9 +60,9 @@ type UploadStatus = 'idle' | 'uploading' | 'done' | 'error';
 const KIND_ORDER: AssetKindFilter[] = ['all', 'session', 'run'];
 
 const KIND_LABELS: Record<AssetKindFilter, string> = {
-  all: '全部',
-  session: '会话',
-  run: 'Run',
+  all: 'All',
+  session: 'Sessions',
+  run: 'Runs',
 };
 
 const RUN_STATUS_DOT: Record<string, string> = {
@@ -309,6 +309,20 @@ export function AssetList({
 
   async function handleDeleteAll() {
     try {
+      // 全资产删除：run 先行（级联删除其导入的成员会话），再清剩余独立会话。
+      // run 列表会随删除收缩——循环取第一页直到取空，避免翻页错位
+      for (;;) {
+        const listRes = await fetch('/api/observe/data?kind=run&pageSize=100&page=1')
+        if (!listRes.ok) break
+        const data = await listRes.json()
+        const runs = (data.items ?? []) as Array<{ runId: string }>
+        if (runs.length === 0) break
+        for (const run of runs) {
+          try {
+            await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}`, { method: 'DELETE' })
+          } catch {}
+        }
+      }
       const res = await fetch('/api/ingest/delete-session', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -361,7 +375,7 @@ export function AssetList({
     : kind === 'session'
       ? 'No sessions found. Import a session to get started.'
       : 'No sessions found. Import a session or bundle to get started.'
-  const titleText = kind === 'run' ? `Runs (${total})` : kind === 'session' ? `Sessions (${total})` : `资产 (${total})`
+  const titleText = kind === 'run' ? `Runs (${total})` : kind === 'session' ? `Sessions (${total})` : `Assets (${total})`
   const kindIndex = KIND_ORDER.indexOf(kind)
 
   // 选择位：行图标 + 常显微型勾选点（图标右上角）——静息 9px 空心点
@@ -607,7 +621,7 @@ export function AssetList({
               </button>
             ))}
           </div>
-          {total > 0 && kind !== 'run' && (
+          {total > 0 && (
             <Button
               variant="outline"
               size="sm"
@@ -615,7 +629,7 @@ export function AssetList({
               onClick={() => setDeleteMode('all')}
             >
               <TrashIcon className="size-3.5" />
-              Delete All Sessions
+              Delete All Assets
             </Button>
           )}
         </div>
@@ -625,11 +639,11 @@ export function AssetList({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {deleteMode === 'all' ? 'Delete All Sessions' : `Delete ${selectedKeys.size} 项`}
+              {deleteMode === 'all' ? 'Delete All Assets' : `Delete ${selectedKeys.size} 项`}
             </DialogTitle>
             <DialogDescription className="text-base">
               {deleteMode === 'all'
-                ? `将从 Insight 数据库中移除全部会话的分析数据（run 不受影响）。原始会话文件不受影响，可随时重新导入。`
+                ? `将删除全部资产：每个 run（含其导入的成员会话）与所有独立会话的分析数据。原始文件不受影响，可随时重新导入。`
                 : selectedRuns.length > 0
                   ? `将删除选中的 ${selectedSessions.length} 个会话与 ${selectedRuns.length} 个 run。删除 run 会同时删除由它导入的成员会话（导入前已存在的会话不受影响）。`
                   : `将从 Insight 数据库中移除选中的 ${selectedSessions.length} 个 session 的分析数据。原始会话文件不受影响，可随时重新导入。`}
