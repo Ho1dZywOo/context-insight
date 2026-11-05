@@ -106,7 +106,6 @@ export default async function Home({
         <MetricCards
           totalSessions={summary.sessionCount}
           runCount={summary.runCount}
-          runMemberSessions={summary.runMemberCount}
           totalTokens={summary.totalTokens}
           totalCost={summary.totalCost}
           totalDurationMs={summary.totalDurationMs}

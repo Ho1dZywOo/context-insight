@@ -89,7 +89,7 @@ describe('主页 Sessions 搜索（服务端 ?q= 过滤）', () => {
     expect(html).toContain('No sessions found')
   })
 
-  it('会话图标跟模型走：glm/deepseek 各自徽标 + 统一蓝色瓦（provider 前缀剥离）', async () => {
+  it('会话图标跟模型走：glm/deepseek 各自徽标 + 统一绿瓦（provider 前缀剥离）', async () => {
     const html = await renderHome({ q: '模型徽标行' })
     expect(html).toContain(SID_C)
     expect(html).toContain(SID_D)
@@ -99,9 +99,21 @@ describe('主页 Sessions 搜索（服务端 ?q= 过滤）', () => {
   })
 })
 
-function makeItem(taskId: string, query: string) {
-  return { ...EMPTY_ITEM, sessionId: taskId, key: `session:${taskId}`, taskId, query }
+function makeItem(taskId: string, query: string, model: string | null = null) {
+  return { ...EMPTY_ITEM, sessionId: taskId, key: `session:${taskId}`, taskId, query, model }
 }
+
+// 主流模型覆盖矩阵（组件层消费——图标映射不依赖 DB，避免 beforeAll 批量
+// 入库与并行文件读竞态；页面级全管线由 glm/deepseek 用例锁定）
+const COV_MODELS: Array<[model: string, icon: string]> = [
+  ['meta-llama/Llama-4-Maverick-17B', 'meta'],
+  ['grok-4', 'xai'],
+  ['minimax-m2', 'minimax'],
+  ['doubao-seed-1-6', 'doubao'],
+  ['ernie-4-5-turbo', 'baidu'],
+  ['mistral-large-latest', 'mistral'],
+  ['hunyuan-turbo-latest', 'tencent'],
+]
 
 describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', () => {
   const fetchCalls: string[] = []
@@ -236,6 +248,20 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
     root.unmount()
     container.remove()
     window.history.replaceState(null, '', '/')
+  })
+
+  it('主流模型覆盖：llama/grok/minimax/doubao/ernie/mistral/hunyuan 各映射官方徽标', async () => {
+    const items = COV_MODELS.map(([model], i) => makeItem(`cov-${i}`, '覆盖行', model))
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createClientRoot(container)
+    await act(async () => {
+      root.render(createElement(AssetList, { items, total: items.length, page: 1, pageSize: 20 }))
+    })
+    const icons = [...container.querySelectorAll('[data-asset-icon]')].map(el => el.getAttribute('data-asset-icon'))
+    expect(icons).toEqual(COV_MODELS.map(([, icon]) => icon))
+    root.unmount()
+    container.remove()
   })
 })
 

@@ -137,8 +137,8 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     expect(document.body.textContent).toContain('failed')
     // 规模副行（节点/会话成员）
     expect(document.body.textContent).toContain('节点')
-    // 指标卡首卡：Sessions N + Run 1 并列
-    expect(document.body.textContent).toContain('+ 1')
+    // 指标卡首卡：Assets 总量（独立会话 + run 行数）+ 副行 run/session 拆分
+    expect(document.body.textContent).toContain('1 Run')
   })
 
   it('run 行 Σ成员会话指标渲染：Model 分布 / Start→End 兜底 / ΣTokens / ΣCost（memberStats → AssetList）', async () => {
@@ -273,7 +273,7 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     const expTotalMs = rows.reduce((s, r) => s + sessionDurationMs(r.startTime, r.endTime, Number(r.totalLatencyMs)), 0);
 
     const values = [...document.querySelectorAll('p.text-2xl')].map(el => el.textContent ?? '');
-    expect(values.length).toBe(5); // Sessions / Tokens / Cost / Total Duration / Errors
+    expect(values.length).toBe(5); // Assets / Tokens / Cost / Total Duration / Errors
     const parseNum = (text: string): number => {
       const m = text.match(/([\d.]+)\s*([KM]?)/);
       return m ? parseFloat(m[1]!) * (m[2] === 'K' ? 1e3 : m[2] === 'M' ? 1e6 : 1) : NaN;
@@ -288,10 +288,10 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     expect(Math.abs(parseFloat(values[2]!.replace('$', '')) - expCost)).toBeLessThanOrEqual(Math.max(0.05, expCost * 0.01));
     // Total Duration：Σ全库时长（独立 + run 成员；漏并成员会少 ~10min，2% 容差必炸）
     expect(Math.abs(parseDur(values[3]!) - expTotalMs)).toBeLessThanOrEqual(Math.max(5_000, expTotalMs * 0.02));
-    // Sessions = 全库 − 本 run 的 3 个成员（隔离闸：成员不双计；±2 吸收残余竞态，
-    // 双计会 +3 必超）；副行说明成员规模
-    expect(Math.abs(parseInt(values[0]!, 10) - (rows.length - 3))).toBeLessThanOrEqual(2);
-    expect(document.body.textContent).toContain('3 member sessions');
+    // Assets 首卡 = 独立会话数 + run 行数（隔离闸：成员不双计；±2 吸收残余
+    // 竞态，双计会 +3 必超）；run 成员会话数不再出现在首页计数口径
+    expect(Math.abs(parseInt(values[0]!, 10) - (rows.length - 3 + 1))).toBeLessThanOrEqual(2);
+    expect(document.body.textContent).not.toContain('member sessions');
     // Errors：run 行在首页，其成员的失败工具调用计入页级 Errors
     expect(parseInt(values[4]!, 10)).toBeGreaterThanOrEqual(1);
   })
