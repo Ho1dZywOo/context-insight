@@ -18,7 +18,7 @@ import { ImportDialog } from '@/components/collection/ImportDialog';
 import { LakeSourceView } from '@/components/collection/LakeSourceView';
 import { ImportHistory } from '@/components/ImportHistory';
 import { AppHeader } from '@/components/layout/AppHeader';
-import { HEADER_PILL } from '@/components/layout/header-actions';
+import { HEADER_PILL_TINTED } from '@/components/layout/header-actions';
 import { BAY_VIEWER_NAME } from '@/lib/branding';
 import { prisma } from '@/lib/db';
 import { queryAssetList, assetSummary } from '@/lib/collection/list-service';
@@ -44,11 +44,11 @@ export default async function Home({
             actions={
               <>
                 <ImportDialog />
-                <Link href="/" className={`${HEADER_PILL} border border-border/70 hover:bg-accent/50`}>
+                <Link href="/" className={HEADER_PILL_TINTED}>
                   <ArrowLeftIcon className="size-4 text-muted-foreground" />
                   本地洞察库
                 </Link>
-                <a href="/settings" className={`${HEADER_PILL} border border-border/70 hover:bg-accent/50`}>
+                <a href="/settings" className={HEADER_PILL_TINTED}>
                   <SettingsIcon className="size-4 text-muted-foreground" />
                   Settings
                 </a>
@@ -92,11 +92,11 @@ export default async function Home({
           actions={
             <>
               <ImportDialog />
-              <Link href="/?src=lake" className={`${HEADER_PILL} border border-border/70 hover:bg-accent/50`}>
-                <EyeIcon className="size-4 text-cyan-500" />
+              <Link href="/?src=lake" className={HEADER_PILL_TINTED}>
+                <EyeIcon className="size-4 text-muted-foreground" />
                 {BAY_VIEWER_NAME}
               </Link>
-              <a href="/settings" className={`${HEADER_PILL} border border-border/70 hover:bg-accent/50`}>
+              <a href="/settings" className={HEADER_PILL_TINTED}>
                 <SettingsIcon className="size-4 text-muted-foreground" />
                 Settings
               </a>
