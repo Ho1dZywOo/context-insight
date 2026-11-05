@@ -31,7 +31,7 @@ const HISTORY_KEY = 'context-import-history'
 let root: Root | null = null
 const deleteBodies: Array<Record<string, unknown>> = []
 // /api/observe/data 返回的行集（按用例可改：双行触发旧条目删除确认）
-let dbRows: Array<{ taskId: string; framework: string | null; version: string | null }> = [
+let dbRows: Array<{ taskId: string; framework: string | null; version: string | null; model?: string | null }> = [
   { taskId: SID, framework: 'claude-code-proxy', version: '2.1.0-claude-proxy' },
   { taskId: SID, framework: 'claude-code', version: '2.1.0' },
 ]
@@ -220,5 +220,26 @@ describe('Recent Imports 同 sid 双记录删除', () => {
     expect(deleteBodies.length).toBe(3)
     expect(deleteBodies[2].confirmAll).toBe(true)
     expect(storedEntries().length).toBe(0)
+  })
+
+  it('⑤ 图标跟模型走（与资产表同源）：framework 是 opencode 但模型是 glm → GLM 徽标', async () => {
+    dbRows = [
+      { taskId: SID, framework: 'opencode', version: '1.0.0', model: 'glm-4.6' },
+      { taskId: 'cc-hist-dual-0002', framework: 'claude-code', version: '2.1.0', model: 'volc-gateway/deepseek-v4-pro' },
+    ]
+    seedEntries([
+      { taskId: SID, importedAt: '2026-09-17T10:00:00Z', turnCount: 2, status: 'success', query: 'glm-q1', filePath: '/proxy/cpx-ses_a.jsonl', sourceType: 'claude-jsonl', framework: 'opencode', version: '1.0.0' },
+      { taskId: 'cc-hist-dual-0002', importedAt: '2026-09-17T10:00:01Z', turnCount: 2, status: 'success', query: 'dsw-q1', filePath: '/b/native.jsonl', sourceType: 'claude-jsonl', framework: 'claude-code', version: '2.1.0' },
+    ])
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => { root!.render(createElement(ImportHistory)) })
+    await flush()
+
+    // 修复前图标跟 framework 走（opencode 行显方环），与资产表模型徽标不一致
+    const icons = [...document.querySelectorAll('[data-asset-icon]')].map(i => i.getAttribute('data-asset-icon'))
+    expect(icons).toEqual(['glm', 'deepseek'])
+    expect([...document.querySelectorAll('[data-asset-icon]')][0].className).toContain('from-emerald-500')
   })
 })

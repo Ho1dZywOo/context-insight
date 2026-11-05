@@ -37,24 +37,28 @@ const prisma = new PrismaClient()
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'home-search-it-'))
 const SID_A = 'cc-home-search-login-bug'
 const SID_B = 'cc-home-search-bench-ops'
+const SID_C = 'cc-home-search-glm-badge'
+const SID_D = 'cc-home-search-dsw-badge'
 
-function fixture(sid: string, prompt: string): string {
+function fixture(sid: string, prompt: string, model = 'test-model'): string {
   const file = path.join(TMP, `${sid}.jsonl`)
   fs.writeFileSync(file, [
     JSON.stringify({ type: 'user', message: { role: 'user', content: prompt }, timestamp: '2026-09-01T00:00:00.000Z' }),
-    JSON.stringify({ type: 'assistant', message: { id: `msg_${sid}`, role: 'assistant', content: [{ type: 'text', text: 'ok' }], model: 'test-model', usage: { input_tokens: 5, output_tokens: 1 } }, timestamp: '2026-09-01T00:00:05.000Z' }),
+    JSON.stringify({ type: 'assistant', message: { id: `msg_${sid}`, role: 'assistant', content: [{ type: 'text', text: 'ok' }], model, usage: { input_tokens: 5, output_tokens: 1 } }, timestamp: '2026-09-01T00:00:05.000Z' }),
   ].join('\n') + '\n')
   return file
 }
 
 beforeAll(async () => {
-  for (const sid of [SID_A, SID_B]) await prisma.session.deleteMany({ where: { taskId: sid } })
+  for (const sid of [SID_A, SID_B, SID_C, SID_D]) await prisma.session.deleteMany({ where: { taskId: sid } })
   await importSession(fixture(SID_A, '帮我修复登录页渲染错位的 Bug'), SID_A, prisma, path.join(TMP, `${SID_A}.jsonl`), 'claude-jsonl')
   await importSession(fixture(SID_B, '生成 BenchHarnessSoftmax 算子并跑测试'), SID_B, prisma, path.join(TMP, `${SID_B}.jsonl`), 'claude-jsonl')
+  await importSession(fixture(SID_C, 'GLM 模型徽标行', 'glm-4.6'), SID_C, prisma, path.join(TMP, `${SID_C}.jsonl`), 'claude-jsonl')
+  await importSession(fixture(SID_D, 'DeepSeek 模型徽标行', 'volc-gateway/deepseek-v4-pro'), SID_D, prisma, path.join(TMP, `${SID_D}.jsonl`), 'claude-jsonl')
 })
 
 afterAll(async () => {
-  for (const sid of [SID_A, SID_B]) {
+  for (const sid of [SID_A, SID_B, SID_C, SID_D]) {
     try { await prisma.session.deleteMany({ where: { taskId: sid } }); } catch { /* ignore */ }
   }
   await prisma.$disconnect()
@@ -83,6 +87,15 @@ describe('主页 Sessions 搜索（服务端 ?q= 过滤）', () => {
   it('无命中：空态提示 + 计数', async () => {
     const html = await renderHome({ q: 'no-such-keyword-xyz' })
     expect(html).toContain('No sessions found')
+  })
+
+  it('会话图标跟模型走：glm/deepseek 各自徽标 + 统一蓝色瓦（provider 前缀剥离）', async () => {
+    const html = await renderHome({ q: '模型徽标行' })
+    expect(html).toContain(SID_C)
+    expect(html).toContain(SID_D)
+    expect(html).toContain('data-asset-icon="glm"')
+    expect(html).toContain('data-asset-icon="deepseek"')
+    expect(html).toContain('from-emerald-500')
   })
 })
 

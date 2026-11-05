@@ -52,10 +52,9 @@ describe('主列表 Type 位：codex 会话类型适配', () => {
     // q 过滤到目标行：列表只剩这一个会话
     const html = await renderHome({ q: MAIN })
     expect(html).toContain(MAIN) // 会话行在
-    expect(html).toContain('Codex') // 元信息行框架标签（修复前此处落 "—"）
-    expect(html).toContain('data-asset-icon="codex"') // 图标位走 codex 渐变 App 图标
-    // 修复前该行类型位是全角/长划 "—"：会话行存在但无 Codex 字样即回归
-    expect(html).toContain('from-slate-500') // codex 图标 slate 渐变
+    expect(html).toContain('Codex') // 元信息行框架标签（修复前此处落 "—"：会话行存在但无 Codex 字样即回归）
+    expect(html).toContain('data-asset-icon="model"') // 图标位跟模型走：fixture 模型 test-model-pro 非已知品牌 → 通用模型徽标
+    expect(html).toContain('from-emerald-500') // 徽标瓦色全站统一翡翠绿（品牌蓝 / run 靛紫三分不撞色）
   })
 
   it('无 q 全量渲染下 codex 与其他会话共存时类型位各自正确', async () => {

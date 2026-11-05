@@ -10,7 +10,7 @@
 import { useState, useEffect } from "react"
 import { BRAND_NAME, BRAND_SOURCE_TYPE, isBrandSourceType } from '@/lib/branding'
 import { isProxyVersion, agentFrameworkOf } from '@/lib/shared/session-format'
-import { AssetIcon, type AssetIconId } from '@/components/collection/AssetIcon'
+import { AssetIcon, modelIconId, type AssetIconId } from '@/components/collection/AssetIcon'
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TrashIcon } from "lucide-react"
@@ -94,23 +94,24 @@ export function ImportHistory() {
   // 且该 taskId 在 DB 有多行——同 sid 双记录）时挂起，用户显式确认后才带
   // confirmAll 重发
   const [pendingMultiDelete, setPendingMultiDelete] = useState<{ entry: ImportHistoryEntry; rowCount: number } | null>(null)
-  // taskId → DB 里的 {framework, version}（导入事实源）。Recent Imports 的
-  // 类型徽标以 DB 为准 —— localStorage 条目可能由旧版前端写入（缺 framework
-  // 字段），挂载时拉取会话列表自愈；DB 查不到的条目（已删除会话）回退条目
-  // 自带字段 → 再回退路径启发式。
-  const [dbMeta, setDbMeta] = useState<Map<string, { framework: string | null; version: string | null }>>(new Map())
+  // taskId → DB 里的 {framework, version, model}（导入事实源）。Recent
+  // Imports 的类型标签/图标以 DB 为准——图标跟模型走（与资产表同一
+  // modelIconId 单点，同会话两处身份一致）——localStorage 条目可能由旧
+  // 版前端写入（缺 framework 字段），挂载时拉取会话列表自愈；DB 查不到
+  // 的条目（已删除会话）回退通用模型徽标。
+  const [dbMeta, setDbMeta] = useState<Map<string, { framework: string | null; version: string | null; model: string | null }>>(new Map())
 
   useEffect(() => {
     setHistory(getImportHistory())
     fetch("/api/observe/data?limit=500")
       .then(r => r.ok ? r.json() : null)
       .then(d => {
-        const items = (d?.items ?? []) as Array<{ taskId: string; framework: string | null; version: string | null }>
+        const items = (d?.items ?? []) as Array<{ taskId: string; framework: string | null; version: string | null; model?: string | null }>
         // 同 sid 双记录两行共享 taskId——主键 taskId|framework 精确到行；
         // 裸 taskId 兜底键（首行）服务 framework 缺失的旧条目（自愈语义不变）
-        const m = new Map<string, { framework: string | null; version: string | null }>()
+        const m = new Map<string, { framework: string | null; version: string | null; model: string | null }>()
         for (const i of items) {
-          const meta = { framework: i.framework, version: i.version }
+          const meta = { framework: i.framework, version: i.version, model: i.model ?? null }
           if (i.framework) m.set(`${i.taskId}|${i.framework}`, meta)
           if (!m.has(i.taskId)) m.set(i.taskId, meta)
         }
@@ -229,26 +230,11 @@ export function ImportHistory() {
             const legacyOpencode = isProxyCapture && /cpx-ses_[^/]*\.jsonl$/.test(entry.filePath ?? "")
             const showOpencode = knownFramework === "opencode" || (!knownFramework && legacyOpencode)
             const showProxy = knownFramework ? isProxy : isProxyCapture
-            // 图标 id：run / 已知框架（agent 归一）/ 品牌容器 / 源类型兜底
+            // 图标 id：run 靛紫；会话跟模型走（modelIconId 单点，与资产表
+            // 同源同款——同会话两处身份一致）
             const iconId: AssetIconId = entry.kind === "run"
               ? "run"
-              : knownFramework === BRAND_SOURCE_TYPE
-                ? "brand"
-                : knownFramework === "opencode" || (!knownFramework && showOpencode)
-                  ? "opencode"
-                  : knownFramework === "claude-code" || (knownFramework == null && entry.sourceType === "claude-jsonl")
-                    ? "claude-code"
-                    : knownFramework === "cannbot"
-                      ? "cannbot"
-                      : knownFramework === "dsh"
-                        ? "dsh"
-                        : knownFramework === "codex" || entry.sourceType === "codex-jsonl"
-                          ? "codex"
-                          : entry.sourceType === "opencode-db"
-                            ? "opencode"
-                            : entry.sourceType === "jsonl"
-                              ? "jsonl"
-                              : "unknown"
+              : modelIconId(db?.model ?? null)
             const typeLabel = entry.kind === "run"
               ? "Run"
               : knownFramework === BRAND_SOURCE_TYPE

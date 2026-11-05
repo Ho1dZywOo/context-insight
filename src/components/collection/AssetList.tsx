@@ -9,8 +9,9 @@
 'use client';
 
 // 统一资产列表（design: docs/design/unified-workbench/design.md §3.1）。
-// 会话 + run 单列表混排（分组列表形态）：行 = 框架渐变 App 图标（右上角
-// 常显小勾选角标：未选空心 / 选中实心对勾）+ 标题/元信息 + 右侧定宽微型
+// 会话 + run 单列表混排（分组列表形态）：行 = 模型徽标 App 图标（会话跟
+// 模型走、瓦色全站统一翡翠绿；run 靛紫；右上角常显小勾选角标：未选空心 /
+// 选中实心对勾）+ 标题/元信息 + 右侧定宽微型
 // 统计列；「类型」分段控件是行过滤器（URL ?kind=，非视图切换，滑动指示条
 // 纯 CSS transform）。多选批量操作收进底部浮动毛玻璃条（选中时滑入）；
 // Compare 仅 2 个会话行，删除按 kind 分发（run 级联 owned 会话，确认弹窗
@@ -23,7 +24,7 @@ import { isProxyVersion, agentFrameworkOf } from '@/lib/shared/session-format'
 import type { AssetItem, AssetKindFilter, RunAssetItem, SessionAssetItem } from '@/lib/collection/types'
 import { displayModel } from '@/lib/collection/model-display'
 import { useRouter } from 'next/navigation';
-import { AssetIcon, type AssetIconId } from '@/components/collection/AssetIcon';
+import { AssetIcon, modelIconId, type AssetIconId } from '@/components/collection/AssetIcon';
 import { Button } from '@/components/ui/button';
 import {
   UploadDialog,
@@ -82,13 +83,10 @@ const FRAMEWORK_LABELS: Record<string, string> = {
   codex: 'Codex',
 };
 
-// 会话行图标 id：agent 归属归一（framework 可能带 -proxy 记录后缀）；品牌
-// 容器源 → brand；未知源 → unknown
+// 会话行图标 id：跟模型走（modelIconId 在 AssetIcon 单点解析），与导入来
+// 源解耦
 function sessionIconId(item: SessionAssetItem): AssetIconId {
-  const agent = agentFrameworkOf(item.framework) ?? '';
-  if (agent === 'opencode' || agent === 'claude-code' || agent === 'cannbot' || agent === 'dsh' || agent === 'codex') return agent;
-  if (isBrandSourceType(item.framework)) return 'brand';
-  return 'unknown';
+  return modelIconId(item.model);
 }
 
 function sessionFrameworkLabel(item: SessionAssetItem): string | null {
