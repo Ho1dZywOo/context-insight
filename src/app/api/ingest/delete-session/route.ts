@@ -11,6 +11,7 @@ import { prisma } from '@/lib/db';
 import { withRouteLog } from '@/lib/api-route';
 import { logInfo, logWarn } from '@/lib/logger';
 import { cascadeDeleteSessionRows } from '@/lib/ingest/session-cascade';
+import { archiveSessionsToRecycle } from '@/lib/recycle';
 import { invalidateCaches } from '@/lib/collection/lake-view/runs';
 
 // Delete a session and ALL its child rows. SQLite foreign-key cascade is not
@@ -26,6 +27,9 @@ export const DELETE = withRouteLog('ingest/delete-session', async (request: Next
 
   if (deleteAll) {
     const count = await prisma.session.count();
+    // 回收站：全清前逐行归档快照（best-effort，与级联删除同一可逆语义）
+    const all = await prisma.session.findMany({ select: { id: true } });
+    await archiveSessionsToRecycle(prisma, all.map(s => s.id));
     // Explicit cascade: delete child rows in dependency order inside a
     // transaction. SQLite foreign-key cascade is not reliably enforced
     // (PRAGMA state varies), so without this child rows orphan and accumulate.

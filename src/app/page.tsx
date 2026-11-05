@@ -16,10 +16,13 @@ import { MetricCards } from '@/components/MetricCards';
 import { AssetList } from '@/components/collection/AssetList';
 import { ImportDialog } from '@/components/collection/ImportDialog';
 import { LakeSourceView } from '@/components/collection/LakeSourceView';
-import { ImportHistory } from '@/components/ImportHistory';
+import { RecycleBin } from '@/components/RecycleBin';
 import { AppHeader } from '@/components/layout/AppHeader';
+import { AppShell } from '@/components/layout/AppShell';
+import { CommandPalette } from '@/components/layout/CommandPalette';
 import { HEADER_PILL_TINTED } from '@/components/layout/header-actions';
-import { BAY_VIEWER_NAME } from '@/lib/branding';
+import { BAY_VIEWER_NAME, BRAND_NAME } from '@/lib/branding';
+import { VERSION_DISPLAY } from '@/lib/version';
 import { prisma } from '@/lib/db';
 import { queryAssetList, assetSummary } from '@/lib/collection/list-service';
 import { pageSessionErrorTotal } from '@/lib/collection/session-asset';
@@ -38,28 +41,46 @@ export default async function Home({
 
   if (isLakeSource) {
     return (
-      <div className="flex min-h-screen flex-col bg-background">
-        <main className="flex w-full max-w-7xl flex-col gap-8 px-6 py-10 mx-auto">
+      <AppShell
+        active="lake"
+        toolbar={
           <AppHeader
+            title="数据仓"
             actions={
               <>
+                <CommandPalette />
                 <ImportDialog />
                 <Link href="/" className={HEADER_PILL_TINTED}>
                   <ArrowLeftIcon className="size-4 text-muted-foreground" />
                   本地洞察库
                 </Link>
-                <a href="/settings" className={HEADER_PILL_TINTED}>
+                <a href="/settings" className={`${HEADER_PILL_TINTED} lg:hidden`}>
                   <SettingsIcon className="size-4 text-muted-foreground" />
                   Settings
                 </a>
               </>
             }
           />
+        }
+        statusBar={
+          <footer className="flex h-7 shrink-0 items-center justify-between gap-4 border-t border-border/40 bg-card/30 px-4 text-[11px] text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="flex items-center gap-1.5 whitespace-nowrap">
+                <span className="size-1.5 rounded-full bg-emerald-500" />
+                数据仓 · Lake
+              </span>
+              <span className="hidden text-muted-foreground/60 sm:inline">{BAY_VIEWER_NAME}</span>
+            </div>
+            <span className="whitespace-nowrap text-muted-foreground/60">{VERSION_DISPLAY}</span>
+          </footer>
+        }
+      >
+        <div className="mx-auto w-full max-w-7xl px-6 py-8">
           <Suspense fallback={<div className="flex h-[60vh] items-center justify-center text-sm text-muted-foreground">加载中…</div>}>
             <LakeSourceView />
           </Suspense>
-        </main>
-      </div>
+        </div>
+      </AppShell>
     );
   }
 
@@ -86,23 +107,46 @@ export default async function Home({
   const totalErrors = await pageSessionErrorTotal(prisma, [...pageSessionRowIds, ...pageRunMemberRowIds]);
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <main className="flex w-full max-w-7xl flex-col gap-8 px-6 py-10 mx-auto">
+    <AppShell
+      active="assets"
+      assetBadge={summary.sessionCount + summary.runCount}
+      toolbar={
         <AppHeader
+          title="资产库"
           actions={
             <>
+              <CommandPalette />
               <ImportDialog />
-              <Link href="/?src=lake" className={HEADER_PILL_TINTED}>
+              <Link href="/?src=lake" className={`${HEADER_PILL_TINTED} lg:hidden`}>
                 <EyeIcon className="size-4 text-muted-foreground" />
                 {BAY_VIEWER_NAME}
               </Link>
-              <a href="/settings" className={HEADER_PILL_TINTED}>
+              <a href="/settings" className={`${HEADER_PILL_TINTED} lg:hidden`}>
                 <SettingsIcon className="size-4 text-muted-foreground" />
                 Settings
               </a>
             </>
           }
         />
+      }
+      panel={<RecycleBin />}
+      statusBar={
+        <footer className="flex h-7 shrink-0 items-center justify-between gap-4 border-t border-border/40 bg-card/30 px-4 text-[11px] text-muted-foreground">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex items-center gap-1.5 whitespace-nowrap">
+              <span className="size-1.5 rounded-full bg-emerald-500" />
+              资产库 · Local
+            </span>
+            <span className="hidden text-muted-foreground/60 sm:inline">{BRAND_NAME}</span>
+          </div>
+          <div className="flex items-center gap-3 whitespace-nowrap tabular-nums">
+            <span>{summary.sessionCount + summary.runCount} assets · {summary.runCount} runs</span>
+            <span className="hidden text-muted-foreground/60 sm:inline">/ 搜索</span>
+          </div>
+        </footer>
+      }
+    >
+      <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-8">
         <MetricCards
           totalSessions={summary.sessionCount}
           runCount={summary.runCount}
@@ -121,8 +165,7 @@ export default async function Home({
           totalCount={result.totalCount ?? summary.sessionCount + summary.runCount}
           runWarnings={result.runWarnings}
         />
-        <ImportHistory />
       </main>
-    </div>
+    </AppShell>
   );
 }

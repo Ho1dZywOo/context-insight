@@ -198,6 +198,20 @@ export function AssetList({
   const reqSeq = useRef(0)
   // 防抖闭包需要「当前 kind」——state 在 effect 闭包里会过期，走 ref
   const kindRef = useRef<AssetKindFilter>(initialKind)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  // 「/」直达搜索框（工作台快捷键习惯）：非输入态按下即聚焦；纯原生监听，卸载即除
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || (t instanceof HTMLElement && t.isContentEditable)) return
+      e.preventDefault()
+      searchRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   async function fetchAssets(nextPage: number, nextQ: string, nextKind: AssetKindFilter) {
     const seq = ++reqSeq.current
@@ -580,12 +594,16 @@ export function AssetList({
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
             <input
               data-asset-search
+              ref={searchRef}
               placeholder="Search keyword or session ID"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') submitSearch() }}
               className="h-8 w-64 rounded-full border border-foreground/[0.09] bg-muted/40 pl-8.5 pr-8 text-xs text-foreground outline-none transition-colors duration-200 placeholder:text-muted-foreground/60 focus:border-primary/40 focus:bg-background/60 focus:ring-2 focus:ring-primary/15"
             />
+            {!loading && !q && (
+              <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md border border-border/60 bg-muted/60 px-1.5 py-px text-[10px] font-medium text-muted-foreground/70">/</kbd>
+            )}
             {loading && <LoaderIcon className="absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />}
             {!loading && q && (
               <button
@@ -690,7 +708,7 @@ export function AssetList({
           if (uploadRequest) setUploadStatus(prev => ({ ...prev, [uploadRequest.key]: ok ? 'done' : 'error' }))
         }}
       />
-      <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 overflow-hidden rounded-2xl border border-border/70 bg-card/70 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] backdrop-blur-2xl backdrop-saturate-150">
+      <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 overflow-hidden rounded-2xl border border-border/50 bg-card/50 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_16px_40px_-24px_rgba(0,0,0,0.22)]">
         <div className="divide-y divide-border/50">
           {items.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-14 text-center">
@@ -704,12 +722,13 @@ export function AssetList({
         </div>
       </div>
 
-      {/* 选择模式浮动操作条（底部居中毛玻璃胶囊，选中时滑入）：批量动作
-          从工具栏常驻改到此处——未选中时界面零按钮噪声 */}
+      {/* 选择模式操作条（sticky 悬于列表可见区底部，选中时滑入）：批量动作
+          从工具栏常驻改到此处——未选中时界面零按钮噪声；sticky 而非 fixed，
+          工作台 chrome（底部面板/状态栏）下不越界 */}
       {selectedKeys.size > 0 && (
         <div
           data-selection-bar
-          className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 animate-in fade-in slide-in-from-bottom-4 duration-200 items-center gap-1.5 rounded-full border border-border/70 bg-card/80 py-1.5 pl-4 pr-2 shadow-[0_2px_8px_rgba(0,0,0,0.08),0_24px_48px_-16px_rgba(0,0,0,0.32)] backdrop-blur-2xl backdrop-saturate-150"
+          className="sticky bottom-4 z-30 mx-auto flex w-fit animate-in fade-in slide-in-from-bottom-4 duration-200 items-center gap-1.5 rounded-full border border-border/70 bg-card/80 py-1.5 pl-4 pr-2 shadow-[0_2px_8px_rgba(0,0,0,0.08),0_24px_48px_-16px_rgba(0,0,0,0.32)] backdrop-blur-2xl backdrop-saturate-150"
         >
           <span className="text-xs text-muted-foreground">
             已选 {selectedKeys.size} 项{compareReady ? ' — 可对比' : ''}

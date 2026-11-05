@@ -9,6 +9,7 @@
 import { beforeAll, afterAll } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isEnvFileLeakedUrl } from "./db-env-guard";
 // BigInt JSON 垫片：roll-up BigInt 列配套，测试进程内全局生效（见 src/lib/bigint-json.ts）
@@ -28,6 +29,13 @@ if (isEnvFileLeakedUrl(process.env.DATABASE_URL, path.resolve(__dirname, "..")))
   delete process.env.DATABASE_URL;
 }
 process.env.DATABASE_URL ||= "file:./test.db";
+
+// 回收站/数据主目录测试隔离默认值：级联删除现在会归档快照（见
+// src/lib/recycle.ts）——不设此默认，任何删除类 IT 都会把快照写进真实
+// ~/.context-insight。每进程独立 tmp（setup 随 worker 进程各跑一次），
+// 并行文件间零共享态；显式 CONTEXT_INSIGHT_HOME（run-store 系 IT 已自带
+// tmpHome）优先于本默认
+process.env.CONTEXT_INSIGHT_HOME ||= fs.mkdtempSync(path.join(os.tmpdir(), 'insight-test-home-'));
 
 // 兜底守卫：绕过 pretest 的直接 vitest（`npx vitest run <file>`）在 test.db
 // 尚不存在（fresh clone 首跑）时，SQLite 会建出无表空库、用例期才炸出难懂

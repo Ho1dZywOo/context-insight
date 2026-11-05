@@ -29,6 +29,10 @@ beforeAll(() => {
   savedHome = process.env.HOME;
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cannbot-config-test-'));
   process.env.HOME = tmpHome;
+  // 本文件专测 HOME 基路径发现契约——剥掉全局 setup 注入的 CONTEXT_INSIGHT_HOME
+  //（优先级高于 HOME，不剥则登记发现读到共享目录而非 tmpHome），afterEach
+  // 的既有 delete 在此对称
+  delete process.env.CONTEXT_INSIGHT_HOME;
   CONFIG_DIR = path.join(tmpHome, BRAND_CONFIG_DIR_SUFFIX);
   CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 });

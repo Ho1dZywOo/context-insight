@@ -37,12 +37,13 @@ export function formatLatency(ms: number): string {
   return `${ms}ms`;
 }
 
-// 总览条（widget 带）：5 张碎卡合一块毛玻璃横幅——去盒噪一行读完，
-// 大号 tabular 数字 + 小字距标签；Errors 非零时整格红调。取值元素保持
-// p.text-2xl ×5（顺序 Assets/Tokens/Cost/Duration/Errors——IT 契约）
-function Metric({ label, value, error, children }: { label: string; value: string; error?: boolean; children?: React.ReactNode }) {
+// 总览条（高级玻璃横幅）：5 格 hairline 分隔一行读完，大号 tabular 数字 +
+// 小字距标签；玻璃底 + 双层柔影（环境光下透出深度）；逐格错峰入场（纯 CSS
+// 延迟链）。取值元素保持 p.text-2xl ×5（顺序 Assets/Tokens/Cost/Duration/
+// Errors——IT 契约）
+function Metric({ label, value, error, delay, children }: { label: string; value: string; error?: boolean; delay?: string; children?: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1 px-5 py-4">
+    <div className={cn('flex flex-col gap-1 px-5 py-3.5 animate-in fade-in slide-in-from-bottom-2 duration-300', delay)}>
       <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
       <div className="flex flex-wrap items-baseline gap-x-2">
         <p className={cn('text-2xl font-bold tabular-nums tracking-tight', error ? 'text-red-600 dark:text-red-400' : 'text-foreground')}>{value}</p>
@@ -57,12 +58,12 @@ export function MetricCards({ totalSessions, runCount, totalTokens, totalCost, t
   return (
     <section
       data-metric-strip
-      className="animate-in fade-in slide-in-from-bottom-2 duration-300 rounded-2xl border border-border/70 bg-card/60 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] backdrop-blur-2xl backdrop-saturate-150"
+      className="rounded-2xl border border-border/50 bg-card/60 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_20px_48px_-24px_rgba(0,0,0,0.25)] backdrop-blur-2xl backdrop-saturate-150"
     >
-      <div className={cn('grid grid-cols-2 sm:grid-cols-3', totalErrors !== undefined ? 'lg:grid-cols-5' : 'lg:grid-cols-4', 'lg:divide-x lg:divide-border/50')}>
+      <div className={cn('grid grid-cols-2 sm:grid-cols-3', totalErrors !== undefined ? 'lg:grid-cols-5' : 'lg:grid-cols-4', 'lg:divide-x lg:divide-border/40')}>
         {/* 首卡 = 资产总量（独立会话 + run），拆分计数与大数字同排基线对齐
             （压板块高度）；run 的成员会话是内部规模，不在首页计数口径 */}
-        <Metric label="Assets" value={String(totalSessions + runs)}>
+        <Metric label="Assets" value={String(totalSessions + runs)} delay="delay-0">
           <span className="text-xs text-muted-foreground">
             {totalSessions} <Link href="/?kind=session" className="hover:underline">{totalSessions === 1 ? 'Session' : 'Sessions'}</Link>
             {runs > 0 && (
@@ -70,11 +71,11 @@ export function MetricCards({ totalSessions, runCount, totalTokens, totalCost, t
             )}
           </span>
         </Metric>
-        <Metric label="Total Tokens" value={formatTokens(totalTokens)} />
-        <Metric label="Total Cost" value={formatCost(totalCost)} />
-        <Metric label="Total Duration" value={formatLatency(totalDurationMs)} />
+        <Metric label="Total Tokens" value={formatTokens(totalTokens)} delay="delay-75" />
+        <Metric label="Total Cost" value={formatCost(totalCost)} delay="delay-100" />
+        <Metric label="Total Duration" value={formatLatency(totalDurationMs)} delay="delay-150" />
         {totalErrors !== undefined && (
-          <Metric label="Errors" value={String(totalErrors)} error={totalErrors > 0} />
+          <Metric label="Errors" value={String(totalErrors)} error={totalErrors > 0} delay="delay-200" />
         )}
       </div>
     </section>
