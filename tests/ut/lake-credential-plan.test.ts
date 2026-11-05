@@ -73,7 +73,8 @@ describe('handleSave 接线（源级锁）', () => {
     // PUT 透传：保存 body 必须带 lfs（handleSave 函数体内）
     const handleSaveBody = src.slice(src.indexOf('async function handleSave'), src.indexOf('async function handleClear'));
     expect(handleSaveBody).toContain('lfs');
-    // 开关控件：状态翻转要触发 dirty（保存按钮可用性）
-    expect(src).toContain('onCheckedChange={(v) => { setLfs(v === true); dirty() }}');
+    // 开关控件：状态翻转要触发 dirty（保存按钮可用性）——Switch 语义与旧
+    // Checkbox 一致（onChange 收到 boolean）
+    expect(src).toContain('onChange={(v) => { setLfs(v); dirty() }}');
   });
 });

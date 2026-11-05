@@ -8,7 +8,6 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import { useEffect, useState } from "react"
-import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -47,7 +46,7 @@ interface Props {
   compact?: boolean
 }
 
-export function AIProviderConfigPanel({ onConfigChange, compact }: Props) {
+export function AIProviderConfigPanel({ onConfigChange }: Props) {
   // 渲染期不读 localStorage：SSR 无 localStorage，hydration 首渲染必须与
   // 服务端输出一致 —— 已存配置挂载后由 effect 填充
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL)
@@ -104,85 +103,79 @@ export function AIProviderConfigPanel({ onConfigChange, compact }: Props) {
   }
 
   return (
-    <Card>
-      <CardContent className={compact ? "py-3 space-y-3" : "p-4 space-y-3"}>
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <span>LLM API 配置（OpenAI 兼容）</span>
-          {savedFlag && <span className="text-xs text-green-600">✓ 已保存</span>}
+    <div className="space-y-4">
+      {isAnthropicPath && (
+        <div className="text-xs text-red-600 dark:text-red-400 bg-red-500/[0.07] px-3 py-2 rounded-lg leading-relaxed">
+          ❌ /apps/anthropic 是 Anthropic Messages 格式，不支持。请改用 /compatible-mode/v1 的 OpenAI 兼容地址
         </div>
+      )}
 
-        {isAnthropicPath && (
-          <div className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 px-2 py-1.5 rounded">
-            ❌ /apps/anthropic 是 Anthropic Messages 格式，不支持。请改用 /compatible-mode/v1 的 OpenAI 兼容地址
-          </div>
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground/80">Base URL</span>
+          <Input value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setSavedFlag(false) }} className="h-9 text-xs" placeholder="https://..." />
+        </div>
+        <div className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground/80">API Key</span>
+          <Input type="password" value={apiKey} onChange={(e) => { setApiKey(e.target.value); setSavedFlag(false) }} className="h-9 text-xs" placeholder="sk-..." />
+        </div>
+        <div className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground/80">Model</span>
+          <Input value={model} onChange={(e) => { setModel(e.target.value); setSavedFlag(false) }} className="h-9 text-xs" placeholder="qwen3.7-max" />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" className="h-9 px-4 text-xs" onClick={handleSave} disabled={!apiKey}>
+          保存配置
+        </Button>
+        <Button size="sm" variant="outline" className="h-9 text-xs" onClick={handleTest} disabled={!apiKey || testing}>
+          {testing ? "测试中…" : "测试连接"}
+        </Button>
+        {savedFlag && (
+          <Button size="sm" variant="ghost" className="h-9 text-xs" onClick={handleClear}>
+            清除
+          </Button>
         )}
+        {savedFlag && <span className="text-xs text-emerald-600 dark:text-emerald-400">✓ 已保存</span>}
+        {testResult && (
+          <span className={cn("text-xs", testResult.success ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+            {testResult.message}
+          </span>
+        )}
+      </div>
 
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground w-16 shrink-0">Base URL</span>
-            <Input value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setSavedFlag(false) }} className="h-7 text-xs" placeholder="https://..." />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground w-16 shrink-0">API Key</span>
-            <Input type="password" value={apiKey} onChange={(e) => { setApiKey(e.target.value); setSavedFlag(false) }} className="h-7 text-xs" placeholder="sk-..." />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground w-16 shrink-0">Model</span>
-            <Input value={model} onChange={(e) => { setModel(e.target.value); setSavedFlag(false) }} className="h-7 text-xs" placeholder="qwen3.7-max" />
-          </div>
+      <details className="text-xs">
+        <summary className="cursor-pointer select-none text-muted-foreground transition-colors hover:text-foreground">
+          常见提供商 Base URL 填法（点击行填入）
+        </summary>
+        <div className="mt-1.5 space-y-0.5">
+          {PROVIDER_URL_PRESETS.map(p => (
+            <button
+              key={p.url}
+              type="button"
+              data-preset={p.url}
+              onClick={() => {
+                setBaseUrl(p.url)
+                if (p.model) setModel(p.model)
+                setSavedFlag(false)
+                setTestResult(null)
+              }}
+              className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-foreground/[0.04]"
+            >
+              <span className="w-20 shrink-0 text-muted-foreground">{p.name}</span>
+              <code className="break-all">{p.url}</code>
+              {p.model && <span className="shrink-0 text-muted-foreground">· {p.model}</span>}
+              {p.note && <span className="basis-full pl-[5.5rem] text-[11px] leading-tight text-muted-foreground/80">{p.note}</span>}
+            </button>
+          ))}
         </div>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
+          规则：填到版本段（/v1、/v3、/api/paas/v4…）即可，自动拼 /chat/completions；首尾空格自动忽略。
+        </p>
+      </details>
 
-        <div className="flex items-center gap-2">
-          <Button size="sm" className="text-xs" onClick={handleSave} disabled={!apiKey}>
-            保存配置
-          </Button>
-          <Button size="sm" variant="outline" className="text-xs" onClick={handleTest} disabled={!apiKey || testing}>
-            {testing ? "测试中…" : "测试连接"}
-          </Button>
-          {savedFlag && (
-            <Button size="sm" variant="ghost" className="text-xs" onClick={handleClear}>
-              清除
-            </Button>
-          )}
-          {testResult && (
-            <span className={cn("text-xs", testResult.success ? "text-green-600" : "text-red-600")}>
-              {testResult.message}
-            </span>
-          )}
-        </div>
-
-        <details className="text-xs">
-          <summary className="cursor-pointer select-none text-muted-foreground hover:text-foreground">
-            常见提供商 Base URL 填法（点击行填入）
-          </summary>
-          <div className="mt-1.5 space-y-0.5">
-            {PROVIDER_URL_PRESETS.map(p => (
-              <button
-                key={p.url}
-                type="button"
-                data-preset={p.url}
-                onClick={() => {
-                  setBaseUrl(p.url)
-                  if (p.model) setModel(p.model)
-                  setSavedFlag(false)
-                  setTestResult(null)
-                }}
-                className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-1.5 py-1 text-left hover:bg-muted"
-              >
-                <span className="w-20 shrink-0 text-muted-foreground">{p.name}</span>
-                <code className="break-all">{p.url}</code>
-                {p.model && <span className="shrink-0 text-muted-foreground">· {p.model}</span>}
-                {p.note && <span className="basis-full pl-[5.5rem] text-[11px] leading-tight text-muted-foreground/80">{p.note}</span>}
-              </button>
-            ))}
-          </div>
-          <p className="mt-1.5 text-[11px] text-muted-foreground/80">
-            规则：填到版本段（/v1、/v3、/api/paas/v4…）即可，自动拼 /chat/completions；首尾空格自动忽略。
-          </p>
-        </details>
-
-        <p className="text-xs text-muted-foreground">配置保存在浏览器本地。Audit 一键审计报告功能需使用此配置。</p>
-      </CardContent>
-    </Card>
+      <p className="text-[11px] leading-relaxed text-muted-foreground/70">配置保存在浏览器本地。Audit 一键审计报告功能需使用此配置。</p>
+    </div>
   )
 }

@@ -102,7 +102,7 @@ export function LakeSessionTable({ sessions, paradigm, scope, selected, onToggle
           {q ? `${filtered.length} of ${scoped.length} shown` : `${scoped.length} sessions`}
         </span>
       </div>
-      <div className="max-h-[320px] overflow-y-auto border rounded-lg">
+      <div className="max-h-[320px] overflow-y-auto rounded-xl border border-border/40">
         <Table className="table-fixed">
           <TableHeader>
             <TableRow>

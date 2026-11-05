@@ -53,7 +53,7 @@ export function AppShell({
   statusBar,
   children,
 }: {
-  active: 'assets' | 'lake'
+  active: 'assets' | 'lake' | 'settings'
   /** 资产库导航角标（独立会话 + run 总量） */
   assetBadge?: number
   /** 工具栏（AppHeader：标题 + 动作位，固定 chrome 不滚动） */
@@ -95,7 +95,12 @@ export function AppShell({
             <a
               href="/settings"
               title="Settings"
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-200 hover:bg-foreground/[0.06] hover:text-foreground"
+              className={cn(
+                'flex size-8 items-center justify-center rounded-lg transition-colors duration-200',
+                active === 'settings'
+                  ? 'bg-emerald-500/[0.09] text-emerald-700 dark:text-emerald-300'
+                  : 'text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground',
+              )}
             >
               <SettingsIcon className="size-4" />
             </a>

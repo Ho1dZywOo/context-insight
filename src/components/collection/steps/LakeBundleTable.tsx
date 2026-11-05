@@ -94,7 +94,7 @@ export function LakeBundleTable({ bundles, dirLabel, scope, selected, onToggle, 
           {q ? `${filtered.length} of ${bundles.length} shown` : `${bundles.length} bundles`}
         </span>
       </div>
-      <div className="max-h-[320px] overflow-y-auto overflow-x-hidden border rounded-lg">
+      <div className="max-h-[320px] overflow-y-auto overflow-x-hidden rounded-xl border border-border/40">
         <Table className="table-fixed">
           <TableHeader>
             <TableRow>

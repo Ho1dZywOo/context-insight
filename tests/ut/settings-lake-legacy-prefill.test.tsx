@@ -14,7 +14,7 @@
 // 目录全部重填）。同时锁定：新键优先于旧键；clearLakeConfig（保存/恢复
 // 默认值路径）新旧两键同清，旧键不再永久残留。
 
-import { describe, it, expect, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
@@ -22,6 +22,12 @@ import SettingsPage from '@/app/settings/page'
 import { LAKE_CONFIG_STORAGE_KEY } from '@/lib/lake-config'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+// 设置页已嵌入 AppShell（含侧栏 RecycleBin 的 useRouter）——happy-dom 下
+// 需 mock next/navigation
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: () => {}, replace: () => {}, back: () => {}, refresh: () => {} }),
+}))
 
 const LEGACY_KEY = 'cannbot-insight-cannbay-config'
 const LEGACY_CFG = {

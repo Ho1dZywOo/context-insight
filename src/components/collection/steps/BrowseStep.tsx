@@ -71,9 +71,9 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
 
   return (
     <div className="space-y-3 overflow-hidden">
-      <div className="flex items-center gap-2 text-sm font-medium bg-muted/50 px-3 py-2 rounded-md">
+      <div className="flex items-center gap-2 rounded-xl border border-border/50 bg-foreground/[0.02] px-3 py-2.5 text-xs font-medium">
         <FolderIcon className="size-4 text-blue-500 shrink-0" />
-        <span className="flex-1 min-w-0 truncate">{currentDir}</span>
+        <span className="flex-1 min-w-0 truncate font-mono text-muted-foreground">{currentDir}</span>
       </div>
       {parentDir && (
         <Button variant="ghost" size="sm" onClick={onGoUp} className="gap-1.5">
@@ -101,7 +101,7 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
               </span>
             )}
           </div>
-          <div className="max-h-[320px] overflow-y-auto overflow-x-hidden border rounded-lg">
+          <div className="max-h-[320px] overflow-y-auto overflow-x-hidden rounded-xl border border-border/40">
             <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
@@ -135,7 +135,7 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
                 {sortDirEntries(filtered, sortAsc).map(entry => (
                   <TableRow
                     key={entry.fullPath}
-                    className="cursor-pointer hover:bg-primary/5"
+                    className="cursor-pointer hover:bg-foreground/[0.04]"
                     onClick={() => onEntryClick(entry)}
                   >
                     <TableCell>

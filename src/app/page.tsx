@@ -18,7 +18,6 @@ import { ImportDialog } from '@/components/collection/ImportDialog';
 import { LakeSourceView } from '@/components/collection/LakeSourceView';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { AppShell } from '@/components/layout/AppShell';
-import { CommandPalette } from '@/components/layout/CommandPalette';
 import { HEADER_PILL_TINTED } from '@/components/layout/header-actions';
 import { BAY_VIEWER_NAME, BRAND_NAME } from '@/lib/branding';
 import { VERSION_DISPLAY } from '@/lib/version';
@@ -47,7 +46,6 @@ export default async function Home({
             title="数据仓"
             actions={
               <>
-                <CommandPalette />
                 <ImportDialog />
                 <Link href="/" className={HEADER_PILL_TINTED}>
                   <ArrowLeftIcon className="size-4 text-muted-foreground" />
@@ -114,7 +112,6 @@ export default async function Home({
           title="资产库"
           actions={
             <>
-              <CommandPalette />
               <ImportDialog />
               <Link href="/?src=lake" className={`${HEADER_PILL_TINTED} lg:hidden`}>
                 <EyeIcon className="size-4 text-muted-foreground" />

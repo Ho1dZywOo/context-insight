@@ -12,7 +12,6 @@
 // 目录即注册表（统一布局）：每个目录同时呈现其会话与 bundle 包计数，选中
 // 目录后两类资产同格加载——不按资产类型分区。
 
-import { Button } from "@/components/ui/button";
 import { FolderIcon } from "lucide-react";
 
 export interface LakeDirCard {
@@ -40,27 +39,32 @@ interface LakeDirsStepProps {
 export function LakeDirsStep({ scope, cards, bundleError, error, onPick }: LakeDirsStepProps) {
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">当前远端：{scope}</p>
+      <p className="text-[11px] text-muted-foreground/70">当前远端：{scope}</p>
       {cards.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+        <div className="rounded-xl border border-dashed border-border/50 p-8 text-center text-sm text-muted-foreground">
           数据仓暂无内容
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-2 max-h-[320px] overflow-y-auto">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[320px] overflow-y-auto">
           {cards.map(c => (
-            <Button key={c.name} variant="outline" size="sm" className="justify-between h-auto py-2" onClick={() => onPick(c)}>
-              <span className="flex items-center gap-1 min-w-0">
+            <button
+              key={c.name}
+              type="button"
+              onClick={() => onPick(c)}
+              className="flex flex-col items-start gap-1.5 rounded-xl border border-border/50 px-3 py-2.5 text-left transition-all duration-200 hover:border-border hover:bg-foreground/[0.03]"
+            >
+              <span className="flex w-full items-center gap-1.5 min-w-0">
                 <FolderIcon className="size-3.5 text-blue-500 shrink-0" />
-                <span className="truncate" title={c.label}>{c.label}</span>
+                <span className="truncate text-xs font-medium" title={c.label}>{c.label}</span>
               </span>
-              <span className="text-xs text-muted-foreground shrink-0 ml-1">
+              <span className="text-[10px] tabular-nums text-muted-foreground">
                 {c.hasBaseline ? "基准✓ " : ""}
                 {c.sessionCount > 0 && <span>{c.sessionCount} 会话</span>}
                 {c.sessionCount > 0 && c.bundleCount > 0 && <span className="text-muted-foreground/60"> · </span>}
                 {c.bundleCount > 0 && <span>{c.bundleCount} 包</span>}
                 {c.sessionCount === 0 && c.bundleCount === 0 && <span>空</span>}
               </span>
-            </Button>
+            </button>
           ))}
         </div>
       )}

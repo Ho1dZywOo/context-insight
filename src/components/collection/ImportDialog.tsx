@@ -57,6 +57,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DownloadIcon, FolderIcon, GlobeIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 type Step = "input" | "browse" | "select" | "lake" | "importing";
@@ -907,7 +908,7 @@ export function ImportDialog() {
           Import
         </button>
       } />
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl rounded-2xl">
         <DialogHeader>
           <DialogTitle>导入</DialogTitle>
           <DialogDescription>
@@ -928,51 +929,71 @@ export function ImportDialog() {
         </DialogHeader>
 
         {step === "input" && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium mb-1.5 block">导入来源</label>
+              <label className="text-xs font-medium text-foreground/80 mb-2 block">导入来源</label>
               <div className="grid grid-cols-2 gap-2">
-                <Button
-                  variant={sourceMode === "local" ? "default" : "outline"}
-                  size="sm"
+                <button
+                  type="button"
                   onClick={() => { setSourceMode("local"); setError(null); }}
+                  className={cn(
+                    "flex h-11 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-all duration-200",
+                    sourceMode === "local"
+                      ? "border-emerald-500/40 bg-emerald-500/[0.07] text-emerald-700 dark:text-emerald-300"
+                      : "border-border/50 text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
                 >
-                  <FolderIcon className="size-3.5 mr-1" />
+                  <FolderIcon className="size-4" />
                   本地
-                </Button>
-                <Button
-                  variant={sourceMode === "lake" ? "default" : "outline"}
-                  size="sm"
+                </button>
+                <button
+                  type="button"
                   onClick={() => { setSourceMode("lake"); setError(null); void handleOpenLake(); }}
+                  className={cn(
+                    "flex h-11 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-all duration-200",
+                    sourceMode === "lake"
+                      ? "border-emerald-500/40 bg-emerald-500/[0.07] text-emerald-700 dark:text-emerald-300"
+                      : "border-border/50 text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
                 >
-                  <GlobeIcon className="size-3.5 mr-1" />
+                  <GlobeIcon className="size-4" />
                   {BAY_NAME}
-                </Button>
+                </button>
               </div>
             </div>
             {sourceMode === "local" && (
               <>
                 <div>
-                  <label className="text-sm font-medium mb-1.5 block">文件格式（Bundle 目录自动识别）</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      variant={localFormat === "jsonl" ? "default" : "outline"}
-                      size="sm"
+                  <label className="text-xs font-medium text-foreground/80 mb-2 block">文件格式（Bundle 目录自动识别）</label>
+                  <div className="inline-flex items-center gap-0.5 rounded-lg bg-foreground/[0.05] p-0.5">
+                    <button
+                      type="button"
                       onClick={() => { setLocalFormat("jsonl"); setError(null); }}
+                      className={cn(
+                        "h-7 rounded-md px-3 text-xs transition-all duration-200",
+                        localFormat === "jsonl"
+                          ? "bg-background font-medium text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
                     >
                       JSONL (auto)
-                    </Button>
-                    <Button
-                      variant={localFormat === "opencode-db" || localFormat === BRAND_SOURCE_TYPE ? "default" : "outline"}
-                      size="sm"
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => { setLocalFormat("opencode-db"); setError(null); }}
+                      className={cn(
+                        "h-7 rounded-md px-3 text-xs transition-all duration-200",
+                        localFormat === "opencode-db" || localFormat === BRAND_SOURCE_TYPE
+                          ? "bg-background font-medium text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
                     >
                       SQLite (auto)
-                    </Button>
+                    </button>
                   </div>
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1.5 block">File Path</label>
+                  <label className="text-xs font-medium text-foreground/80 mb-2 block">File Path</label>
                   <div className="flex gap-2">
                     <Input
                       placeholder={IMPORT_SOURCES_UI[localFormat]?.placeholder ?? "/path/to/file"}
@@ -992,25 +1013,25 @@ export function ImportDialog() {
                     </Button>
                   </div>
                   {quickDirs.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                      <span className="text-xs text-muted-foreground">快捷路径:</span>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+                      <span className="text-[11px] text-muted-foreground/70">快捷路径:</span>
                       {quickDirs.map(q => (
                         <Button
                           key={q.path}
                           variant="outline"
                           size="sm"
-                          className="h-7 px-2 text-xs gap-1"
+                          className="h-7 rounded-full px-2.5 text-xs gap-1.5"
                           onClick={() => handleQuickJump(q.path)}
                           title={q.path}
                         >
-                          <FolderIcon className="size-3 text-blue-500" />
+                          <FolderIcon className="size-3 text-emerald-600 dark:text-emerald-400" />
                           {q.label}
                         </Button>
                       ))}
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-7 px-2 text-xs gap-1"
+                        className="h-7 rounded-full px-2.5 text-xs gap-1.5"
                         onClick={() => handleQuickJump("~")}
                         title="~"
                       >
@@ -1019,7 +1040,7 @@ export function ImportDialog() {
                       </Button>
                     </div>
                   )}
-                  <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                  <div className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground/70 space-y-1">
                     {localFormat === "jsonl" && (
                       <>
                         <p>Claude 原生: ~/.claude/projects/&lt;hash&gt;/&lt;id&gt;.jsonl</p>
@@ -1034,7 +1055,7 @@ export function ImportDialog() {
                       </>
                     )}
                     <p>Run 的 Bundle 目录：含 workflow.json 与 sessions/（manifest.json 同样识别）——输入路径自动识别</p>
-                    <p className="text-blue-500 dark:text-blue-400">Click Browse to explore directories — 绿色条目点击即导入</p>
+                    <p className="text-emerald-600 dark:text-emerald-400">Click Browse to explore directories — 绿色条目点击即导入</p>
                   </div>
                 </div>
               </>
@@ -1100,7 +1121,7 @@ export function ImportDialog() {
                 {sessionQuery ? `${filteredSessions.length} of ${sessions.length} shown` : `Select all (${sessions.length} sessions)`}
               </span>
             </div>
-            <div className="max-h-[320px] overflow-y-auto border rounded-lg">
+            <div className="max-h-[320px] overflow-y-auto rounded-xl border border-border/40">
               <Table>
                 <TableHeader>
                   <TableRow>
