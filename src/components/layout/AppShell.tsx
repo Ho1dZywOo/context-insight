@@ -17,27 +17,25 @@ import { LayersIcon, DatabaseIcon, SettingsIcon, type LucideIcon } from 'lucide-
 import { BRAND_NAME } from '@/lib/branding'
 import { VERSION_DISPLAY } from '@/lib/version'
 import { BrandMark } from '@/components/BrandMark'
+import { RecycleBin } from '@/components/RecycleBin'
 import { cn } from '@/lib/utils'
 
-function NavItem({ active, icon: Icon, label, href, badge, anchor }: { active?: boolean; icon: LucideIcon; label: string; href: string; badge?: number; anchor?: boolean }) {
+function NavItem({ active, icon: Icon, label, href, badge }: { active?: boolean; icon: LucideIcon; label: string; href: string; badge?: number }) {
   const className = cn(
     'flex h-9 items-center gap-2.5 rounded-lg px-3 text-sm transition-colors duration-200',
     active
       ? 'bg-emerald-500/[0.09] font-medium text-emerald-700 dark:text-emerald-300'
       : 'text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground',
   )
-  const inner = (
-    <>
+  return (
+    <Link href={href} className={className}>
       <Icon className="size-4 shrink-0" />
       <span className="min-w-0 truncate">{label}</span>
       {badge !== undefined && badge > 0 && (
         <span className="ml-auto rounded-full bg-foreground/[0.06] px-1.5 py-px text-[10px] font-medium tabular-nums text-muted-foreground">{badge}</span>
       )}
-    </>
+    </Link>
   )
-  return anchor
-    ? <a href={href} className={className}>{inner}</a>
-    : <Link href={href} className={className}>{inner}</Link>
 }
 
 function NavSection({ label, children }: { label: string; children: ReactNode }) {
@@ -53,7 +51,6 @@ export function AppShell({
   active,
   assetBadge,
   toolbar,
-  panel,
   statusBar,
   children,
 }: {
@@ -62,8 +59,6 @@ export function AppShell({
   assetBadge?: number
   /** 工具栏（AppHeader：标题 + 动作位，固定 chrome 不滚动） */
   toolbar?: ReactNode
-  /** 底部折叠面板（Recent Imports 等，IDE 终端面板位） */
-  panel?: ReactNode
   /** 状态栏（IDE 底栏：数据源 / 版本 / 计数） */
   statusBar?: ReactNode
   children: ReactNode
@@ -77,10 +72,7 @@ export function AppShell({
             从层间透出形成深度） */}
         <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-0 h-72 bg-[radial-gradient(56%_100%_at_50%_0%,rgba(16,185,129,0.08),transparent_70%)]" />
         <div className="relative z-10 shrink-0">{toolbar}</div>
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">{children}</div>
-          {panel}
-        </div>
+        <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">{children}</div>
         {statusBar}
       </div>
       <aside className="order-first hidden w-60 shrink-0 flex-col border-r border-border/40 bg-gradient-to-b from-card/60 via-card/40 to-card/30 backdrop-blur-2xl lg:flex">
@@ -90,15 +82,27 @@ export function AppShell({
           <span className="text-sm font-semibold tracking-tight text-foreground">{BRAND_NAME}</span>
           <span className="ml-auto rounded-full bg-foreground/[0.05] px-1.5 py-px text-[10px] font-medium text-muted-foreground">{VERSION_DISPLAY}</span>
         </div>
-        <nav className="flex-1 overflow-y-auto px-3 pb-4">
-          <NavSection label="Workbench">
-            <NavItem active={active === 'assets'} icon={LayersIcon} label="资产库" href="/" badge={assetBadge} />
-            <NavItem active={active === 'lake'} icon={DatabaseIcon} label="数据仓" href="/?src=lake" />
-          </NavSection>
-          <NavSection label="System">
-            <NavItem icon={SettingsIcon} label="Settings" href="/settings" anchor />
-          </NavSection>
-        </nav>
+        {/* 导航 + 回收站 section（VS Code Explorer 多 section 同一位）；条目多时
+            随本区滚动 */}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+            <NavSection label="Workbench">
+              <NavItem active={active === 'assets'} icon={LayersIcon} label="资产库" href="/" badge={assetBadge} />
+              <NavItem active={active === 'lake'} icon={DatabaseIcon} label="数据仓" href="/?src=lake" />
+            </NavSection>
+            <RecycleBin />
+          </nav>
+          {/* 底部账户位（IDE 惯例）：齿轮直达设置 */}
+          <div className="flex h-11 shrink-0 items-center border-t border-border/40 px-3">
+            <a
+              href="/settings"
+              title="Settings"
+              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-200 hover:bg-foreground/[0.06] hover:text-foreground"
+            >
+              <SettingsIcon className="size-4" />
+            </a>
+          </div>
+        </div>
       </aside>
     </div>
   )

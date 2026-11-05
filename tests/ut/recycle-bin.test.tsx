@@ -107,7 +107,7 @@ describe('回收站面板', () => {
     const purgeBtn = [...container!.querySelectorAll('[data-recycle-purge]')][0] as HTMLButtonElement
     await act(async () => { purgeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
-    expect(purgeBtn.textContent).toContain('确认删除')
+    expect(purgeBtn.textContent).toContain('确认')
     expect(calls.some(c => c.body?.action === 'purge')).toBe(false)
     await act(async () => { purgeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
@@ -118,15 +118,15 @@ describe('回收站面板', () => {
   it('清空两步确认 + 空态文案', async () => {
     act(() => root!.render(createElement(RecycleBin)))
     await settle()
-    const emptyBtn = [...container!.querySelectorAll('button')].find(b => b.textContent === '清空') as HTMLButtonElement
+    const emptyBtn = container!.querySelector('[data-recycle-empty]') as HTMLButtonElement
     await act(async () => { emptyBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
-    expect(emptyBtn.textContent).toContain('确认清空')
+    expect(emptyBtn.textContent).toContain('确认')
     expect(calls.some(c => c.body?.action === 'empty')).toBe(false)
     await act(async () => { emptyBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
     expect(calls.some(c => c.body?.action === 'empty')).toBe(true)
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(0)
-    expect(container!.textContent).toContain('回收站为空')
+    expect(container!.textContent).toContain('先落入这里')
   })
 })

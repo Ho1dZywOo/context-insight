@@ -8,16 +8,16 @@
 
 'use client'
 
-// 回收站面板（底部折叠面板位，接替 Recent Imports）：insight 库删除的资产
-// 先落快照于此——「恢复」回流为独立会话（原 run 目录已删，不复活 run），
-// 「彻底删除/清空」不可逆。破坏性操作走两步确认（行内按钮变形，iOS 式轻
-// 确认，无弹窗打断）；恢复成功后 router.refresh() 让主列表同步浮现。
+// 回收站（侧栏 section 形态，VS Code Explorer 同款位）：insight 库删除的资
+// 产先落快照于此——「恢复」回流为独立会话（原 run 目录已删，不复活 run），
+// 「彻底删除/清空」不可逆。破坏性操作走两步确认（行内按钮变形，3.5s 自动
+// 解除，轻确认无弹窗）；恢复成功后 router.refresh() 让主列表同步
+// 浮现。
 
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ChevronDownIcon, RotateCcwIcon, Trash2Icon, LoaderIcon } from 'lucide-react'
+import { ChevronDownIcon, RotateCcwIcon, TrashIcon, LoaderIcon } from 'lucide-react'
 import { AssetIcon, modelIconId } from '@/components/collection/AssetIcon'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 interface RecycleEntry {
@@ -127,99 +127,97 @@ export function RecycleBin() {
   const hasEntries = count > 0
 
   return (
-    <section data-recycle-panel className="shrink-0 border-t border-border/40 bg-card/40">
-      {/* 面板头（与 Recent Imports 同一 chrome）：折叠开关 + 小字距标题 +
-          计数角标 + 清空（两步确认） */}
-      <div className="flex h-9 items-center gap-1 px-2">
+    <section data-recycle-panel className="mt-1">
+      {/* section 头：折叠开关 + 小字距标题 + 计数角标 + 清空（两步确认） */}
+      <div className="flex h-8 items-center gap-1 px-1.5">
         <button
           type="button"
           onClick={() => setCollapsed(v => !v)}
           aria-expanded={!collapsed}
-          className="flex h-9 min-w-0 flex-1 items-center gap-2 px-2 text-left"
+          className="flex h-8 min-w-0 flex-1 items-center gap-1.5 px-1.5 text-left"
         >
-          <ChevronDownIcon className={cn('size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200', collapsed && '-rotate-90')} />
-          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Recycle Bin</span>
-          {entries !== null && (
+          <ChevronDownIcon className={cn('size-3 shrink-0 text-muted-foreground/60 transition-transform duration-200', collapsed && '-rotate-90')} />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Recycle Bin</span>
+          {hasEntries && (
             <span className="rounded-full bg-foreground/[0.06] px-1.5 py-px text-[10px] font-medium tabular-nums text-muted-foreground">{count}</span>
           )}
         </button>
         {hasEntries && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              'h-6 shrink-0 rounded-md px-2 text-[11px]',
-              arm === '__empty__'
-                ? 'bg-destructive/10 text-destructive'
-                : 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive',
-            )}
-            disabled={busy === '__empty__'}
+          <button
+            type="button"
+            data-recycle-empty
             onClick={handleEmpty}
+            disabled={busy === '__empty__'}
+            title="清空回收站（不可恢复）"
+            className={cn(
+              'flex h-6 shrink-0 items-center rounded-md px-1.5 text-[10px] transition-colors duration-150',
+              arm === '__empty__'
+                ? 'bg-destructive/10 font-medium text-destructive'
+                : 'text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive',
+            )}
           >
-            {busy === '__empty__' ? '清空中…' : arm === '__empty__' ? '确认清空' : '清空'}
-          </Button>
+            {busy === '__empty__' ? <LoaderIcon className="size-3 animate-spin" /> : arm === '__empty__' ? '确认' : <TrashIcon className="size-3" />}
+          </button>
         )}
       </div>
       {/* 折叠体：grid-rows 0fr→1fr 过渡（纯 CSS 无 JS 测高） */}
       <div className={cn('grid transition-[grid-template-rows] duration-200 ease-out', collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]')}>
         <div className="overflow-hidden">
-          <div className="max-h-44 overflow-y-auto border-t border-border/40">
-            {entries === null && (
-              <div className="space-y-2 p-3">
-                <div className="h-9 animate-pulse rounded-lg bg-muted/30" />
-                <div className="h-9 animate-pulse rounded-lg bg-muted/20" />
+          {entries === null && (
+            <div className="space-y-1.5 px-3 pb-2">
+              <div className="h-7 animate-pulse rounded-md bg-muted/30" />
+              <div className="h-7 animate-pulse rounded-md bg-muted/20" />
+            </div>
+          )}
+          {entries !== null && !hasEntries && (
+            <p className="px-3 pb-2 text-[11px] leading-5 text-muted-foreground/50">删除的资产会先落入这里，可随时恢复</p>
+          )}
+          {entries?.map(e => (
+            <div
+              key={e.name}
+              data-recycle-row
+              data-recycle-name={e.name}
+              className={cn(
+                'group flex items-center gap-2 rounded-lg py-1.5 pl-4 pr-1.5 transition-colors duration-150',
+                arm === e.name ? 'bg-destructive/[0.06]' : 'hover:bg-foreground/[0.04]',
+              )}
+            >
+              <AssetIcon id={modelIconId(e.model)} size="sm" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs text-foreground" title={e.taskId}>{e.query ?? e.taskId}</p>
+                <p className="truncate text-[10px] text-muted-foreground/70">
+                  {formatSize(e.size)} · 删除于 {formatDeletedAt(e.deletedAt)}
+                </p>
               </div>
-            )}
-            {entries !== null && !hasEntries && (
-              <p className="px-4 py-6 text-center text-xs text-muted-foreground/60">回收站为空 —— 从 insight 删除的资产会先落入这里，可随时恢复</p>
-            )}
-            {entries?.map(e => (
-              <div
-                key={e.name}
-                data-recycle-row
-                data-recycle-name={e.name}
-                className="group flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 hover:bg-accent/40"
-              >
-                <AssetIcon id={modelIconId(e.model)} size="sm" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-foreground">{e.query ?? e.taskId}</p>
-                  <p className="truncate text-xs text-muted-foreground" title={`${e.taskId}${e.framework ? ` · ${e.framework}` : ''}`}>
-                    {e.taskId}{e.framework ? ` · ${e.framework}` : ''} · {formatSize(e.size)} · 删除于 {formatDeletedAt(e.deletedAt)}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    data-recycle-restore
-                    className="h-6 rounded-md bg-emerald-500/[0.08] px-2 text-[11px] text-emerald-700 hover:bg-emerald-500/[0.14] hover:text-emerald-700 dark:text-emerald-300 dark:hover:text-emerald-300"
-                    disabled={busy === e.name}
-                    onClick={() => handleRestore(e.name)}
-                  >
-                    {busy === e.name ? <LoaderIcon className="size-3 animate-spin" /> : <RotateCcwIcon className="size-3" />}
-                    恢复
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    data-recycle-purge
-                    className={cn(
-                      'h-6 rounded-md px-2 text-[11px]',
-                      arm === e.name
-                        ? 'bg-destructive/10 text-destructive'
-                        : 'text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive',
-                    )}
-                    disabled={busy === e.name}
-                    onClick={() => handlePurge(e.name)}
-                    title="彻底删除（不可恢复）"
-                  >
-                    <Trash2Icon className="size-3" />
-                    {arm === e.name ? '确认删除' : '彻底删除'}
-                  </Button>
-                </div>
+              <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity duration-150 group-hover:opacity-100">
+                <button
+                  type="button"
+                  data-recycle-restore
+                  onClick={() => handleRestore(e.name)}
+                  disabled={busy === e.name}
+                  title="恢复到 insight 库"
+                  className="flex h-6 items-center rounded-md px-1.5 text-[10px] text-emerald-700 transition-colors duration-150 hover:bg-emerald-500/10 dark:text-emerald-300"
+                >
+                  {busy === e.name ? <LoaderIcon className="size-3 animate-spin" /> : <RotateCcwIcon className="size-3" />}
+                </button>
+                <button
+                  type="button"
+                  data-recycle-purge
+                  onClick={() => handlePurge(e.name)}
+                  disabled={busy === e.name}
+                  title="彻底删除（不可恢复）"
+                  className={cn(
+                    'flex h-6 items-center rounded-md px-1.5 text-[10px] transition-colors duration-150',
+                    arm === e.name
+                      ? 'bg-destructive/10 font-medium text-destructive'
+                      : 'text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive',
+                  )}
+                >
+                  {arm === e.name ? '确认' : <TrashIcon className="size-3" />}
+                </button>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
       </div>
     </section>

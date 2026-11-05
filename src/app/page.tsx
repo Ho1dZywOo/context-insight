@@ -16,7 +16,6 @@ import { MetricCards } from '@/components/MetricCards';
 import { AssetList } from '@/components/collection/AssetList';
 import { ImportDialog } from '@/components/collection/ImportDialog';
 import { LakeSourceView } from '@/components/collection/LakeSourceView';
-import { RecycleBin } from '@/components/RecycleBin';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { AppShell } from '@/components/layout/AppShell';
 import { CommandPalette } from '@/components/layout/CommandPalette';
@@ -129,7 +128,6 @@ export default async function Home({
           }
         />
       }
-      panel={<RecycleBin />}
       statusBar={
         <footer className="flex h-7 shrink-0 items-center justify-between gap-4 border-t border-border/40 bg-card/30 px-4 text-[11px] text-muted-foreground">
           <div className="flex min-w-0 items-center gap-3">
