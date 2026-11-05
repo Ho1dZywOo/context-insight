@@ -137,10 +137,7 @@ export default async function Home({
             </span>
             <span className="hidden text-muted-foreground/60 sm:inline">{BRAND_NAME}</span>
           </div>
-          <div className="flex items-center gap-3 whitespace-nowrap tabular-nums">
-            <span>{summary.sessionCount + summary.runCount} assets · {summary.runCount} runs</span>
-            <span className="hidden text-muted-foreground/60 sm:inline">/ 搜索</span>
-          </div>
+          <span className="whitespace-nowrap text-muted-foreground/60">{VERSION_DISPLAY}</span>
         </footer>
       }
     >

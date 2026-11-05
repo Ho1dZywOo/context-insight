@@ -15,7 +15,6 @@ import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { LayersIcon, DatabaseIcon, SettingsIcon, type LucideIcon } from 'lucide-react'
 import { BRAND_NAME } from '@/lib/branding'
-import { VERSION_DISPLAY } from '@/lib/version'
 import { BrandMark } from '@/components/BrandMark'
 import { RecycleBin } from '@/components/RecycleBin'
 import { cn } from '@/lib/utils'
@@ -76,11 +75,10 @@ export function AppShell({
         {statusBar}
       </div>
       <aside className="order-first hidden w-60 shrink-0 flex-col border-r border-border/40 bg-gradient-to-b from-card/60 via-card/40 to-card/30 backdrop-blur-2xl lg:flex">
-        {/* 品牌行：与工具栏同高（h-14），双栏 chrome 基线对齐 */}
+        {/* 品牌行：与工具栏同高（h-14），双栏 chrome 基线对齐；版本号在状态栏右下 */}
         <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-border/40 px-5">
           <BrandMark size="sm" />
           <span className="text-sm font-semibold tracking-tight text-foreground">{BRAND_NAME}</span>
-          <span className="ml-auto rounded-full bg-foreground/[0.05] px-1.5 py-px text-[10px] font-medium text-muted-foreground">{VERSION_DISPLAY}</span>
         </div>
         {/* 导航 + 回收站 section（VS Code Explorer 多 section 同一位）；条目多时
             随本区滚动 */}
