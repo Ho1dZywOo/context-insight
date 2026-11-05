@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { SkillsPanorama, type SkillsPanoramaData, type SkillsMemberRef } from "@/components/observe/SkillsPanorama";
+import { LoadState } from "@/components/ui/loading";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 export interface RunSkillsTabProps {
@@ -49,9 +50,7 @@ export function RunSkillsTab({ runId, members, onOpenTurn }: RunSkillsTabProps) 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-2xl bg-muted/30 p-4">
       {!loaded ? (
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-xs text-muted-foreground">载入技能观测…</p>
-        </div>
+        <LoadState label="载入技能观测…" className="min-h-full justify-center" />
       ) : data == null ? (
         <div className="flex flex-1 items-center justify-center">
           <p className="text-xs text-muted-foreground">技能观测载入失败（稍后重试或检查成员会话数据）。</p>

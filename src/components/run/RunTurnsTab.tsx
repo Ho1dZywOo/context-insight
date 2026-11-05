@@ -17,7 +17,7 @@
 // 选中轮的节点归属由 turn 详情的 taskId 单点解析（深链/跨 tab 同路）；
 // ←/→ 沿「节点 × 成员会话 × 轮次」全序列连续走查，越过节点边界自动加载。
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
 import { MessageSquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -36,10 +36,12 @@ import type { SessionRef } from "@/lib/run/model";
 
 /** 首页页容量：小页快出首屏（快路径），剩余走补拉链 */
 const PAGE_SIZE = 200;
-/** 补拉单请求上限：对齐服务端 MAX_PAGE_SIZE 硬顶——超限会被服务端钳制
- *  静默缩页，客户端按同值分块自管 */
-const REST_PAGE_SIZE = 20_000;
-/** 补拉链护栏：200 + 32×20000 轮的跑飞上限（真实单成员到不了） */
+/** 补拉单请求上限：分块预算而非服务端硬顶（MAX_PAGE_SIZE=20000）——大
+ *  session 单请求巨石拉回（数 MB JSON 一次解析 + 一次挂载）是加载期整页
+ *  冻结的主源；小块续拉让解析/渲染成本摊平，装载门期间列表不在场，块间
+ *  只有头部计数轻渲。链护栏覆盖单成员上限 */
+const REST_PAGE_SIZE = 1_000;
+/** 补拉链护栏：200 + 32×1000 轮的跑飞上限（真实单成员到不了） */
 const REST_CHAIN_LIMIT = 32;
 
 /** 详情骨架出场延迟：点击选轮的取数快于该值时不出骨架（保留旧内容直到
@@ -206,12 +208,17 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     let total = totalHint ?? seed?.total ?? 0;
     if (loaded >= total) return;
     restInflightRef.current.add(taskId);
-    setMemberData(prev => {
-      const cur = prev.get(taskId);
-      if (!cur || cur.loading) return prev;
-      const next = new Map(prev);
-      next.set(taskId, { ...cur, loading: true });
-      return next;
+    // 转场更新：装载门期间渲染树极小、转场开销近零；完成翻转（门开 → 全量
+    // 行一次性挂载）与纪元增量（列表在场的大重渲）经转场让出主线程——滚动
+    // 与输入保持可响应
+    startTransition(() => {
+      setMemberData(prev => {
+        const cur = prev.get(taskId);
+        if (!cur || cur.loading) return prev;
+        const next = new Map(prev);
+        next.set(taskId, { ...cur, loading: true });
+        return next;
+      });
     });
     try {
       for (let i = 0; i < REST_CHAIN_LIMIT; i++) {
@@ -226,27 +233,31 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
         const reported = d?.total;
         if (typeof reported === 'number' && Number.isFinite(reported)) total = reported;
         loaded += items.length;
-        setMemberData(prev => {
-          const cur = prev.get(taskId);
-          if (!cur) return prev;
-          // 服务端确定性排序（createdAt asc / id asc）保证 offset 续拉连续；
-          // turnId 去重追加兜底重入重叠（重复条目丢弃，顺序保持）
-          const seen = new Set(cur.turns.map(t => t.turnId));
-          const merged = cur.turns.concat(items.filter(t => !seen.has(t.turnId)));
-          const next = new Map(prev);
-          next.set(taskId, { turns: merged, total, loading: merged.length < total });
-          return next;
+        startTransition(() => {
+          setMemberData(prev => {
+            const cur = prev.get(taskId);
+            if (!cur) return prev;
+            // 服务端确定性排序（createdAt asc / id asc）保证 offset 续拉连续；
+            // turnId 去重追加兜底重入重叠（重复条目丢弃，顺序保持）
+            const seen = new Set(cur.turns.map(t => t.turnId));
+            const merged = cur.turns.concat(items.filter(t => !seen.has(t.turnId)));
+            const next = new Map(prev);
+            next.set(taskId, { turns: merged, total, loading: merged.length < total });
+            return next;
+          });
         });
         if (loaded >= total) break;
       }
     } finally {
       restInflightRef.current.delete(taskId);
-      setMemberData(prev => {
-        const cur = prev.get(taskId);
-        if (!cur?.loading) return prev;
-        const next = new Map(prev);
-        next.set(taskId, { ...cur, loading: false });
-        return next;
+      startTransition(() => {
+        setMemberData(prev => {
+          const cur = prev.get(taskId);
+          if (!cur?.loading) return prev;
+          const next = new Map(prev);
+          next.set(taskId, { ...cur, loading: false });
+          return next;
+        });
       });
     }
   }, [runId]);
@@ -265,10 +276,12 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
           return;
         }
         const total = Number.isFinite(d!.total) ? d!.total : items.length;
-        setMemberData(prev => {
-          const next = new Map(prev);
-          next.set(taskId, { turns: items, total, loading: items.length < total });
-          return next;
+        startTransition(() => {
+          setMemberData(prev => {
+            const next = new Map(prev);
+            next.set(taskId, { turns: items, total, loading: items.length < total });
+            return next;
+          });
         });
         // 自动拉齐：首页未覆盖全集即从已载边界补齐剩余
         if (items.length < total) void fetchMemberRest(taskId, items.length, total);
@@ -329,6 +342,9 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     if (search) return;
     const row = listRef.current?.querySelector(`[data-turn-row="${t}"]`);
     if (!row) return;
+    // 分帧填充隐藏期：行已在 DOM 但不可视——意图保留，就绪交换后（卡片
+    // 卸载触发 observer）重试落地
+    if (row.closest("[data-fill-hidden]")) return;
     pendingRevealRef.current = null;
     revealIntoView(listRef.current, row);
   }, [search]);
@@ -558,6 +574,17 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     revealPending();
     // search 在依赖里：退出搜索（节点列表回位）时挂起的揭示意图落地
   }, [turnId, details, memberData, effectiveExpanded, search, revealPending]);
+
+  // 分帧填充期间行渐次落位（memberData/details 不变，上述 effect 不会重跑）
+  // ——监听列表 DOM 子树变化重试挂起的揭示意图：目标行落在哪一帧就滚到
+  // 哪一帧（深链 #N / 跨 tab 大 run 直达不因填充窗口漏滚）
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof MutationObserver === "undefined") return;
+    const mo = new MutationObserver(() => revealPending());
+    mo.observe(list, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [revealPending]);
 
   // ── 跨成员搜索（Trace 退役，搜索归 Turns——命中索引驻留左列）──
   // 命中集是排查工作集：选中命中打开 player 后列表不消失；退出（✕ / Esc /

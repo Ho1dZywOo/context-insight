@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from "react";
 import { ContextTracker, type TurnRowItem } from "@/components/observe/ContextTracker";
+import { LoadState } from "@/components/ui/loading";
 import type { ContextAgentLimit, ContextTurnItem } from "@/lib/observe/collectors/context";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
@@ -61,7 +62,7 @@ export function RunContextTab({ runId, onNavigateToTurn }: RunContextTabProps) {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-background shadow-sm">
       <div className="run-scroll-fade min-h-0 flex-1 overflow-y-auto">
         {!loaded ? (
-          <p className="animate-pulse p-6 text-center text-xs text-muted-foreground">载入上下文数据…</p>
+          <LoadState label="载入上下文数据…" className="min-h-full justify-center" />
         ) : (
           <ContextTracker
             turns={turns}

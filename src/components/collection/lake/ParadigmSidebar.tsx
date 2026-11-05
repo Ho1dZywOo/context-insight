@@ -9,6 +9,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { BreathCards } from '@/components/ui/loading';
 
 export interface ParadigmSummaryView {
   name: string;
@@ -20,10 +21,13 @@ export function ParadigmSidebar({
   paradigms,
   selected,
   onSelect,
+  loading,
 }: {
   paradigms: ParadigmSummaryView[];
   selected: string | null;
   onSelect: (name: string) => void;
+  /** 目录清单在途：同形行占位（首拉远端可达数秒） */
+  loading?: boolean;
 }) {
   const [filter, setFilter] = useState('');
   const visible = useMemo(() => {
@@ -42,10 +46,11 @@ export function ParadigmSidebar({
         />
       </div>
       <nav className="flex-1 overflow-y-auto p-2">
-        {visible.length === 0 && (
+        {loading && <BreathCards count={6} compact className="px-2" />}
+        {!loading && visible.length === 0 && (
           <p className="px-2 py-4 text-sm text-neutral-400">无范式目录</p>
         )}
-        {visible.map(p => (
+        {!loading && visible.map(p => (
           <button
             key={p.name}
             type="button"

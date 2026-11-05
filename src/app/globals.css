@@ -560,3 +560,28 @@
     animation: none;
   }
 }
+
+/* 加载呼吸占位（全站加载语言，承总览 pending 脉冲）：软明暗呼吸 + 轻收缩
+   （纯 opacity/transform，不触发布局），数据落地零跳变；卡片间以相位差
+   错开形成波动感 */
+@keyframes load-breathe {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.985);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.load-breathe {
+  animation: load-breathe 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .load-breathe {
+    animation: load-breathe 4.8s ease-in-out infinite;
+  }
+}
