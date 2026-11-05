@@ -403,8 +403,17 @@
 /* Turns 左列表揭示滚动：挂揭示类期间把 content-visibility 占位块展平为
    真实布局——远距跳转（深链/跨 tab/搜索命中）的滚动目标按真实几何计算，
    收尾摘类后恢复跳渲染（占位尺寸已被记住，恢复不引起跳动） */
-.turn-list-revealing .turn-rows {
+.turn-list-revealing .turn-rows,
+.turn-list-revealing .turn-row-cv {
   content-visibility: visible;
+}
+
+/* Turns 行级跳渲染：万行级列表的滚动帧与「就绪交换」亮相时刻只处理可视
+   区行（离屏行跳过 style/layout/paint，以估算高度参与布局；渲染过的行
+   由 contain-intrinsic-size:auto 记住真实高度，恢复不引起跳动） */
+.turn-row-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 32px;
 }
 
 /* Turns 命中索引玻璃浮层入场：自左缘轻移淡入（纯 transform/opacity，

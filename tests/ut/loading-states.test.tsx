@@ -212,12 +212,14 @@ describe('Turns 会话块首次装载门', () => {
       const firstCount = document.querySelectorAll('[data-turn-row]').length
       expect(firstCount).toBeGreaterThan(0)
       expect(firstCount).toBeLessThan(500)
+      expect(document.querySelectorAll('.turn-row-cv').length).toBe(firstCount)
       expect(document.querySelector('.load-breathe')).not.toBeNull()
       expect(document.querySelector('[data-fill-hidden]')).not.toBeNull()
       for (let i = 0; i < 8; i++) {
         await act(async () => { await vi.advanceTimersByTimeAsync(64) })
       }
       expect(document.querySelectorAll('[data-turn-row]').length).toBe(500)
+      expect(document.querySelectorAll('.turn-row-cv').length).toBe(500)
       expect(document.body.textContent).toContain('turn 500')
       expect(document.querySelector('.load-breathe')).toBeNull()
       expect(document.querySelector('[data-fill-hidden]')).toBeNull()
@@ -259,11 +261,13 @@ describe('Turns 会话块首次装载门', () => {
       const firstCount = document.querySelectorAll('[data-turn-row]').length
       expect(firstCount).toBeGreaterThan(0)
       expect(firstCount).toBeLessThan(500)
+      expect(document.querySelectorAll('.turn-row-cv').length).toBe(firstCount)
       expect(document.querySelector('[data-fill-hidden]')).not.toBeNull()
       for (let i = 0; i < 8; i++) {
         await act(async () => { await vi.advanceTimersByTimeAsync(64) })
       }
       expect(document.querySelectorAll('[data-turn-row]').length).toBe(500)
+      expect(document.querySelectorAll('.turn-row-cv').length).toBe(500)
       expect(document.querySelector('[data-fill-hidden]')).toBeNull()
     } finally {
       vi.useRealTimers()

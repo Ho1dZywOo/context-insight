@@ -349,6 +349,8 @@ function SubagentLaneViewBase({ lane, ctx, path }: { lane: SubagentLane; ctx: La
     next.add(lane.bridgeId);
     return next;
   }, [path, lane.bridgeId]);
+  // 切片身份稳定（memo）：就绪交换翻转时 LaneRowsList 的 props 不变、整块跳过
+  const laneTurns = useMemo(() => lane.turns.slice(0, laneVisible), [lane.turns, laneVisible]);
   // 渲染路径防环：建 lane 处已剔自引用桥，但存量库互引等其他形态的畸形桥
   // 仍可能构成 lane 环（A 的派发端在 B、B 的派发端在 A）——按 bridgeId
   // 路径截断，同一条展开链上不重复渲染同一 lane（环处显示截断提示）
@@ -394,24 +396,7 @@ function SubagentLaneViewBase({ lane, ctx, path }: { lane: SubagentLane; ctx: La
             className={cn(laneShownOnce ? "animate-in fade-in duration-300" : "hidden")}
             data-fill-hidden={laneShownOnce ? undefined : ""}
           >
-            {lane.turns.slice(0, laneVisible).map(st => {
-              const rowVisible = filter.size === 0 || filter.has(st.displayRole);
-              const lns = ctx.subagentBlocksByTurnId.get(st.turnId);
-              const visible = lns ? lns.filter(l => laneMatchesFilter(filter, l)) : [];
-              if (!rowVisible && visible.length === 0) return null;
-              return (
-                <div key={st.turnId} className="space-y-px">
-                  {rowVisible && <TurnRow turn={st} selected={ctx.selectedTurnId === st.turnId} onSelect={ctx.onSelectTurn} />}
-                  {visible.length > 0 && (
-                    <div className="ml-3 min-w-0 border-l border-orange-200/70 pl-2 dark:border-orange-500/30">
-                      {visible.length === 1
-                        ? <SubagentLaneView lane={visible[0]} ctx={ctx} path={childPath} />
-                        : <ParallelSubagentGroup lanes={visible} ctx={ctx} path={childPath} />}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            <LaneRowsList turns={laneTurns} ctx={ctx} path={childPath} />
             {laneVisible < lane.turns.length && laneShownOnce && <FillTail className="mx-2 mt-1 h-7" />}
           </div>
         </div>
@@ -573,6 +558,67 @@ interface SessionBlockProps {
   /** 角色多选筛选（空集/缺省 = 全显）；身份变更是全块重渲的唯一触发 */
   roleFilter?: ReadonlySet<string>;
 }
+
+/** 就绪交换的 O(1) 关键：行表抽成 memo 子树——交换翻转（shownOnce）只改
+ *  包装层 class 与卸载卡片，rows/laneCtx 等 props 身份不变，万行级协调整
+ *  块跳过；填充增帧时只有新增片真正渲染 */
+const RowsList = memo(function RowsList({ rows, laneCtx, filter, selectedTurnId, onSelectTurn }: {
+  rows: Array<{ turn: DisplayTurn; lanes: SubagentLane[] }>;
+  laneCtx: LaneCtx;
+  filter: ReadonlySet<string>;
+  selectedTurnId: string | null;
+  onSelectTurn: (turnId: string) => void;
+}) {
+  return (
+    <>
+      {rows.map(({ turn, lanes }) => (
+        <div key={turn.turnId} className="turn-row-cv min-w-0 space-y-1">
+          {(filter.size === 0 || filter.has(turn.displayRole)) && (
+            <TurnRow turn={turn} selected={selectedTurnId === turn.turnId} onSelect={onSelectTurn} />
+          )}
+          {lanes.length > 0 && (
+            <div className="ml-3 min-w-0">
+              {lanes.length === 1
+                ? <SubagentLaneView lane={lanes[0]} ctx={laneCtx} />
+                : <ParallelSubagentGroup lanes={lanes} ctx={laneCtx} />}
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  );
+});
+
+/** 泳道展开行同构（就绪交换 O(1)，同 RowsList 动机） */
+const LaneRowsList = memo(function LaneRowsList({ turns, ctx, path }: {
+  turns: DisplayTurn[];
+  ctx: LaneCtx;
+  path: ReadonlySet<string>;
+}) {
+  const filter = ctx.roleFilter ?? EMPTY_ROLE_FILTER;
+  return (
+    <>
+      {turns.map(st => {
+        const rowVisible = filter.size === 0 || filter.has(st.displayRole);
+        const lns = ctx.subagentBlocksByTurnId.get(st.turnId);
+        const visible = lns ? lns.filter(l => laneMatchesFilter(filter, l)) : [];
+        if (!rowVisible && visible.length === 0) return null;
+        return (
+          <div key={st.turnId} className="turn-row-cv space-y-px">
+            {rowVisible && <TurnRow turn={st} selected={ctx.selectedTurnId === st.turnId} onSelect={ctx.onSelectTurn} />}
+            {visible.length > 0 && (
+              <div className="ml-3 min-w-0 border-l border-orange-200/70 pl-2 dark:border-orange-500/30">
+                {visible.length === 1
+                  ? <SubagentLaneView lane={visible[0]} ctx={ctx} path={path} />
+                  : <ParallelSubagentGroup lanes={visible} ctx={ctx} path={path} />}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+});
 
 /** 会话块 memo 比较：数据/回调不变时，仅当选中轮「进出本会话」才需要重渲
  *  （行高亮与泳道自动展开都只跟随本会话的轮）——换选高频路径上无关会话
@@ -882,6 +928,7 @@ function SessionRows({ state, bridges, selectedTurnId, onSelectTurn, filter }: {
   const visibleCount = useProgressiveCount(visibleRoots.length, true);
   const filling = visibleCount < visibleRoots.length;
   const shownOnce = useRevealLatch(!filling);
+  const renderedRoots = useMemo(() => visibleRoots.slice(0, visibleCount), [visibleRoots, visibleCount]);
 
   const anyRootVisible = filter.size === 0 || processed.displayRootTurns.some(t => filter.has(t.displayRole));
   const anyLaneVisible = filter.size === 0
@@ -901,20 +948,13 @@ function SessionRows({ state, bridges, selectedTurnId, onSelectTurn, filter }: {
           高度——多节点大 run 长列表的滚动帧预算主要花在这里；揭示滚动时经
           .turn-list-revealing 临时展平为真实布局（见 globals.css） */}
       <div className="turn-rows space-y-px [contain-intrinsic-size:auto_600px] [content-visibility:auto]">
-        {visibleRoots.slice(0, visibleCount).map(({ turn, lanes }) => (
-          <div key={turn.turnId} className="space-y-1">
-            {(filter.size === 0 || filter.has(turn.displayRole)) && (
-              <TurnRow turn={turn} selected={selectedTurnId === turn.turnId} onSelect={onSelectTurn} />
-            )}
-            {lanes.length > 0 && (
-              <div className="ml-3 min-w-0">
-                {lanes.length === 1
-                  ? <SubagentLaneView lane={lanes[0]} ctx={laneCtx} />
-                  : <ParallelSubagentGroup lanes={lanes} ctx={laneCtx} />}
-              </div>
-            )}
-          </div>
-        ))}
+        <RowsList
+          rows={renderedRoots}
+          laneCtx={laneCtx}
+          filter={filter}
+          selectedTurnId={selectedTurnId}
+          onSelectTurn={onSelectTurn}
+        />
         {filling && shownOnce && <FillTail className="mx-1 mt-1.5 h-8" />}
         {!state.loading && state.turns.length === 0 && (
           <p className="px-2 py-3 text-center text-xs text-muted-foreground">该成员无已入库轮次</p>
