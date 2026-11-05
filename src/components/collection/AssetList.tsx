@@ -161,7 +161,7 @@ function pageWindow(current: number, totalPages: number): Array<number | '…'> 
 // 列宽固定——跨行纵向对齐不随数字长短漂移
 function Stat({ label, value, title, error, width }: { label: string; value: string; title?: string; error?: boolean; width: string }) {
   return (
-    <div className={`flex flex-col items-end gap-0.5 ${width}`} title={title}>
+    <div className={`flex flex-col items-center gap-0.5 ${width}`} title={title}>
       <span
         data-stat={label}
         className={`text-xs font-medium tabular-nums ${error ? 'text-red-600 dark:text-red-400' : 'text-foreground/90'}`}

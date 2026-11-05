@@ -44,8 +44,10 @@ function Metric({ label, value, error, children }: { label: string; value: strin
   return (
     <div className="flex flex-col gap-1 px-5 py-4">
       <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
-      <p className={cn('text-2xl font-bold tabular-nums tracking-tight', error ? 'text-red-600 dark:text-red-400' : 'text-foreground')}>{value}</p>
-      {children}
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <p className={cn('text-2xl font-bold tabular-nums tracking-tight', error ? 'text-red-600 dark:text-red-400' : 'text-foreground')}>{value}</p>
+        {children}
+      </div>
     </div>
   );
 }
@@ -58,15 +60,15 @@ export function MetricCards({ totalSessions, runCount, totalTokens, totalCost, t
       className="animate-in fade-in slide-in-from-bottom-2 duration-300 rounded-2xl border border-border/70 bg-card/60 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.28)] backdrop-blur-2xl backdrop-saturate-150"
     >
       <div className={cn('grid grid-cols-2 sm:grid-cols-3', totalErrors !== undefined ? 'lg:grid-cols-5' : 'lg:grid-cols-4', 'lg:divide-x lg:divide-border/50')}>
-        {/* 首卡 = 资产总量（独立会话 + run），副行给 run/session 拆分——
-            run 的成员会话是内部规模，不在首页计数口径 */}
+        {/* 首卡 = 资产总量（独立会话 + run），拆分计数与大数字同排基线对齐
+            （压板块高度）；run 的成员会话是内部规模，不在首页计数口径 */}
         <Metric label="Assets" value={String(totalSessions + runs)}>
-          <p className="text-xs text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             {totalSessions} <Link href="/?kind=session" className="hover:underline">{totalSessions === 1 ? 'Session' : 'Sessions'}</Link>
             {runs > 0 && (
               <> · {runs} <Link href="/?kind=run" className="hover:underline">{runs === 1 ? 'Run' : 'Runs'}</Link></>
             )}
-          </p>
+          </span>
         </Metric>
         <Metric label="Total Tokens" value={formatTokens(totalTokens)} />
         <Metric label="Total Cost" value={formatCost(totalCost)} />
