@@ -20,7 +20,7 @@
 // 取代 LocalFileImport 与 BundleImport（刀 2 退役）。
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BRAND_NAME, BRAND_SLUG, BRAND_SOURCE_TYPE, BAY_NAME } from "@/lib/branding";
+import { BRAND_SOURCE_TYPE, BAY_NAME } from "@/lib/branding";
 import { serverLakeConfigStatus, type LakeTokenReason } from "@/lib/lake-token-prompt";
 import { LakeTokenDialog } from "@/components/LakeTokenDialog";
 import { HEADER_PILL_TINTED } from "@/components/layout/header-actions";
@@ -899,135 +899,118 @@ export function ImportDialog() {
 
         {step === "input" && (
           <div className="space-y-4">
-            <div>
-              <label className="text-xs font-medium text-foreground/80 mb-2 block">导入来源</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setSourceMode("local"); setError(null); }}
-                  className={cn(
-                    "flex h-11 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-all duration-200",
-                    sourceMode === "local"
-                      ? "border-emerald-500/40 bg-emerald-500/[0.07] text-emerald-700 dark:text-emerald-300"
-                      : "border-border/50 text-muted-foreground hover:border-border hover:text-foreground",
-                  )}
-                >
-                  <FolderIcon className="size-4" />
-                  本地
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setSourceMode("lake"); setError(null); void handleOpenLake(); }}
-                  className={cn(
-                    "flex h-11 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-all duration-200",
-                    sourceMode === "lake"
-                      ? "border-emerald-500/40 bg-emerald-500/[0.07] text-emerald-700 dark:text-emerald-300"
-                      : "border-border/50 text-muted-foreground hover:border-border hover:text-foreground",
-                  )}
-                >
-                  <GlobeIcon className="size-4" />
-                  {BAY_NAME}
-                </button>
-              </div>
+            {/* 来源即模式：双源大卡选择（radio-card 语义）——卡片自带说明，
+                取代旧版「导入来源 / 文件格式 / File Path」三层 label 堆叠 */}
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => { setSourceMode("local"); setError(null); }}
+                className={cn(
+                  "flex flex-col items-start gap-1.5 rounded-xl border p-3.5 text-left transition-all duration-200",
+                  sourceMode === "local"
+                    ? "border-emerald-500/40 bg-emerald-500/[0.06]"
+                    : "border-border/50 hover:border-border hover:bg-foreground/[0.02]",
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <FolderIcon className={cn("size-4", sourceMode === "local" ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")} />
+                  <span className="text-sm font-medium">本地文件</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">浏览文件系统或输入路径 · Bundle 目录自动识别</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSourceMode("lake"); setError(null); void handleOpenLake(); }}
+                className={cn(
+                  "flex flex-col items-start gap-1.5 rounded-xl border p-3.5 text-left transition-all duration-200",
+                  sourceMode === "lake"
+                    ? "border-emerald-500/40 bg-emerald-500/[0.06]"
+                    : "border-border/50 hover:border-border hover:bg-foreground/[0.02]",
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <GlobeIcon className={cn("size-4", sourceMode === "lake" ? "text-blue-500" : "text-muted-foreground")} />
+                  <span className="text-sm font-medium">{BAY_NAME}</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">远端数据仓目录 · 会话与 Run 包同格加载</span>
+              </button>
             </div>
             {sourceMode === "local" && (
-              <>
-                <div>
-                  <label className="text-xs font-medium text-foreground/80 mb-2 block">文件格式（Bundle 目录自动识别）</label>
-                  <div className="inline-flex items-center gap-0.5 rounded-lg bg-foreground/[0.05] p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => { setLocalFormat("jsonl"); setError(null); }}
-                      className={cn(
-                        "h-7 rounded-md px-3 text-xs transition-all duration-200",
-                        localFormat === "jsonl"
-                          ? "bg-background font-medium text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      JSONL (auto)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setLocalFormat("opencode-db"); setError(null); }}
-                      className={cn(
-                        "h-7 rounded-md px-3 text-xs transition-all duration-200",
-                        localFormat === "opencode-db" || localFormat === BRAND_SOURCE_TYPE
-                          ? "bg-background font-medium text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      SQLite (auto)
-                    </button>
-                  </div>
+              <div className="space-y-2.5">
+                <div className="flex gap-2">
+                  <Input
+                    placeholder={IMPORT_SOURCES_UI[localFormat]?.placeholder ?? "/path/to/file"}
+                    value={filePath}
+                    onChange={(e) => setFilePath(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleBrowseFromInput}
+                    className="gap-1.5 shrink-0"
+                    disabled={sessionsLoading || starting}
+                  >
+                    <FolderIcon className="size-3.5" />
+                    Browse
+                  </Button>
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-foreground/80 mb-2 block">File Path</label>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder={IMPORT_SOURCES_UI[localFormat]?.placeholder ?? "/path/to/file"}
-                      value={filePath}
-                      onChange={(e) => setFilePath(e.target.value)}
-                      className="flex-1"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleBrowseFromInput}
-                      className="gap-1.5 shrink-0"
-                      disabled={sessionsLoading || starting}
-                    >
-                      <FolderIcon className="size-3.5" />
-                      Browse
-                    </Button>
-                  </div>
-                  {quickDirs.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-                      <span className="text-[11px] text-muted-foreground/70">快捷路径:</span>
-                      {quickDirs.map(q => (
-                        <Button
-                          key={q.path}
-                          variant="outline"
-                          size="sm"
-                          className="h-7 rounded-full px-2.5 text-xs gap-1.5"
-                          onClick={() => handleQuickJump(q.path)}
-                          title={q.path}
-                        >
-                          <FolderIcon className="size-3 text-emerald-600 dark:text-emerald-400" />
-                          {q.label}
-                        </Button>
-                      ))}
+                <div className="inline-flex items-center gap-0.5 rounded-lg bg-foreground/[0.05] p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => { setLocalFormat("jsonl"); setError(null); }}
+                    className={cn(
+                      "h-7 rounded-md px-3 text-xs transition-all duration-200",
+                      localFormat === "jsonl"
+                        ? "bg-background font-medium text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    JSONL (auto)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setLocalFormat("opencode-db"); setError(null); }}
+                    className={cn(
+                      "h-7 rounded-md px-3 text-xs transition-all duration-200",
+                      localFormat === "opencode-db" || localFormat === BRAND_SOURCE_TYPE
+                        ? "bg-background font-medium text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    SQLite (auto)
+                  </button>
+                </div>
+                {/* 快捷路径直达（悬停 title 即完整路径，形态在 import-ui 声明）；
+                    不再另设底部路径小字说明 */}
+                {quickDirs.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {quickDirs.map(q => (
                       <Button
+                        key={q.path}
                         variant="outline"
                         size="sm"
                         className="h-7 rounded-full px-2.5 text-xs gap-1.5"
-                        onClick={() => handleQuickJump("~")}
-                        title="~"
+                        onClick={() => handleQuickJump(q.path)}
+                        title={q.path}
                       >
-                        <FolderIcon className="size-3 text-muted-foreground" />
-                        主目录
+                        <FolderIcon className="size-3 text-emerald-600 dark:text-emerald-400" />
+                        {q.label}
                       </Button>
-                    </div>
-                  )}
-                  <div className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground/70 space-y-1">
-                    {localFormat === "jsonl" && (
-                      <>
-                        <p>Claude 原生: ~/.claude/projects/&lt;hash&gt;/&lt;id&gt;.jsonl</p>
-                        <p>cpx proxy 捕获: ~/.context-insight/proxy/cpx-&lt;sid&gt;.jsonl</p>
-                        <p>Codex 原生: ~/.codex/sessions/&lt;年&gt;/&lt;月&gt;/&lt;日&gt;/rollout-&lt;时间戳&gt;-&lt;会话id&gt;.jsonl</p>
-                      </>
-                    )}
-                    {(localFormat === "opencode-db" || localFormat === BRAND_SOURCE_TYPE) && (
-                      <>
-                        <p>opencode: ~/.local/share/opencode/opencode.db</p>
-                        <p>{BRAND_NAME} 导出: {BRAND_SLUG}_session_xxx.db（导入时按库 schema 自动识别）</p>
-                      </>
-                    )}
-                    <p>Run 的 Bundle 目录：含 workflow.json 与 sessions/（manifest.json 同样识别）——输入路径自动识别</p>
-                    <p className="text-emerald-600 dark:text-emerald-400">Click Browse to explore directories — 绿色条目点击即导入</p>
+                    ))}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 rounded-full px-2.5 text-xs gap-1.5"
+                      onClick={() => handleQuickJump("~")}
+                      title="~"
+                    >
+                      <FolderIcon className="size-3 text-muted-foreground" />
+                      主目录
+                    </Button>
                   </div>
-                </div>
-              </>
+                )}
+              </div>
             )}
             {sourceMode === "lake" && lakeLoading && (
               <div className="flex items-center gap-2 py-4 justify-center">

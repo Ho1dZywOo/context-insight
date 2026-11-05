@@ -120,9 +120,9 @@ async function openLakeTable(): Promise<void> {
   await flush(150)
   await aclick(findButtonByText('Import'))
   await flush(150)
-  // 点数据仓源按钮即触发 handleOpenLake（并行拉会话列表 + bundle 清单）→
-  // 目录选择步；范式按钮文本带会话计数（如 "dual-it2"），用包含匹配
-  await aclick(findButtonByText(BAY_NAME, true))
+  // 点数据仓源卡即触发 handleOpenLake（并行拉会话列表 + bundle 清单）→
+  // 目录选择步；源卡带说明文字（非纯文本按钮），用包含匹配
+  await aclick(findButtonByText(BAY_NAME))
   await flush(250)
   await aclick(findButtonByText('dual-it'))
   await flush(150)
