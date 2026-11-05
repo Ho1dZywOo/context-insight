@@ -235,14 +235,21 @@ export function rowPassesFilters(
   },
   filters: TurnsQueryFilter[],
   memberLabel: string | null,
+  memberTaskId: string | null = null,
 ): boolean {
   for (const f of filters) {
     let pass: boolean;
     switch (f.op) {
       case "role":
         pass = row.role.toLowerCase().includes(f.lower); break;
-      case "member":
-        pass = memberLabel != null && memberLabel.toLowerCase().includes(f.lower); break;
+      case "member": {
+        // 成员标签 **或** taskId 子串（联合命中——run 合并视图按 sessionId 归因，
+        // label 与 taskId 都是成员身份，缺 label 时 taskId 仍可筛）
+        const labelHit = memberLabel != null && memberLabel.toLowerCase().includes(f.lower);
+        const taskHit = memberTaskId != null && memberTaskId.toLowerCase().includes(f.lower);
+        pass = labelHit || taskHit;
+        break;
+      }
       case "agent": {
         const l = `${row.agentName ?? ""} ${row.subagentName ?? ""}`.toLowerCase();
         pass = l.includes(f.lower); break;

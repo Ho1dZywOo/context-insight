@@ -117,7 +117,9 @@ export function listRecycleEntries(): RecycleEntry[] {
 }
 
 /** 恢复：快照经 context-insight 适配器回流（readSession 按 taskId 定位），
- *  成功后移除快照。恢复后的会话是独立会话（原 run 目录已删，不复活 run）。 */
+ *  仅真实导入成功（imported === true）后才移除快照；imported:false（空会话
+ *  0 轮 / 同 taskId 已存在走 merge 路径）保留快照——不静默抹除，上层据此
+ *  暴露失败语义。恢复后的会话是独立会话（原 run 目录已删，不复活 run）。 */
 export async function restoreRecycleEntry(name: string, prisma: PrismaClient): Promise<{ taskId: string; imported: boolean; query: string | null }> {
   const file = entryPath(name)
   if (!fs.existsSync(file)) throw new Error(`回收站条目不存在: ${name}`)
@@ -135,8 +137,14 @@ export async function restoreRecycleEntry(name: string, prisma: PrismaClient): P
   }
 
   const result = await importSession(file, taskId, prisma, file, BRAND_SOURCE_TYPE)
-  fs.unlinkSync(file)
-  logInfo('recycle:restore', '恢复完成', { name, taskId, imported: result.imported })
+  if (result.imported) {
+    fs.unlinkSync(file)
+    logInfo('recycle:restore', '恢复完成', { name, taskId })
+  } else {
+    // imported:false 不删快照：空会话（0 轮）或同 taskId 已在库走 merge/dedup
+    // 路径——删除即静默丢数据，保留快照供复查/重试，并向上层暴露失败语义
+    logWarn('recycle:restore', '恢复未导入（快照保留）', { name, taskId })
+  }
   return { taskId, imported: result.imported, query: result.query }
 }
 

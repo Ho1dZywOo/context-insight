@@ -182,6 +182,9 @@ describe('matchTurnSearch 全能语法', () => {
     const memberOf = (sessionId: string) => (sessionId === 'ses_sub' ? { taskId: 't-sub', label: '设计子代理' } : null);
     expect(matchTurnSearch(rows, 'bug member:设计', { memberOf }).map(i => i.turnId)).toEqual(['a2']);
     expect(matchTurnSearch(rows, 'bug member:不存在', { memberOf })).toHaveLength(0);
+    // taskId 子串命中（member 归因第二轴：label 之外 taskId 也可筛——与文件头语法注释一致）
+    expect(matchTurnSearch(rows, 'bug member:t-sub', { memberOf }).map(i => i.turnId)).toEqual(['a2']);
+    expect(matchTurnSearch(rows, 'bug member:t-nope', { memberOf })).toHaveLength(0);
   });
 
   it('after:/before: 时间窗筛轮（HH:mm 按轮自身日期取当日时刻）', () => {

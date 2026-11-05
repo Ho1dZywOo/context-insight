@@ -112,11 +112,15 @@ describe('rowPassesFilters 行级谓词', () => {
     expect(rowPassesFilters(r, [{ op: 'tool', value: 'bash', lower: 'bash', negated: true }], null)).toBe(false);
   });
 
-  it('member 过滤走成员归因；无归因时该算子不可满足（诚实排除）', () => {
+  it('member 过滤走成员归因（label 或 taskId 联合子串命中）；无归因时该算子不可满足（诚实排除）', () => {
     const r = row({ id: 't1' });
     expect(rowPassesFilters(r, [{ op: 'member', value: 'alice', lower: 'alice', negated: false }], '成员Alice')).toBe(true);
     expect(rowPassesFilters(r, [{ op: 'member', value: 'bob', lower: 'bob', negated: false }], '成员Alice')).toBe(false);
     expect(rowPassesFilters(r, [{ op: 'member', value: 'alice', lower: 'alice', negated: false }], null)).toBe(false);
+    // taskId 子串也可命中（label 缺失时 taskId 仍可筛——run 合并视图成员身份第二轴）
+    expect(rowPassesFilters(r, [{ op: 'member', value: 't-sub', lower: 't-sub', negated: false }], null, 't-sub-001')).toBe(true);
+    expect(rowPassesFilters(r, [{ op: 'member', value: 'xyz', lower: 'xyz', negated: false }], null, 't-sub-001')).toBe(false);
+    expect(rowPassesFilters(r, [{ op: 'member', value: 't-sub', lower: 't-sub', negated: false }], null, null)).toBe(false);
   });
 
   it('error 有无：errorMessage 非空即有错；error:false 反向筛正常轮', () => {

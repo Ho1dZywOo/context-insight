@@ -127,7 +127,7 @@ export function matchTurnSearch(rows: TurnSearchRow[], query: string, options: M
     if (excluded) continue;
 
     const member = memberOf ? memberOf(t.sessionId) : undefined;
-    if (!rowPassesFilters(t, parsed.filters, member?.label ?? null)) continue;
+    if (!rowPassesFilters(t, parsed.filters, member?.label ?? null, member?.taskId ?? null)) continue;
 
     // 正词逐词定位：任一词无载体 → 整轮不命中（多词 AND）
     const carriers = positive.map(pt => locateTermCarrier(pt, t, contentLower, summaryLower));

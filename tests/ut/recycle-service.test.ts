@@ -98,6 +98,34 @@ describe('回收站服务（删除即归档、可逆恢复）', () => {
     expect(await prisma.session.count({ where: { taskId: SID } })).toBe(0)
   })
 
+  it('空会话（0 轮）恢复：imported:false 且快照保留（不静默抹除）', async () => {
+    const taskId = 'ses-recycle-empty-001'
+    // 清理历史遗留（重跑韧性）
+    const stale = await prisma.session.findMany({ where: { taskId }, select: { id: true } })
+    if (stale.length > 0) await cascadeDeleteSessionRows(prisma, stale.map(r => r.id))
+    for (const e of listRecycleEntries().filter(e => e.taskId === taskId)) purgeRecycleEntry(e.name)
+
+    // 空会话：仅 Session 行、0 轮（占位会话「捕获中」删除后再恢复的场景）
+    const s = await prisma.session.create({ data: { taskId, framework: 'dsh', query: '占位会话（捕获中）' } })
+    await cascadeDeleteSessionRows(prisma, [s.id])
+    expect(await prisma.session.count({ where: { taskId } })).toBe(0)
+
+    const entry = findByTask(taskId)!
+    expect(entry).toBeTruthy()
+    const file = path.join(recycleRoot(), entry.name)
+
+    const r = await restoreRecycleEntry(entry.name, prisma)
+    expect(r.imported).toBe(false)
+    // imported:false 不删快照——否则空会话恢复会「静默成功」并永久抹掉快照
+    expect(fs.existsSync(file)).toBe(true)
+    expect(findByTask(taskId)).toBeTruthy()
+    // 0 轮会话无内容可导回，不应回流（不新增 Session 行）
+    expect(await prisma.session.count({ where: { taskId } })).toBe(0)
+
+    // 清理：本用例留下的快照
+    purgeRecycleEntry(entry.name)
+  })
+
   it('emptyRecycle 清空全部快照', async () => {
     const id = await seedSession('ses-recycle-it-002')
     await cascadeDeleteSessionRows(prisma, [id])
