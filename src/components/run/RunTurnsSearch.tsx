@@ -388,7 +388,7 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
 
       {/* 锚定表面（胶囊正下方，互斥优先级：下钻 > # 提示 > 未命中提示 >
           最近搜索）。#N 系表面用振实毛玻璃（bg-card/60 + blur-2xl +
-          saturate-150——底透才磨得出背景，饱和度补偿读作 iOS vibrancy），
+          saturate-150——底透才磨得出背景，饱和度补偿让前景色彩保持鲜活），
           动效纯 CSS */}
 
       {/* #N 下钻选择面：多会话同号轮的用户选择（不静默跳）。当前会话置顶

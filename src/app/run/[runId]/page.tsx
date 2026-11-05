@@ -106,7 +106,7 @@ function BrandLockup() {
   );
 }
 
-/** 返回钮（导航行最左，与 tab 同行）：iOS 风圆头 chevron，工作台内有可回退
+/** 返回钮（导航行最左，与 tab 同行）：圆头 chevron，工作台内有可回退
  *  历史时亮出残影双 chevron（可达性反馈），悬停轻推、按压回缩——纯 CSS
  *  transform/opacity，动效零 JS */
 function BackButton({ canBack, onBack }: { canBack: boolean; onBack: () => void }) {

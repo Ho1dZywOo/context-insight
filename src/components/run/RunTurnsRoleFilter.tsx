@@ -7,7 +7,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// Turns 左列角色多选筛选条（design: iOS 画风胶囊——角色点 + 标签 + 计数的
+// Turns 左列角色多选筛选条（design: 胶囊形态——角色点 + 标签 + 计数的
 // 圆角小胶囊，点选即多选并集、「全部」一键清空；按压回缩与入场都只走
 // transform/opacity + 弹簧曲线）。角色归一与行渲染同源
 // （RunTurnsNodes.classifyDisplayRole），选项与计数随成员懒加载增量就位，

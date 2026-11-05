@@ -181,7 +181,7 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
     window.history.replaceState(null, '', '/')
   })
 
-  it('选择模式（iOS 编辑模式语义）：图标位变形对勾 + 底部浮动操作条（滑入），两会话可对比', async () => {
+  it('选择模式（编辑模式语义）：勾选角标 + 底部浮动操作条（滑入），两会话可对比', async () => {
     payloads = { '': { items: [makeItem('sel-a', '会话A'), makeItem('sel-b', '会话B')], total: 2, totalCount: 2 } }
     const container = document.createElement('div')
     document.body.appendChild(container)
@@ -193,16 +193,20 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
     })
     const checks = [...container.querySelectorAll('[data-asset-check]')] as HTMLButtonElement[]
     expect(checks.length).toBe(2)
-    // 未选中：无浮动条；图标位 aria-checked=false
+    // 未选中：无浮动条；角标常显（空心，未含对勾）、aria-checked=false
     expect(container.querySelector('[data-selection-bar]')).toBeNull()
     expect(checks[0].getAttribute('aria-checked')).toBe('false')
-    // 点第一行图标位 → 选中变形 + 浮动条（已选 1，无对比按钮）
+    const badge0 = checks[0].querySelector('[data-check-badge]')!
+    expect(badge0).toBeTruthy()
+    expect(badge0.querySelector('svg')).toBeNull()
+    // 点第一行图标位 → 角标实心对勾 + 浮动条（已选 1，无对比按钮）
     await act(async () => { checks[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
     const bar1 = container.querySelector('[data-selection-bar]')!
     expect(bar1).toBeTruthy()
     expect(bar1.textContent).toContain('已选 1 项')
     expect([...bar1.querySelectorAll('button')].some(b => b.textContent?.includes('对比'))).toBe(false)
     expect(checks[0].getAttribute('aria-checked')).toBe('true')
+    expect(checks[0].querySelector('[data-check-badge]')!.querySelector('svg')).not.toBeNull()
     // 第二行也选 → 已选 2 · 可对比（Compare 仅 2 会话）
     await act(async () => { checks[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
     const bar2 = container.querySelector('[data-selection-bar]')!

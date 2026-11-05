@@ -9,7 +9,7 @@
 // 统一工作台页头（design: docs/design/unified-workbench/design.md §3.3）。
 // Sessions × Runs 二合一后 / 是唯一一级入口，双域导航退役；右侧动作
 // （导入/数据仓/设置）由各页以 actions 注入（结构类单点：HEADER_PILL）。
-// iOS large-title 形态：品牌瓦（BrandMark，与 run 详情页同源）+ 大字名 +
+// 大标题（large-title）形态：品牌瓦（BrandMark，与 run 详情页同源）+ 大字名 +
 // 一行说明（含版本），层级靠字阶不靠色。
 
 import type { ReactNode } from "react";

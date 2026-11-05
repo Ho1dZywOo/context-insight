@@ -40,7 +40,7 @@ export function formatLatency(ms: number): string {
   return `${ms}ms`;
 }
 
-// 总览条（iOS widget 带）：5 张碎卡合一块毛玻璃横幅——去盒噪一行读完，
+// 总览条（widget 带）：5 张碎卡合一块毛玻璃横幅——去盒噪一行读完，
 // 大号 tabular 数字 + 小字距标签；Errors 非零时整格红调。取值元素保持
 // p.text-2xl ×5（顺序 Sessions/Tokens/Cost/Duration/Errors——IT 契约）
 function Metric({ label, value, error, children }: { label: string; value: string; error?: boolean; children?: React.ReactNode }) {

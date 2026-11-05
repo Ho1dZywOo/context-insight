@@ -9,11 +9,12 @@
 'use client';
 
 // 统一资产列表（design: docs/design/unified-workbench/design.md §3.1）。
-// 会话 + run 单列表混排（iOS 分组列表形态）：行 = 框架渐变 App 图标 + 标题/
-// 元信息 + 右侧微型统计列；「类型」分段控件是行过滤器（URL ?kind=，非视图
-// 切换，滑动指示条纯 CSS transform）。多选跨 kind：图标位变形为对勾圆（iOS
-// 编辑模式），批量操作收进底部浮动毛玻璃条（选中时滑入）；Compare 仅 2 个
-// 会话行，删除按 kind 分发（run 级联 owned 会话，确认弹窗明示）。
+// 会话 + run 单列表混排（分组列表形态）：行 = 框架渐变 App 图标（右上角
+// 常显小勾选角标：未选空心 / 选中实心对勾）+ 标题/元信息 + 右侧定宽微型
+// 统计列；「类型」分段控件是行过滤器（URL ?kind=，非视图切换，滑动指示条
+// 纯 CSS transform）。多选批量操作收进底部浮动毛玻璃条（选中时滑入）；
+// Compare 仅 2 个会话行，删除按 kind 分发（run 级联 owned 会话，确认弹窗
+// 明示）。
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -36,8 +37,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { UploadIcon, LoaderIcon, CheckIcon, XIcon, TrashIcon, DownloadIcon, CheckCircleIcon, SearchIcon, ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from 'lucide-react';
-import { toast } from 'sonner';
+import { UploadIcon, LoaderIcon, CheckIcon, XIcon, TrashIcon, SearchIcon, ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from 'lucide-react';
 
 interface AssetListProps {
   /** SSR 首屏初始数据（此后翻页/搜索/类型过滤走客户端 /api/observe/data，无整页刷新） */
@@ -56,7 +56,6 @@ interface AssetListProps {
 }
 
 type UploadStatus = 'idle' | 'uploading' | 'done' | 'error';
-type ExportStatus = 'idle' | 'exporting' | 'done' | 'error';
 
 const KIND_ORDER: AssetKindFilter[] = ['all', 'session', 'run'];
 
@@ -160,10 +159,11 @@ function pageWindow(current: number, totalPages: number): Array<number | '…'> 
   return out
 }
 
-// 行右侧微型统计列（tokens / cost / active·wall）：值 + 小标签，右对齐
-function Stat({ label, value, title, error }: { label: string; value: string; title?: string; error?: boolean }) {
+// 行右侧微型统计列（tokens / cost / active·wall）：值 + 小标签，列内右对齐、
+// 列宽固定——跨行纵向对齐不随数字长短漂移
+function Stat({ label, value, title, error, width }: { label: string; value: string; title?: string; error?: boolean; width: string }) {
   return (
-    <div className="flex flex-col items-end gap-0.5" title={title}>
+    <div className={`flex flex-col items-end gap-0.5 ${width}`} title={title}>
       <span
         data-stat={label}
         className={`text-xs font-medium tabular-nums ${error ? 'text-red-600 dark:text-red-400' : 'text-foreground/90'}`}
@@ -260,7 +260,6 @@ export function AssetList({
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
 
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({})
-  const [exportStatus, setExportStatus] = useState<Record<string, ExportStatus>>({})
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null)
   // 上传弹窗（统一组件，刀3 合一）：kind + target 一体；结果经回调回填行内状态
   const [uploadRequest, setUploadRequest] = useState<{ key: string; kind: 'session' | 'run'; target: UploadTarget } | null>(null)
@@ -357,68 +356,6 @@ export function AssetList({
     } catch {}
   }
 
-  async function handleExport(item: SessionAssetItem) {
-    const key = item.key
-    setExportStatus(prev => ({ ...prev, [key]: 'exporting' }))
-    try {
-      const res = await fetch('/api/ingest/export-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // framework：同 sid 双行（方案一）消歧——不带会导出另一行
-        body: JSON.stringify({ taskId: item.taskId, framework: item.framework ?? undefined }),
-      })
-      if (!res.ok) {
-        const err = await res.json()
-        setExportStatus(prev => ({ ...prev, [key]: 'error' }))
-        toast.error('Export failed', { description: err.error ?? 'Unknown error' })
-        return
-      }
-      const blob = await res.blob()
-      const defaultName = `context_session_${item.taskId}.db`
-      const picker = (window as Window & { showSaveFilePicker?: (options: { suggestedName?: string; types?: Array<{ description: string; accept: Record<string, string[]> }> }) => Promise<{ name: string; createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }> }> }).showSaveFilePicker
-      if (typeof picker === 'function') {
-        try {
-          const handle = await picker({
-            suggestedName: defaultName,
-            types: [{ description: 'SQLite Database', accept: { 'application/x-sqlite3': ['.db'] } }],
-          })
-          const writable = await handle.createWritable()
-          await writable.write(blob)
-          await writable.close()
-          setExportStatus(prev => ({ ...prev, [key]: 'done' }))
-          toast.success('Database exported', {
-            description: `Saved to ${handle.name}.`,
-            icon: <CheckCircleIcon className="size-4" />,
-            duration: 5000,
-          })
-          return
-        } catch (e: unknown) {
-          if (e instanceof DOMException && e.name === 'AbortError') {
-            setExportStatus(prev => ({ ...prev, [key]: 'idle' }))
-            return
-          }
-        }
-      }
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = defaultName
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(url), 10000)
-      setExportStatus(prev => ({ ...prev, [key]: 'done' }))
-      toast.success('Database exported', {
-        description: `${defaultName} has been downloaded.`,
-        icon: <CheckCircleIcon className="size-4" />,
-        duration: 5000,
-      })
-    } catch {
-      setExportStatus(prev => ({ ...prev, [key]: 'error' }))
-      toast.error('Export failed', { description: 'Network error' })
-    }
-  }
-
   const emptyText = kind === 'run'
     ? '暂无导入的 Run。导入包含 workflow.json 与 sessions/ 的 Bundle 目录后在此查看。'
     : kind === 'session'
@@ -427,10 +364,9 @@ export function AssetList({
   const titleText = kind === 'run' ? `Runs (${total})` : kind === 'session' ? `Sessions (${total})` : `资产 (${total})`
   const kindIndex = KIND_ORDER.indexOf(kind)
 
-  // 选择位（图标 ↔ 对勾变形）：行图标是类型的一眼识别位，选择时同一位置变
-  // 圆形对勾——iOS 编辑模式语义；点击即勾选（大命中区）。普通函数而非嵌套
-  // 组件——组件身份每次渲染都会变（重挂载毁掉变形过渡），函数直出 JSX 元素
-  // 类型稳定
+  // 选择位：行图标 + 常显微型勾选点（图标右上角）——静息 9px 空心点
+  // （轻量到几乎无感），选中放大为 14px 实心对勾（150ms 过渡）；点击图标/
+  // 角标即勾选
   const renderSelectSlot = (selected: boolean, iconId: AssetIconId, label: string, onToggle: () => void) => (
     <button
       type="button"
@@ -438,20 +374,21 @@ export function AssetList({
       role="checkbox"
       aria-checked={selected}
       aria-label={`选择 ${label}`}
+      title={selected ? '取消选择' : '选择'}
       onClick={onToggle}
       className="relative size-10 shrink-0 cursor-pointer rounded-[14px] outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
+      <AssetIcon id={iconId} />
       <span
         aria-hidden
-        className={`absolute inset-0 flex items-center justify-center transition-all duration-200 ${selected ? 'scale-75 opacity-0' : 'scale-100 opacity-100'}`}
+        data-check-badge
+        className={`absolute -right-px -top-px flex items-center justify-center rounded-full border transition-all duration-150 ${
+          selected
+            ? 'size-3.5 border-primary bg-primary text-primary-foreground shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+            : 'size-[9px] border-muted-foreground/30 bg-card shadow-[0_0_0_1.5px_var(--background)]'
+        }`}
       >
-        <AssetIcon id={iconId} />
-      </span>
-      <span
-        aria-hidden
-        className={`absolute inset-0 flex items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[0_2px_8px_-2px_rgba(0,0,0,0.3)] transition-all duration-200 ${selected ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}`}
-      >
-        <CheckIcon className="size-4" strokeWidth={3} />
+        {selected && <CheckIcon className="size-2" strokeWidth={4} />}
       </span>
     </button>
   );
@@ -503,9 +440,10 @@ export function AssetList({
           </p>
         </div>
         <div className="hidden shrink-0 items-center gap-6 md:flex">
-          <Stat label="Tokens" value={item.memberStats != null ? formatTokens(item.memberStats.totalTokens) : '—'} title="Σ成员会话指标" />
-          <Stat label="Cost" value={item.memberStats != null ? formatCost(item.memberStats.totalCost) : '—'} title="Σ成员会话成本" />
+          <Stat width="w-16" label="Tokens" value={item.memberStats != null ? formatTokens(item.memberStats.totalTokens) : '—'} title="Σ成员会话指标" />
+          <Stat width="w-14" label="Cost" value={item.memberStats != null ? formatCost(item.memberStats.totalCost) : '—'} title="Σ成员会话成本" />
           <Stat
+            width="w-28"
             label="Active / Wall"
             value={`${formatDuration(item.memberStats?.totalActiveMs ?? null)}${wall != null && item.memberStats?.totalActiveMs != null ? ` / ${formatDuration(wall)}` : ''}`}
             title="Σ成员会话活跃 / Run 跨度墙钟"
@@ -543,7 +481,6 @@ export function AssetList({
   const renderSessionRow = (item: SessionAssetItem) => {
     const selected = selectedKeys.has(item.key)
     const uStatus = uploadStatus[item.key] ?? 'idle'
-    const eStatus = exportStatus[item.key] ?? 'idle'
     const fwLabel = sessionFrameworkLabel(item)
     const isProxy = isProxyVersion(item.version)
     return (
@@ -576,9 +513,10 @@ export function AssetList({
           </p>
         </div>
         <div className="hidden shrink-0 items-center gap-6 md:flex">
-          <Stat label="Tokens" value={formatTokens(item.totalTokens)} />
-          <Stat label="Cost" value={formatCost(item.totalCost)} />
+          <Stat width="w-16" label="Tokens" value={formatTokens(item.totalTokens)} />
+          <Stat width="w-14" label="Cost" value={formatCost(item.totalCost)} />
           <Stat
+            width="w-28"
             label="Active / Wall"
             value={`${formatDuration(item.activeMs ?? null)}${item.wallMs != null && item.activeMs != null ? ` / ${formatDuration(item.wallMs)}` : ''}`}
             title="活跃 / 墙钟（斜杠后为墙钟）：间隔 >5min 的空档计非活跃，API 调用进行中计活跃"
@@ -593,19 +531,6 @@ export function AssetList({
             title="Delete session"
           >
             <TrashIcon className="size-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground/70 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
-            onClick={() => handleExport(item)}
-            disabled={eStatus === 'exporting'}
-            title="Export DB"
-          >
-            {eStatus === 'idle' && <DownloadIcon className="size-3.5" />}
-            {eStatus === 'exporting' && <LoaderIcon className="size-3.5 animate-spin" />}
-            {eStatus === 'done' && <CheckCircleIcon className="size-3.5 text-green-600" />}
-            {eStatus === 'error' && <XIcon className="size-3.5 text-red-500" />}
           </Button>
           <Button
             variant="ghost"
@@ -638,7 +563,7 @@ export function AssetList({
               <span className="text-sm font-normal text-muted-foreground ml-1">of {allCount}</span>
             )}
           </h2>
-          {/* 搜索场（iOS 搜索框形态）：Enter 立即，输入防抖自动；进行中右缘转圈 */}
+          {/* 搜索场（圆角搜索框形态）：Enter 立即，输入防抖自动；进行中右缘转圈 */}
           <div className="relative">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
             <input
@@ -663,8 +588,8 @@ export function AssetList({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* 类型行过滤（design 决策 D1：过滤器，非视图切换）：iOS 分段控件，
-              等宽三分 + 滑动指示条（transform 过渡，纯 CSS） */}
+          {/* 类型行过滤（design 决策 D1：过滤器，非视图切换）：分段控件（等宽
+              三分 + 滑动指示条，transform 过渡，纯 CSS） */}
           <div role="group" aria-label="类型过滤" className="relative flex h-8 shrink-0 items-center rounded-full border border-foreground/[0.09] bg-muted/40 p-1" data-kind-seg={kind}>
             <span
               aria-hidden
@@ -853,7 +778,7 @@ export function AssetList({
       {/* 未选中时的引导（对比规则提示）：低调一行，选中后由浮动条接管 */}
       {selectedKeys.size === 0 && (
         <p className="text-center text-[11px] text-muted-foreground/60">
-          点击行图标可多选：2 个会话可对比，任意行可批量删除 <ChevronRightIcon className="inline size-3 align-[-2px]" />
+          勾选行图标角标可多选：2 个会话可对比，任意行可批量删除 <ChevronRightIcon className="inline size-3 align-[-2px]" />
         </p>
       )}
     </div>

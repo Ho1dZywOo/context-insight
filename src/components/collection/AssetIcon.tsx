@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// 资产图标（iOS App 图标范式）：框架 → 渐变色 + glyph 单点声明；彩色方块
+// 资产图标（应用图标范式）：框架 → 渐变色 + glyph 单点声明；彩色方块
 // 即时可扫，取代列表内的类型徽标。调用侧传归一后的 icon id（解析含 -proxy
 // 后缀的 framework、sourceType 兜底等归一逻辑在调用侧）。
 

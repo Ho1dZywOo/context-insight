@@ -206,7 +206,7 @@ export const PERF_CARD_CLS = "rounded-2xl ring-foreground/[0.06] shadow-[0_1px_2
 /** 次级卡外观（与 Overview 次级卡同款：环线、无投影，配 size="sm"） */
 export const PERF_CARD_SM = "rounded-2xl ring-foreground/[0.06]"
 
-// ── 分段控制（iOS 胶囊分段：卡片头内联，选项互斥） ───────────────────────────
+// ── 分段控制（胶囊分段：卡片头内联，选项互斥） ───────────────────────────
 export function PerfSegmented<T extends string>({ value, options, onChange, ariaLabel }: {
   value: T
   options: { value: T; label: string }[]
