@@ -18,6 +18,7 @@ import { ImportDialog } from '@/components/collection/ImportDialog';
 import { LakeSourceView } from '@/components/collection/LakeSourceView';
 import { ImportHistory } from '@/components/ImportHistory';
 import { AppHeader } from '@/components/layout/AppHeader';
+import { HEADER_PILL } from '@/components/layout/header-actions';
 import { BAY_VIEWER_NAME } from '@/lib/branding';
 import { prisma } from '@/lib/db';
 import { queryAssetList, assetSummary } from '@/lib/collection/list-service';
@@ -43,11 +44,11 @@ export default async function Home({
             actions={
               <>
                 <ImportDialog />
-                <Link href="/" className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-4 text-sm font-medium transition-colors hover:bg-accent/50">
+                <Link href="/" className={`${HEADER_PILL} border border-border/70 hover:bg-accent/50`}>
                   <ArrowLeftIcon className="size-4 text-muted-foreground" />
                   本地洞察库
                 </Link>
-                <a href="/settings" className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-4 text-sm font-medium transition-colors hover:bg-accent/50">
+                <a href="/settings" className={`${HEADER_PILL} border border-border/70 hover:bg-accent/50`}>
                   <SettingsIcon className="size-4 text-muted-foreground" />
                   Settings
                 </a>
@@ -91,11 +92,11 @@ export default async function Home({
           actions={
             <>
               <ImportDialog />
-              <Link href="/?src=lake" className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-4 text-sm font-medium transition-colors hover:bg-accent/50">
+              <Link href="/?src=lake" className={`${HEADER_PILL} border border-border/70 hover:bg-accent/50`}>
                 <EyeIcon className="size-4 text-cyan-500" />
                 {BAY_VIEWER_NAME}
               </Link>
-              <a href="/settings" className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-4 text-sm font-medium transition-colors hover:bg-accent/50">
+              <a href="/settings" className={`${HEADER_PILL} border border-border/70 hover:bg-accent/50`}>
                 <SettingsIcon className="size-4 text-muted-foreground" />
                 Settings
               </a>

@@ -665,10 +665,10 @@ export function AssetList({
         <div className="flex items-center gap-2">
           {/* 类型行过滤（design 决策 D1：过滤器，非视图切换）：iOS 分段控件，
               等宽三分 + 滑动指示条（transform 过渡，纯 CSS） */}
-          <div role="group" aria-label="类型过滤" className="relative flex h-8 items-center rounded-full border border-foreground/[0.09] bg-muted/40 p-1" data-kind-seg={kind}>
+          <div role="group" aria-label="类型过滤" className="relative flex h-8 shrink-0 items-center rounded-full border border-foreground/[0.09] bg-muted/40 p-1" data-kind-seg={kind}>
             <span
               aria-hidden
-              className="absolute inset-y-1 left-1 w-[calc((100%-0.5rem)/3)] rounded-full bg-card shadow-[0_1px_3px_rgba(0,0,0,0.1)] ring-1 ring-foreground/[0.06] transition-transform duration-200 ease-out"
+              className="absolute inset-y-1 left-1 w-14 rounded-full bg-card shadow-[0_1px_3px_rgba(0,0,0,0.1)] ring-1 ring-foreground/[0.06] transition-transform duration-200 ease-out"
               style={{ transform: `translateX(${kindIndex * 100}%)` }}
             />
             {KIND_ORDER.map(k => (
@@ -676,7 +676,7 @@ export function AssetList({
                 key={k}
                 type="button"
                 onClick={() => switchKind(k)}
-                className={`relative z-10 flex-1 cursor-pointer rounded-full px-3 py-1 text-xs font-medium transition-colors duration-200 ${kind === k ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                className={`relative z-10 flex h-6 w-14 shrink-0 cursor-pointer items-center justify-center rounded-full whitespace-nowrap text-xs font-medium transition-colors duration-200 ${kind === k ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 {KIND_LABELS[k]}
               </button>

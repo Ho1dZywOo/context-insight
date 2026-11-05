@@ -23,6 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BRAND_NAME, BRAND_SLUG, BRAND_SOURCE_TYPE, BAY_NAME } from "@/lib/branding";
 import { serverLakeConfigStatus, type LakeTokenReason } from "@/lib/lake-token-prompt";
 import { LakeTokenDialog } from "@/components/LakeTokenDialog";
+import { HEADER_PILL } from "@/components/layout/header-actions";
 import { saveImportHistory, type ImportHistoryEntry } from "@/components/ImportHistory";
 import { lakeErrorMessage } from "@/components/ingest/lake-ui";
 import type { DirEntry } from "@/components/ingest/browse";
@@ -901,7 +902,7 @@ export function ImportDialog() {
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetState(); }}>
       <DialogTrigger render={
-        <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground shadow-[0_1px_3px_rgba(0,0,0,0.12)] transition-colors hover:bg-primary/90">
+        <button type="button" className={`${HEADER_PILL} bg-primary text-primary-foreground shadow-[0_1px_3px_rgba(0,0,0,0.12)] hover:bg-primary/90`}>
           <DownloadIcon className="size-4" />
           Import
         </button>
