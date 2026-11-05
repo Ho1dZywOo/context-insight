@@ -15,9 +15,9 @@
 // 默认隐藏（?a / NEXT_PUBLIC_SHOW_ADVANCED_TABS 展开，对齐 session 页先例）。
 
 import { useEffect, useState } from "react";
-import { Loader2Icon } from "lucide-react";
 import { RunMemberPicker } from "@/components/run/RunMemberPicker";
 import { ChatReplayView } from "@/components/observe/ChatReplayView";
+import { LoadState } from "@/components/ui/loading";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
 import type { RunMemberRow } from "@/lib/run/member-rows";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
@@ -100,9 +100,7 @@ export function RunReplayTab({ runId, members, member, onMemberChange, onOpenTur
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {current == null ? (
-          <p className="flex items-center justify-center gap-2 p-6 text-xs text-muted-foreground">
-            <Loader2Icon className="size-3.5 animate-spin" /> 载入回放轮次…
-          </p>
+          <LoadState label="载入回放轮次…" className="min-h-full justify-center" />
         ) : current.turns == null ? (
           <p className="p-6 text-center text-xs text-muted-foreground">回放数据载入失败（稍后重试或检查成员会话数据）。</p>
         ) : current.turns.length === 0 ? (

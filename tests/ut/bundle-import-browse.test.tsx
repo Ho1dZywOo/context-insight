@@ -238,7 +238,7 @@ describe('统一导入向导 · 本地 bundle 通路：目录浏览选包导入'
     // Back 回 input 步；主目录快捷按钮重新进入浏览步
     click(findButtonByText('Back')!)
     await flush()
-    expect(document.body.textContent).toContain('File Path')
+    expect(document.body.textContent).toContain('本地文件')
     click(findButtonByText('主目录')!)
     await flush()
     expect(document.querySelector('input[placeholder*="Filter by file name"]')).not.toBeNull()
@@ -416,8 +416,8 @@ describe('统一导入向导 · 数据仓通路：目录即注册表 + 同格混
     await openLakePhase1()
 
     expect(document.body.textContent).toContain('数据仓读取失败：远端不可达')
-    // 停在 input 步（来源选择器仍在）
-    expect(document.body.textContent).toContain('导入来源')
+    // 停在 input 步（来源选择卡仍在）
+    expect(document.body.textContent).toContain('本地文件')
     expect(lakeCalls).toHaveLength(0)
   })
 })

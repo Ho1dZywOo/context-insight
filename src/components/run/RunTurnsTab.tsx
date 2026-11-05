@@ -17,7 +17,7 @@
 // 选中轮的节点归属由 turn 详情的 taskId 单点解析（深链/跨 tab 同路）；
 // ←/→ 沿「节点 × 成员会话 × 轮次」全序列连续走查，越过节点边界自动加载。
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
 import { MessageSquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,19 +26,22 @@ import { TurnDetailSkeleton } from "@/components/observe/TurnDetailSkeleton";
 import type { FilmstripTurn } from "@/components/observe/TurnFilmstrip";
 import { RunTurnsNodes, STATUS_DOT, type TurnsNode, type TurnsNodeSession, type MemberTurnsState, type TurnsBlockTurn } from "@/components/run/RunTurnsNodes";
 import { RunTurnsRoleFilter, deriveRoleOptions, toggleRoleFilter } from "@/components/run/RunTurnsRoleFilter";
-import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState } from "@/components/run/RunTurnsSearch";
+import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState, type TurnJumpOutcome, type TurnJumpMatch } from "@/components/run/RunTurnsSearch";
 import type { TurnHighlight } from "@/lib/shared/highlight";
 import type { TurnSearchItem } from "@/lib/observe/collectors/search";
+import { parseTurnsQuery } from "@/lib/observe/collectors/turns-query";
 import type { MergedBridgeItem } from "@/lib/observe/collectors/bridges";
 import type { NodeInstance, RunViewModel } from "@/lib/run/view-model";
 import type { SessionRef } from "@/lib/run/model";
 
 /** 首页页容量：小页快出首屏（快路径），剩余走补拉链 */
 const PAGE_SIZE = 200;
-/** 补拉单请求上限：对齐服务端 MAX_PAGE_SIZE 硬顶——超限会被服务端钳制
- *  静默缩页，客户端按同值分块自管 */
-const REST_PAGE_SIZE = 20_000;
-/** 补拉链护栏：200 + 32×20000 轮的跑飞上限（真实单成员到不了） */
+/** 补拉单请求上限：分块预算而非服务端硬顶（MAX_PAGE_SIZE=20000）——大
+ *  session 单请求巨石拉回（数 MB JSON 一次解析 + 一次挂载）是加载期整页
+ *  冻结的主源；小块续拉让解析/渲染成本摊平，装载门期间列表不在场，块间
+ *  只有头部计数轻渲。链护栏覆盖单成员上限 */
+const REST_PAGE_SIZE = 1_000;
+/** 补拉链护栏：200 + 32×1000 轮的跑飞上限（真实单成员到不了） */
 const REST_CHAIN_LIMIT = 32;
 
 /** 详情骨架出场延迟：点击选轮的取数快于该值时不出骨架（保留旧内容直到
@@ -205,12 +208,17 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     let total = totalHint ?? seed?.total ?? 0;
     if (loaded >= total) return;
     restInflightRef.current.add(taskId);
-    setMemberData(prev => {
-      const cur = prev.get(taskId);
-      if (!cur || cur.loading) return prev;
-      const next = new Map(prev);
-      next.set(taskId, { ...cur, loading: true });
-      return next;
+    // 转场更新：装载门期间渲染树极小、转场开销近零；完成翻转（门开 → 全量
+    // 行一次性挂载）与纪元增量（列表在场的大重渲）经转场让出主线程——滚动
+    // 与输入保持可响应
+    startTransition(() => {
+      setMemberData(prev => {
+        const cur = prev.get(taskId);
+        if (!cur || cur.loading) return prev;
+        const next = new Map(prev);
+        next.set(taskId, { ...cur, loading: true });
+        return next;
+      });
     });
     try {
       for (let i = 0; i < REST_CHAIN_LIMIT; i++) {
@@ -225,27 +233,31 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
         const reported = d?.total;
         if (typeof reported === 'number' && Number.isFinite(reported)) total = reported;
         loaded += items.length;
-        setMemberData(prev => {
-          const cur = prev.get(taskId);
-          if (!cur) return prev;
-          // 服务端确定性排序（createdAt asc / id asc）保证 offset 续拉连续；
-          // turnId 去重追加兜底重入重叠（重复条目丢弃，顺序保持）
-          const seen = new Set(cur.turns.map(t => t.turnId));
-          const merged = cur.turns.concat(items.filter(t => !seen.has(t.turnId)));
-          const next = new Map(prev);
-          next.set(taskId, { turns: merged, total, loading: merged.length < total });
-          return next;
+        startTransition(() => {
+          setMemberData(prev => {
+            const cur = prev.get(taskId);
+            if (!cur) return prev;
+            // 服务端确定性排序（createdAt asc / id asc）保证 offset 续拉连续；
+            // turnId 去重追加兜底重入重叠（重复条目丢弃，顺序保持）
+            const seen = new Set(cur.turns.map(t => t.turnId));
+            const merged = cur.turns.concat(items.filter(t => !seen.has(t.turnId)));
+            const next = new Map(prev);
+            next.set(taskId, { turns: merged, total, loading: merged.length < total });
+            return next;
+          });
         });
         if (loaded >= total) break;
       }
     } finally {
       restInflightRef.current.delete(taskId);
-      setMemberData(prev => {
-        const cur = prev.get(taskId);
-        if (!cur?.loading) return prev;
-        const next = new Map(prev);
-        next.set(taskId, { ...cur, loading: false });
-        return next;
+      startTransition(() => {
+        setMemberData(prev => {
+          const cur = prev.get(taskId);
+          if (!cur?.loading) return prev;
+          const next = new Map(prev);
+          next.set(taskId, { ...cur, loading: false });
+          return next;
+        });
       });
     }
   }, [runId]);
@@ -264,10 +276,12 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
           return;
         }
         const total = Number.isFinite(d!.total) ? d!.total : items.length;
-        setMemberData(prev => {
-          const next = new Map(prev);
-          next.set(taskId, { turns: items, total, loading: items.length < total });
-          return next;
+        startTransition(() => {
+          setMemberData(prev => {
+            const next = new Map(prev);
+            next.set(taskId, { turns: items, total, loading: items.length < total });
+            return next;
+          });
         });
         // 自动拉齐：首页未覆盖全集即从已载边界补齐剩余
         if (items.length < total) void fetchMemberRest(taskId, items.length, total);
@@ -328,6 +342,9 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     if (search) return;
     const row = listRef.current?.querySelector(`[data-turn-row="${t}"]`);
     if (!row) return;
+    // 分帧填充隐藏期：行已在 DOM 但不可视——意图保留，就绪交换后（卡片
+    // 卸载触发 observer）重试落地
+    if (row.closest("[data-fill-hidden]")) return;
     pendingRevealRef.current = null;
     revealIntoView(listRef.current, row);
   }, [search]);
@@ -558,6 +575,17 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     // search 在依赖里：退出搜索（节点列表回位）时挂起的揭示意图落地
   }, [turnId, details, memberData, effectiveExpanded, search, revealPending]);
 
+  // 分帧填充期间行渐次落位（memberData/details 不变，上述 effect 不会重跑）
+  // ——监听列表 DOM 子树变化重试挂起的揭示意图：目标行落在哪一帧就滚到
+  // 哪一帧（深链 #N / 跨 tab 大 run 直达不因填充窗口漏滚）
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof MutationObserver === "undefined") return;
+    const mo = new MutationObserver(() => revealPending());
+    mo.observe(list, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [revealPending]);
+
   // ── 跨成员搜索（Trace 退役，搜索归 Turns——命中索引驻留左列）──
   // 命中集是排查工作集：选中命中打开 player 后列表不消失；退出（✕ / Esc /
   // 点 Run 轨 / 改词重搜）才回节点索引。选中轮的成员分页与节点展开照常由
@@ -572,17 +600,25 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     [bridges],
   );
   // 命中过滤：键盘走查（↑↓/Enter）与过滤后列表对齐；改词重搜复位过滤
-  const { filter: hitFilter, setFilter: setHitFilter, visible: visibleHits, sourceOptions, thinkingOption, toolOptions } =
+  const { filter: hitFilter, toggle: toggleHitFilter, reset: resetHitFilter, visible: visibleHits, anyActive: hitFilterActive, sourceOptions, thinkingOption, toolOptions } =
     useTurnsHitsFilter(search?.items ?? EMPTY_SEARCH_ITEMS, bridgeResponseTurnIds);
+
+  // 过滤/改词收窄后活跃命中序号钳在界内（走查位置就近保持，不硬复位）——
+  // 渲染期 prop 变化模式（与详情自动展开同门，避免 effect 内同步 setState）
+  const [prevHitsLen, setPrevHitsLen] = useState(visibleHits.length);
+  if (prevHitsLen !== visibleHits.length) {
+    setPrevHitsLen(visibleHits.length);
+    setActiveHitIdx(i => Math.min(i, Math.max(visibleHits.length - 1, 0)));
+  }
 
   const runSearch = useCallback(async (kw: string) => {
     setSearch({ keyword: kw, loading: true, items: [], total: 0 });
     setActiveHitIdx(0);
     setVisitedHits(new Set());
-    setHitFilter(null);
+    resetHitFilter();
     try {
       const res = await fetch(
-        `/api/observe/run/${encodeURIComponent(runId)}/turns/search?keyword=${encodeURIComponent(kw)}&limit=50`,
+        `/api/observe/run/${encodeURIComponent(runId)}/turns/search?keyword=${encodeURIComponent(kw)}`,
       );
       const d = res.ok ? await res.json() : null;
       // 关键词已换（连续改词重搜）则丢弃迟到响应
@@ -594,16 +630,7 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
     } catch {
       setSearch(prev => (prev ? { ...prev, loading: false } : prev));
     }
-  }, [runId, setHitFilter]);
-
-  /** 过滤切换：活跃命中序号随列表收窄复位 */
-  const changeHitFilter = useCallback(
-    (key: string | null) => {
-      setHitFilter(key);
-      setActiveHitIdx(0);
-    },
-    [setHitFilter],
-  );
+  }, [runId, resetHitFilter]);
 
   const exitSearch = useCallback(() => {
     setSearch(null);
@@ -620,22 +647,38 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
         next.add(item.turnId);
         return next;
       });
-      setHitHighlight({ keyword: search?.keyword ?? "", matchField: item.matchField, toolName: item.toolName });
+      setHitHighlight({
+        keyword: search?.keyword ?? "",
+        terms: parseTurnsQuery(search?.keyword ?? "").positiveTerms,
+        matchField: item.matchField,
+        toolName: item.toolName,
+      });
       handleSelectTurn(item.turnId);
     },
     [search, handleSelectTurn],
   );
 
   /** #N 直达：与胶片轨同基准——当前会话已加载轮内按序号定位 */
+  // ── #N 轮次直达（run 级解析）──
+  // 真相源在服务端（by-index 端点跨成员定位该轮次号）：客户端已加载分页
+  // 是窗口不是全集，未选中会话/加载窗口外的轮次在客户端解析不出（#25 误
+  // 报「未找到」的根因）。此处只负责解析（候选集 + 当前会话归因）；呈现与
+  // 选择归胶囊（单候选直接跳，多候选下钻），跳转动作走既有选中管线（详情
+  // 归属 → ensureMemberTurns → 揭示），目标行在加载窗口外时由补拉拉齐后落地
   const jumpTurnIndex = useCallback(
-    (idx: number) => {
-      if (!ownerTaskId) return false;
-      const t = [...(memberData.get(ownerTaskId)?.turns ?? [])].find(x => x.turnIndex === idx);
-      if (!t) return false;
-      handleSelectTurn(t.turnId);
-      return true;
+    async (idx: number): Promise<TurnJumpOutcome> => {
+      try {
+        const res = await fetch(`/api/observe/run/${encodeURIComponent(runId)}/turns/by-index?index=${idx}`);
+        if (!res.ok) return { found: false };
+        const d = await res.json();
+        const items: TurnJumpMatch[] = Array.isArray(d?.items) ? d.items : [];
+        if (items.length === 0) return { found: false };
+        return { found: true, matches: items, currentMemberTaskId: ownerTaskId };
+      } catch {
+        return { found: false };
+      }
     },
-    [ownerTaskId, memberData, handleSelectTurn],
+    [runId, ownerTaskId],
   );
 
   /** Run 轨点击：搜索驻留时先退出（命中索引让位），揭示意图滞后到列表回位 */
@@ -713,6 +756,7 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
           onSearch={runSearch}
           onExit={exitSearch}
           onJumpIndex={jumpTurnIndex}
+          onJumpTurn={handleSelectTurn}
           onStepHit={dir =>
             setActiveHitIdx(i => {
               const max = Math.max(visibleHits.length - 1, 0);
@@ -767,7 +811,9 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
               onSelect={openHit}
               onExit={exitSearch}
               filter={hitFilter}
-              onFilterChange={changeHitFilter}
+              onToggle={toggleHitFilter}
+              onReset={resetHitFilter}
+              anyActive={hitFilterActive}
               sourceOptions={sourceOptions}
               thinkingOption={thinkingOption}
               toolOptions={toolOptions}

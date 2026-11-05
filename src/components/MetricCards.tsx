@@ -1,22 +1,18 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// This program is free software; you can redistribute it and/or modify it under the terms of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// Please refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
 interface MetricCardsProps {
   totalSessions: number;
-  /** 已导入 run 数（统一工作台首卡并列展示；0/未传 = 纯会话形态） */
+  /** 已导入 run 数（首卡资产生命并列展示；0/未传 = 纯会话形态） */
   runCount?: number;
-  /** join 到库的 run 成员会话数——Tokens/Cost/AvgDuration 为系统总口径
-   *  （独立会话 + run 成员），副行说明成员规模 */
-  runMemberSessions?: number;
   totalTokens: number;
   totalCost: number;
   /** Σ全量时长（独立会话 + run 成员）——总量口径，均值无信息量（用户决策） */
@@ -41,59 +37,47 @@ export function formatLatency(ms: number): string {
   return `${ms}ms`;
 }
 
-export function MetricCards({ totalSessions, runCount, runMemberSessions, totalTokens, totalCost, totalDurationMs, totalErrors }: MetricCardsProps) {
+// 总览条（高级玻璃横幅）：5 格 hairline 分隔一行读完，大号 tabular 数字 +
+// 小字距标签；玻璃底 + 双层柔影（环境光下透出深度）；逐格错峰入场（纯 CSS
+// 延迟链）。取值元素保持 p.text-2xl ×5（顺序 Assets/Tokens/Cost/Duration/
+// Errors——IT 契约）
+function Metric({ label, value, error, delay, children }: { label: string; value: string; error?: boolean; delay?: string; children?: React.ReactNode }) {
   return (
-    <div className={cn("grid gap-4", totalErrors !== undefined ? "grid-cols-5" : "grid-cols-4")}>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Sessions</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{totalSessions}</p>
-          {runCount != null && runCount > 0 && (
-            <p className="text-xs text-muted-foreground mt-0.5">
-              + {runCount} <Link href="/?kind=run" className="hover:underline">Runs</Link>
-              {runMemberSessions != null && runMemberSessions > 0 && ` · ${runMemberSessions} member sessions`}
-            </p>
-          )}
-        </CardContent>
-      </Card>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Total Tokens</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{formatTokens(totalTokens)}</p>
-        </CardContent>
-      </Card>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Total Cost</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{formatCost(totalCost)}</p>
-        </CardContent>
-      </Card>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Total Duration</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{formatLatency(totalDurationMs)}</p>
-        </CardContent>
-      </Card>
-      {totalErrors !== undefined && (
-        <Card size="sm" className={totalErrors > 0 ? "border-red-200 dark:border-red-500/30" : ""}>
-          <CardHeader>
-            <CardTitle className={totalErrors > 0 ? "text-red-600 dark:text-red-400" : ""}>Errors</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className={`text-2xl font-bold ${totalErrors > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
-              {totalErrors}
-            </p>
-          </CardContent>
-        </Card>
-      )}
+    <div className={cn('flex flex-col gap-1 px-5 py-3.5 animate-in fade-in slide-in-from-bottom-2 duration-300', delay)}>
+      <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <p className={cn('text-2xl font-bold tabular-nums tracking-tight', error ? 'text-red-600 dark:text-red-400' : 'text-foreground')}>{value}</p>
+        {children}
+      </div>
     </div>
+  );
+}
+
+export function MetricCards({ totalSessions, runCount, totalTokens, totalCost, totalDurationMs, totalErrors }: MetricCardsProps) {
+  const runs = runCount ?? 0;
+  return (
+    <section
+      data-metric-strip
+      className="rounded-2xl border border-border/50 bg-card/60 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_20px_48px_-24px_rgba(0,0,0,0.25)] backdrop-blur-2xl backdrop-saturate-150"
+    >
+      <div className={cn('grid grid-cols-2 sm:grid-cols-3', totalErrors !== undefined ? 'lg:grid-cols-5' : 'lg:grid-cols-4', 'lg:divide-x lg:divide-border/40')}>
+        {/* 首卡 = 资产总量（独立会话 + run），拆分计数与大数字同排基线对齐
+            （压板块高度）；run 的成员会话是内部规模，不在首页计数口径 */}
+        <Metric label="Assets" value={String(totalSessions + runs)} delay="delay-0">
+          <span className="text-xs text-muted-foreground">
+            {totalSessions} <Link href="/?kind=session" className="hover:underline">{totalSessions === 1 ? 'Session' : 'Sessions'}</Link>
+            {runs > 0 && (
+              <> · {runs} <Link href="/?kind=run" className="hover:underline">{runs === 1 ? 'Run' : 'Runs'}</Link></>
+            )}
+          </span>
+        </Metric>
+        <Metric label="Total Tokens" value={formatTokens(totalTokens)} delay="delay-75" />
+        <Metric label="Total Cost" value={formatCost(totalCost)} delay="delay-100" />
+        <Metric label="Total Duration" value={formatLatency(totalDurationMs)} delay="delay-150" />
+        {totalErrors !== undefined && (
+          <Metric label="Errors" value={String(totalErrors)} error={totalErrors > 0} delay="delay-200" />
+        )}
+      </div>
+    </section>
   );
 }

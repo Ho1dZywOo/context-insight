@@ -7,16 +7,18 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, type ReactNode } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Card, CardContent } from "@/components/ui/card"
-import { ArrowLeftIcon } from "lucide-react"
+import { ArrowLeftIcon, SparklesIcon, DatabaseIcon, ScrollTextIcon, type LucideIcon } from "lucide-react"
 import { BRAND_NAME, BAY_NAME } from "@/lib/branding"
 import { VERSION_DISPLAY } from "@/lib/version"
 import { AIProviderConfigPanel } from "@/components/observe/AIProviderConfigPanel"
+import { AppShell } from "@/components/layout/AppShell"
+import { AppHeader } from "@/components/layout/AppHeader"
+import { HEADER_PILL_TINTED } from "@/components/layout/header-actions"
+import { cn } from "@/lib/utils"
 import {
   loadLakeConfig,
   clearLakeConfig,
@@ -369,40 +371,53 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <main className="flex w-full max-w-3xl flex-col gap-6 px-6 py-8 mx-auto">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">设置</h1>
-            <span className="text-xs text-muted-foreground">{BRAND_NAME} {VERSION_DISPLAY}</span>
+    <AppShell
+      active="settings"
+      toolbar={
+        <AppHeader
+          title="设置"
+          actions={
+            <Link href="/" className={`${HEADER_PILL_TINTED} lg:hidden`}>
+              <ArrowLeftIcon className="size-4 text-muted-foreground" />
+              返回
+            </Link>
+          }
+        />
+      }
+      statusBar={
+        <footer className="flex h-7 shrink-0 items-center justify-between gap-4 border-t border-border/40 bg-card/30 px-4 text-[11px] text-muted-foreground">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex items-center gap-1.5 whitespace-nowrap">
+              <span className="size-1.5 rounded-full bg-emerald-500" />
+              设置 · Local
+            </span>
+            <span className="hidden text-muted-foreground/60 sm:inline">{BRAND_NAME}</span>
           </div>
-          <Link href="/" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium hover:bg-accent/30 transition-colors">
-            <ArrowLeftIcon className="size-4" />
-            返回
-          </Link>
-        </div>
+          <span className="whitespace-nowrap text-muted-foreground/60">{VERSION_DISPLAY}</span>
+        </footer>
+      }
+    >
+      <main className="mx-auto w-full max-w-4xl px-6 py-12 lg:px-8">
+        <div className="space-y-10">
+          <section className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <SectionHeader
+              icon={SparklesIcon}
+              title="LLM API 配置"
+              desc="用于 Audit 一键审计报告与 AI workflow 阶段划分。仅支持 OpenAI 兼容端点（如 /compatible-mode/v1）。配置存于浏览器本地，两 tab 共享。"
+            />
+            <SectionCard className="p-6">
+              <AIProviderConfigPanel compact />
+            </SectionCard>
+          </section>
 
-        <div className="space-y-2">
-          <h2 className="text-sm font-semibold">LLM API 配置</h2>
-          <p className="text-xs text-muted-foreground">
-            用于 Audit 一键审计报告与 AI workflow 阶段划分。仅支持 OpenAI 兼容端点（如 /compatible-mode/v1）。配置存于浏览器本地，两 tab 共享。
-          </p>
-        </div>
-        <AIProviderConfigPanel compact />
-
-        <div className="h-px bg-border" />
-
-        <div className="space-y-2">
-          <h2 className="text-sm font-semibold">{BAY_NAME} 数据之湖</h2>
-          <p className="text-xs text-muted-foreground">
-            会话归档仓的连接配置：地址、认证（推送凭据）、分支与目录。留空使用默认值；配置后列表 / 导入 / 上传均按此远端执行。上传需要推送凭据（保存后 cpx 命令行同机可用）。
-          </p>
-        </div>
-        <Card>
-          <CardContent className="py-3 space-y-3">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">地址</span>
+          <section className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300 delay-75">
+            <SectionHeader
+              icon={DatabaseIcon}
+              title={`${BAY_NAME} 数据之湖`}
+              desc="会话归档仓的连接配置：地址、认证（推送凭据）、分支与目录。留空使用默认值；配置后列表 / 导入 / 上传均按此远端执行。上传需要推送凭据（保存后 cpx 命令行同机可用）。"
+            />
+            <SectionCard className="space-y-5 p-6">
+              <Field label="地址">
                 <Input
                   value={address}
                   onChange={(e) => {
@@ -411,102 +426,99 @@ export default function SettingsPage() {
                     if (browseOpen) closeBrowse()
                     if (branchOpen) closeBranch()
                   }}
-                  className="h-7 text-xs flex-1"
+                  className="h-9 text-xs"
                   placeholder="https://example.com/your-lake.git"
                 />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">认证方式</span>
-                <div className="flex items-center gap-1">
-                  <Button size="sm" variant={authMode === "token" ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!hydrated} onClick={() => { setAuthMode("token"); dirty() }}>令牌</Button>
-                  <Button size="sm" variant={authMode === "password" ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!hydrated} onClick={() => { setAuthMode("password"); dirty() }}>账户密码</Button>
-                  <Button size="sm" variant={authMode === "none" ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!hydrated} onClick={() => { setAuthMode("none"); dirty() }}>匿名</Button>
-                </div>
-              </div>
+              </Field>
+              <Field label="认证方式">
+                <Segmented
+                  value={authMode}
+                  onChange={(v) => { setAuthMode(v); dirty() }}
+                  disabled={!hydrated}
+                  options={[
+                    { value: "token", label: "令牌" },
+                    { value: "password", label: "账户密码" },
+                    { value: "none", label: "匿名" },
+                  ]}
+                />
+              </Field>
               {authMode === "password" ? (
-                <>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground w-16 shrink-0">账户</span>
-                    <Input value={account} onChange={(e) => { setAccount(e.target.value); dirty() }} className="h-7 text-xs" placeholder="用户名" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground w-16 shrink-0">密码</span>
-                    <Input type="password" value={password} onChange={(e) => { setPassword(e.target.value); dirty() }} className="h-7 text-xs" placeholder="••••••" />
-                  </div>
-                  <p className="text-xs text-muted-foreground pl-[72px]">注意：gitcode 已移除 git 密码认证（仅支持私人访问令牌），密码方式仅适用于仍支持密码认证的远端。</p>
-                </>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground w-16 shrink-0">令牌</span>
-                  <Input type="password" value={token} onChange={(e) => { setToken(e.target.value); dirty() }} className="h-7 text-xs" placeholder={authStatus ? `已配置 ${authStatus.tokenMasked}（输入新值可更换）` : "推送凭据（作为 git 凭据，账户可留空）"} />
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="账户">
+                    <Input value={account} onChange={(e) => { setAccount(e.target.value); dirty() }} className="h-9 text-xs" placeholder="用户名" />
+                  </Field>
+                  <Field label="密码" hint="gitcode 已移除 git 密码认证（仅支持私人访问令牌），密码方式仅适用于仍支持密码认证的远端。">
+                    <Input type="password" value={password} onChange={(e) => { setPassword(e.target.value); dirty() }} className="h-9 text-xs" placeholder="••••••" />
+                  </Field>
                 </div>
+              ) : (
+                <Field label="令牌">
+                  <Input type="password" value={token} onChange={(e) => { setToken(e.target.value); dirty() }} className="h-9 text-xs" placeholder={authStatus ? `已配置 ${authStatus.tokenMasked}（输入新值可更换）` : "推送凭据（作为 git 凭据，账户可留空）"} />
+                </Field>
               )}
               {authStatus && (
-                <p className="text-xs text-green-700 pl-[72px]">
+                <p className="text-xs text-emerald-700 dark:text-emerald-400">
                   ✓ 服务端已配置：{authStatus.username} / {authStatus.tokenMasked}{authStatus.verifiedAt ? `（连接验证于 ${new Date(authStatus.verifiedAt).toLocaleString()}）` : ""}
                 </p>
               )}
-              {authHint && <p className="text-xs text-muted-foreground pl-[72px]">{authHint}</p>}
-              <div className="flex items-center gap-2">
-                <span className="w-16 shrink-0" />
-                <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={handleTest} disabled={testing || !hydrated}>
-                  {testing ? "测试中…" : "测试连接"}
-                </Button>
-                {testResult && (
-                  <span className={`text-xs break-all ${testResult.success ? "text-green-600" : "text-red-600"}`}>
-                    {testResult.success ? "✓ " : "✗ "}{testResult.message}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">分支</span>
-                <Input value={branch} onChange={(e) => { setBranch(e.target.value); dirty(); if (browseOpen) closeBrowse() }} className="h-7 text-xs" placeholder="main（默认）" />
-                <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={handlePickBranch} disabled={!hydrated}>选择</Button>
+              {authHint && <p className="text-xs text-muted-foreground">{authHint}</p>}
+              <Field label="连接">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button size="sm" variant="outline" className="h-9 px-4 text-xs" onClick={handleTest} disabled={testing || !hydrated}>
+                    {testing ? "测试中…" : "测试连接"}
+                  </Button>
+                  {testResult && (
+                    <span className={`min-w-0 text-xs break-all ${testResult.success ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                      {testResult.success ? "✓ " : "✗ "}{testResult.message}
+                    </span>
+                  )}
+                </div>
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="分支">
+                  <div className="flex gap-2">
+                    <Input value={branch} onChange={(e) => { setBranch(e.target.value); dirty(); if (browseOpen) closeBrowse() }} className="h-9 text-xs flex-1" placeholder="main（默认）" />
+                    <Button size="sm" variant="outline" className="h-9 text-xs shrink-0" onClick={handlePickBranch} disabled={!hydrated}>选择</Button>
+                  </div>
+                </Field>
+                <Field label="目录" hint="上传缺省目录：留空 = 仓库根（<sid>/ 根级），可点「浏览」从仓库中选择。">
+                  <div className="flex gap-2">
+                    <Input value={directory} onChange={(e) => { setDirectory(e.target.value); dirty() }} className="h-9 text-xs flex-1" placeholder="留空 = 根目录" />
+                    <Button size="sm" variant="outline" className="h-9 text-xs shrink-0" onClick={handleBrowse} disabled={!hydrated}>浏览</Button>
+                  </div>
+                </Field>
               </div>
               {branchOpen && (
-                <div className="ml-[72px] rounded-md border p-2 space-y-2">
+                <div className="rounded-xl border border-border/50 bg-foreground/[0.02] p-4 space-y-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium">选择分支</span>
-                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={closeBranch}>关闭</Button>
+                    <span className="min-w-0 truncate text-xs font-medium">选择分支</span>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs shrink-0" onClick={closeBranch}>关闭</Button>
                   </div>
                   {branchLoading && <p className="text-xs text-muted-foreground">加载中…</p>}
                   {branchError && <p className="text-xs text-red-600 break-all">{branchError}</p>}
                   {!branchLoading && !branchError && branchList.length === 0 && <p className="text-xs text-muted-foreground">远端没有可列出的分支</p>}
-                  <div className="flex flex-wrap gap-1">
-                    <Button size="sm" variant="secondary" className="h-6 px-2 text-xs" onClick={() => { setBranch("main"); dirty(); closeBranch() }}>main（默认）</Button>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button size="sm" variant="secondary" className="h-6 px-2.5 text-xs" onClick={() => { setBranch("main"); dirty(); closeBranch() }}>main（默认）</Button>
                     {branchList.map(b => (
                       <Button
                         key={b}
                         size="sm"
                         variant={b === branch.trim() ? "default" : "secondary"}
-                        className="h-6 px-2 text-xs"
+                        className="h-6 px-2.5 text-xs"
                         onClick={() => { setBranch(b); dirty(); closeBranch(); if (browseOpen) closeBrowse() }}
                       >
                         {b}
                       </Button>
                     ))}
                   </div>
-                  <p className="text-xs text-muted-foreground">仅列出受支持的分支名（不含 <code>/</code>）。</p>
+                  <p className="text-[11px] text-muted-foreground/70">仅列出受支持的分支名（不含 <code>/</code>）。</p>
                 </div>
               )}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">目录</span>
-                <Input value={directory} onChange={(e) => { setDirectory(e.target.value); dirty() }} className="h-7 text-xs" placeholder="留空 = 根目录" />
-                <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={handleBrowse} disabled={!hydrated}>浏览</Button>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">LFS</span>
-                <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-                  <Checkbox checked={lfs} onCheckedChange={(v) => { setLfs(v === true); dirty() }} />
-                  <span>启用 LFS 存储（<code>*.jsonl.7z</code> / <code>*.jsonl.gz</code> 走 LFS 指针出仓）</span>
-                </label>
-              </div>
-              <p className="text-xs text-muted-foreground ml-[72px]">部分平台（如 GitCode / AtomGit）不向普通代码仓提供 LFS——上传报「project lfs not enabled」时关闭本开关，改走普通 git 存储（会话文件压缩后仅数十 KB 级）。</p>
               {browseOpen && (
-                <div className="ml-[72px] rounded-md border p-2 space-y-2">
+                <div className="rounded-xl border border-border/50 bg-foreground/[0.02] p-4 space-y-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium">选择目录 <span className="text-muted-foreground">@{branch.trim() || "main"} /{browsePrefix}</span></span>
-                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={closeBrowse}>关闭</Button>
+                    <span className="min-w-0 truncate text-xs font-medium">选择目录 <span className="text-muted-foreground">@{branch.trim() || "main"} /{browsePrefix}</span></span>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs shrink-0" onClick={closeBrowse}>关闭</Button>
                   </div>
                   {browsePrefix && (
                     <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => fetchDirs(browsePrefix.split("/").slice(0, -1).join("/"))}>← 上一级</Button>
@@ -514,9 +526,9 @@ export default function SettingsPage() {
                   {browseLoading && <p className="text-xs text-muted-foreground">加载中…（首次浏览需拉取仓库元数据）</p>}
                   {browseError && <p className="text-xs text-red-600 break-all">{browseError}</p>}
                   {!browseLoading && !browseError && browseDirs.length === 0 && <p className="text-xs text-muted-foreground">该目录下没有子目录</p>}
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex flex-wrap gap-1.5">
                     {browseDirs.map(d => (
-                      <Button key={d} size="sm" variant="secondary" className="h-6 px-2 text-xs" onClick={() => fetchDirs(d)}>
+                      <Button key={d} size="sm" variant="secondary" className="h-6 px-2.5 text-xs" onClick={() => fetchDirs(d)}>
                         {d.slice(browsePrefix ? browsePrefix.length + 1 : 0)}/
                       </Button>
                     ))}
@@ -524,7 +536,7 @@ export default function SettingsPage() {
                   <div className="flex items-center gap-2">
                     <Button
                       size="sm"
-                      className="h-6 px-2 text-xs"
+                      className="h-6 px-2.5 text-xs"
                       onClick={() => { setDirectory(browsePrefix); dirty(); closeBrowse() }}
                     >
                       选定 /{browsePrefix || ""}
@@ -537,88 +549,169 @@ export default function SettingsPage() {
                   </div>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground pl-[72px]">上传缺省目录（无范式目录时的落盘位）：留空 = 仓库根（<code>&lt;sid&gt;/</code> 根级），可点「浏览」从仓库中选择。</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button size="sm" className="text-xs" onClick={handleSave} disabled={!hydrated || !address.trim()}>
-                保存配置
-              </Button>
-              <Button size="sm" variant="ghost" className="text-xs" onClick={handleClear} disabled={!hydrated}>
-                恢复默认值
-              </Button>
-              {savedFlag && <span className="text-xs text-green-600">✓ 已保存</span>}
-            </div>
-              <p className="text-xs text-muted-foreground">凭据保存在本机服务端（~/.context-insight/lake-auth.json，权限 0600），cpx 与 insight 上传/下载共用同一份；地址/分支/目录偏好同时存浏览器本地与服务端（~/.context-insight/lake-config.json）——viewer 与跨浏览器共享同一配置。数据仓默认需凭据推送（需仓主将你的账号加为协作者）。</p>
-          </CardContent>
-        </Card>
+              <div className="flex items-center justify-between gap-6 border-t border-border/40 pt-5">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-foreground/80">启用 LFS 存储</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/70">
+                    <code>*.jsonl.7z</code> / <code>*.jsonl.gz</code> 走 LFS 指针出仓。部分平台（如 GitCode / AtomGit）不向普通代码仓提供 LFS——上传报「project lfs not enabled」时关闭本开关，改走普通 git 存储（会话文件压缩后仅数十 KB 级）。
+                  </p>
+                </div>
+                <Switch checked={lfs} onChange={(v) => { setLfs(v); dirty() }} />
+              </div>
+              <div className="flex items-center gap-2 border-t border-border/40 pt-5">
+                <Button size="sm" className="h-9 px-4 text-xs" onClick={handleSave} disabled={!hydrated || !address.trim()}>
+                  保存配置
+                </Button>
+                <Button size="sm" variant="ghost" className="h-9 text-xs" onClick={handleClear} disabled={!hydrated}>
+                  恢复默认值
+                </Button>
+                {savedFlag && <span className="text-xs text-emerald-600 dark:text-emerald-400">✓ 已保存</span>}
+              </div>
+              <p className="border-t border-border/40 pt-4 text-[11px] leading-relaxed text-muted-foreground/70">
+                凭据保存在本机服务端（~/.context-insight/lake-auth.json，权限 0600），cpx 与 insight 上传/下载共用同一份；地址/分支/目录偏好同时存浏览器本地与服务端（~/.context-insight/lake-config.json）——viewer 与跨浏览器共享同一配置。数据仓默认需凭据推送（需仓主将你的账号加为协作者）。
+              </p>
+            </SectionCard>
+          </section>
 
-        <div className="h-px bg-border" />
-
-        <div className="space-y-2">
-          <h2 className="text-sm font-semibold">运行日志</h2>
-          <p className="text-xs text-muted-foreground">
-            服务端运行过程日志（导入管线 / 数据之湖同步 / API 错误），按天滚动落盘于 ~/.context-insight/logs/ 并同时输出到启动终端。保存后即时生效，无需重启；环境变量（CONTEXT_LOG*）优先于此处设置。
-          </p>
-        </div>
-        <Card>
-          <CardContent className="py-3 space-y-3">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">启用日志</span>
-                <div className="flex items-center gap-1">
-                  <Button size="sm" variant={logEnabled ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!logHydrated} onClick={() => { setLogEnabled(true); logDirty() }}>开</Button>
-                  <Button size="sm" variant={!logEnabled ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!logHydrated} onClick={() => { setLogEnabled(false); logDirty() }}>关</Button>
+          <section className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300 delay-150">
+            <SectionHeader
+              icon={ScrollTextIcon}
+              title="运行日志"
+              desc="服务端运行过程日志（导入管线 / 数据之湖同步 / API 错误），按天滚动落盘于 ~/.context-insight/logs/ 并同时输出到启动终端。保存后即时生效，无需重启；环境变量（CONTEXT_LOG*）优先于此处设置。"
+            />
+            <SectionCard className="space-y-4 p-6">
+              <div className="divide-y divide-border/40">
+                <div className="flex items-center justify-between gap-6 py-3.5">
+                  <span className="text-xs font-medium text-foreground/80">启用日志</span>
+                  <Switch checked={logEnabled} onChange={(v) => { setLogEnabled(v); logDirty() }} disabled={!logHydrated} />
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">日志级别</span>
-                <div className="flex items-center gap-1">
-                  {(["debug", "info", "warn", "error"] as const).map(lv => (
-                    <Button key={lv} size="sm" variant={logLevel === lv ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!logHydrated} onClick={() => { setLogLevel(lv); logDirty() }}>
-                      {lv === "debug" ? "Debug" : lv === "info" ? "Info" : lv === "warn" ? "Warn" : "Error"}
-                    </Button>
-                  ))}
+                <div className="flex items-center justify-between gap-6 py-3.5">
+                  <span className="text-xs font-medium text-foreground/80">日志级别</span>
+                  <Segmented
+                    value={logLevel}
+                    onChange={(v) => { setLogLevel(v); logDirty() }}
+                    disabled={!logHydrated}
+                    options={[
+                      { value: "debug", label: "Debug" },
+                      { value: "info", label: "Info" },
+                      { value: "warn", label: "Warn" },
+                      { value: "error", label: "Error" },
+                    ]}
+                  />
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">写入文件</span>
-                <div className="flex items-center gap-1">
-                  <Button size="sm" variant={logFile ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!logHydrated} onClick={() => { setLogFile(true); logDirty() }}>开</Button>
-                  <Button size="sm" variant={!logFile ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!logHydrated} onClick={() => { setLogFile(false); logDirty() }}>关</Button>
+                <div className="flex items-center justify-between gap-6 py-3.5">
+                  <span className="text-xs font-medium text-foreground/80">写入文件</span>
+                  <Switch checked={logFile} onChange={(v) => { setLogFile(v); logDirty() }} disabled={!logHydrated} />
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">输出到屏幕</span>
-                <div className="flex items-center gap-1">
-                  <Button size="sm" variant={logStdout ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!logHydrated} onClick={() => { setLogStdout(true); logDirty() }}>开</Button>
-                  <Button size="sm" variant={!logStdout ? "default" : "outline"} className="h-6 px-2 text-xs" disabled={!logHydrated} onClick={() => { setLogStdout(false); logDirty() }}>关</Button>
+                <div className="flex items-center justify-between gap-6 py-3.5">
+                  <span className="text-xs font-medium text-foreground/80">输出到屏幕</span>
+                  <Switch checked={logStdout} onChange={(v) => { setLogStdout(v); logDirty() }} disabled={!logHydrated} />
                 </div>
               </div>
               {logDir && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground w-16 shrink-0">日志位置</span>
-                  <code className="text-xs text-muted-foreground break-all select-text">{logDir}/insight-&lt;日期&gt;.log</code>
+                  <span className="text-xs text-muted-foreground shrink-0">日志位置</span>
+                  <code className="min-w-0 text-xs text-muted-foreground break-all select-text">{logDir}/insight-&lt;日期&gt;.log</code>
                 </div>
               )}
               {logEnvOverrides.length > 0 && (
-                <p className="text-xs text-red-600 pl-[72px]">环境变量 {logEnvOverrides.join("、")} 正在覆盖此处设置（改动部署环境变量后本页设置才会生效）。</p>
+                <p className="text-xs text-red-600">环境变量 {logEnvOverrides.join("、")} 正在覆盖此处设置（改动部署环境变量后本页设置才会生效）。</p>
               )}
-              <p className="text-xs text-muted-foreground pl-[72px]">也可用环境变量配置（优先于此页）：<code>CONTEXT_LOG</code> 总开关（0/off 关）、<code>CONTEXT_LOG_LEVEL</code> 级别、<code>CONTEXT_LOG_FILE</code> 写文件、<code>CONTEXT_LOG_STDOUT</code> 输出到屏幕、<code>CONTEXT_LOG_DIR</code> 日志目录——置 0/off 即关对应通道。</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button size="sm" className="text-xs" onClick={handleLogSave} disabled={!logHydrated}>
-                保存配置
-              </Button>
-              <Button size="sm" variant="ghost" className="text-xs" onClick={handleLogClear} disabled={!logHydrated}>
-                恢复默认值
-              </Button>
-              {logSavedFlag && <span className="text-xs text-green-600">✓ 已保存</span>}
-              {logHint && <span className="text-xs text-red-600 break-all">{logHint}</span>}
-            </div>
-            <p className="text-xs text-muted-foreground">配置存于本机服务端（~/.context-insight/logger-config.json）；默认开（Info 级、文件与终端双输出）。</p>
-          </CardContent>
-        </Card>
+              <div className="flex flex-wrap items-center gap-2 border-t border-border/40 pt-5">
+                <Button size="sm" className="h-9 px-4 text-xs" onClick={handleLogSave} disabled={!logHydrated}>
+                  保存配置
+                </Button>
+                <Button size="sm" variant="ghost" className="h-9 text-xs" onClick={handleLogClear} disabled={!logHydrated}>
+                  恢复默认值
+                </Button>
+                {logSavedFlag && <span className="text-xs text-emerald-600 dark:text-emerald-400">✓ 已保存</span>}
+                {logHint && <span className="min-w-0 text-xs text-red-600 break-all">{logHint}</span>}
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground/70">
+                也可用环境变量配置（优先于此页）：<code>CONTEXT_LOG</code> 总开关（0/off 关）、<code>CONTEXT_LOG_LEVEL</code> 级别、<code>CONTEXT_LOG_FILE</code> 写文件、<code>CONTEXT_LOG_STDOUT</code> 输出到屏幕、<code>CONTEXT_LOG_DIR</code> 日志目录——置 0/off 即关对应通道。配置存于本机服务端（~/.context-insight/logger-config.json）；默认开（Info 级、文件与终端双输出）。
+              </p>
+            </SectionCard>
+          </section>
+        </div>
       </main>
+    </AppShell>
+  )
+}
+
+function SectionHeader({ icon: Icon, title, desc }: { icon: LucideIcon; title: string; desc: string }) {
+  return (
+    <div className="flex items-start gap-3 px-1">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/[0.07] text-emerald-600 dark:text-emerald-400">
+        <Icon className="size-4.5" />
+      </span>
+      <div className="min-w-0 flex-1 space-y-1">
+        <h2 className="text-sm font-semibold tracking-tight text-foreground">{title}</h2>
+        <p className="text-xs leading-relaxed text-muted-foreground">{desc}</p>
+      </div>
     </div>
+  )
+}
+
+function SectionCard({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div className={cn("rounded-2xl border border-border/50 bg-card/60 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_20px_48px_-24px_rgba(0,0,0,0.25)] backdrop-blur-2xl backdrop-saturate-150", className)}>
+      {children}
+    </div>
+  )
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <span className="text-xs font-medium text-foreground/80">{label}</span>
+      {children}
+      {hint && <p className="text-[11px] leading-relaxed text-muted-foreground/70">{hint}</p>}
+    </div>
+  )
+}
+
+function Segmented<T extends string>({ value, onChange, options, disabled }: {
+  value: T
+  onChange: (v: T) => void
+  options: Array<{ value: T; label: string }>
+  disabled?: boolean
+}) {
+  return (
+    <div className="inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-lg bg-foreground/[0.05] p-1">
+      {options.map(o => (
+        <button
+          key={o.value}
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "h-7 rounded-md px-3.5 text-xs transition-all duration-200 disabled:opacity-50",
+            value === o.value
+              ? "bg-background font-medium text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 disabled:opacity-50",
+        checked ? "bg-emerald-500" : "bg-foreground/[0.15]",
+      )}
+    >
+      <span className={cn("absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] transition-transform duration-200", checked && "translate-x-5")} />
+    </button>
   )
 }

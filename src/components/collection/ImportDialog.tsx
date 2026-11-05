@@ -20,9 +20,10 @@
 // 取代 LocalFileImport 与 BundleImport（刀 2 退役）。
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BRAND_NAME, BRAND_SLUG, BRAND_SOURCE_TYPE, BAY_NAME } from "@/lib/branding";
+import { BRAND_SOURCE_TYPE, BAY_NAME } from "@/lib/branding";
 import { serverLakeConfigStatus, type LakeTokenReason } from "@/lib/lake-token-prompt";
 import { LakeTokenDialog } from "@/components/LakeTokenDialog";
+import { HEADER_PILL_TINTED } from "@/components/layout/header-actions";
 import { saveImportHistory, type ImportHistoryEntry } from "@/components/ImportHistory";
 import { lakeErrorMessage } from "@/components/ingest/lake-ui";
 import type { DirEntry } from "@/components/ingest/browse";
@@ -33,8 +34,8 @@ import { BrowseStep } from "./steps/BrowseStep";
 import { LakeDirsStep, type LakeDirCard } from "./steps/LakeDirsStep";
 import { LakeSessionTable, lakeEntryKey, type LakeSession } from "./steps/LakeSessionTable";
 import { LakeBundleTable, type LakeBundleItem } from "./steps/LakeBundleTable";
+import { LocalSessionTable } from "./steps/LocalSessionTable";
 import { ImportProgress, type BundleJobState, type ImportProgressItem } from "./steps/ImportProgress";
-import { formatTime, formatTokens } from "./steps/format";
 import {
   Dialog,
   DialogContent,
@@ -45,17 +46,9 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { DownloadIcon, FolderIcon, GlobeIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import { DownloadIcon, FolderIcon, GlobeIcon, LoaderIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 type Step = "input" | "browse" | "select" | "lake" | "importing";
@@ -129,7 +122,6 @@ export function ImportDialog() {
   // 会话扫描/选择（本地通路）
   const [sessions, setSessions] = useState<SessionPreview[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [sessionFilter, setSessionFilter] = useState("");
   const [sessionsLoading, setSessionsLoading] = useState(false);
 
   // 本地目录浏览
@@ -181,7 +173,6 @@ export function ImportDialog() {
     setFilePath("/");
     setSessions([]);
     setSelectedIds(new Set());
-    setSessionFilter("");
     setSessionsLoading(false);
     setDirEntries([]);
     setCurrentDir(null);
@@ -444,7 +435,6 @@ export function ImportDialog() {
         setError("No sessions found in this database");
         return;
       }
-      setSessionFilter("");
       setStep("select");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
@@ -462,26 +452,7 @@ export function ImportDialog() {
     });
   }
 
-  // select 步的过滤结果：keyword 匹配 firstQuery，或 sessionID 子串（大小写不敏感）
-  const sessionQuery = sessionFilter.trim().toLowerCase();
-  const filteredSessions = sessionQuery
-    ? sessions.filter(s =>
-        s.firstQuery?.toLowerCase().includes(sessionQuery)
-        || s.id.toLowerCase().includes(sessionQuery))
-    : sessions;
-
-  function toggleAll() {
-    // 全选作用于当前过滤视图（与数据仓列表同款语义）
-    if (filteredSessions.length > 0 && filteredSessions.every(s => selectedIds.has(s.id))) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        for (const s of filteredSessions) next.delete(s.id);
-        return next;
-      });
-    } else {
-      setSelectedIds(prev => new Set([...prev, ...filteredSessions.map(s => s.id)]));
-    }
-  }
+  // select 步的过滤/全选内聚在 LocalSessionTable（与数据仓表同构）
 
   async function handleImportSelected() {
     if (selectedIds.size === 0) return;
@@ -901,12 +872,12 @@ export function ImportDialog() {
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetState(); }}>
       <DialogTrigger render={
-        <button type="button" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/80 text-sm font-medium transition-colors">
-          <DownloadIcon className="size-4" />
+        <button type="button" className={HEADER_PILL_TINTED}>
+          <DownloadIcon className="size-4 text-muted-foreground" />
           Import
         </button>
       } />
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl rounded-2xl">
         <DialogHeader>
           <DialogTitle>导入</DialogTitle>
           <DialogDescription>
@@ -927,116 +898,119 @@ export function ImportDialog() {
         </DialogHeader>
 
         {step === "input" && (
-          <div className="space-y-3">
-            <div>
-              <label className="text-sm font-medium mb-1.5 block">导入来源</label>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  variant={sourceMode === "local" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => { setSourceMode("local"); setError(null); }}
-                >
-                  <FolderIcon className="size-3.5 mr-1" />
-                  本地
-                </Button>
-                <Button
-                  variant={sourceMode === "lake" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => { setSourceMode("lake"); setError(null); void handleOpenLake(); }}
-                >
-                  <GlobeIcon className="size-3.5 mr-1" />
-                  {BAY_NAME}
-                </Button>
-              </div>
+          <div className="space-y-4">
+            {/* 来源即模式：双源大卡选择（radio-card 语义）——卡片自带说明，
+                取代旧版「导入来源 / 文件格式 / File Path」三层 label 堆叠 */}
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => { setSourceMode("local"); setError(null); }}
+                className={cn(
+                  "flex flex-col items-start gap-1.5 rounded-xl border p-3.5 text-left transition-all duration-200",
+                  sourceMode === "local"
+                    ? "border-emerald-500/40 bg-emerald-500/[0.06]"
+                    : "border-border/50 hover:border-border hover:bg-foreground/[0.02]",
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <FolderIcon className={cn("size-4", sourceMode === "local" ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")} />
+                  <span className="text-sm font-medium">本地文件</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">浏览文件系统或输入路径 · Bundle 目录自动识别</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSourceMode("lake"); setError(null); void handleOpenLake(); }}
+                className={cn(
+                  "flex flex-col items-start gap-1.5 rounded-xl border p-3.5 text-left transition-all duration-200",
+                  sourceMode === "lake"
+                    ? "border-emerald-500/40 bg-emerald-500/[0.06]"
+                    : "border-border/50 hover:border-border hover:bg-foreground/[0.02]",
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <GlobeIcon className={cn("size-4", sourceMode === "lake" ? "text-blue-500" : "text-muted-foreground")} />
+                  <span className="text-sm font-medium">{BAY_NAME}</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">远端数据仓目录 · 会话与 Run 包同格加载</span>
+              </button>
             </div>
             {sourceMode === "local" && (
-              <>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">文件格式（Bundle 目录自动识别）</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      variant={localFormat === "jsonl" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => { setLocalFormat("jsonl"); setError(null); }}
-                    >
-                      JSONL (auto)
-                    </Button>
-                    <Button
-                      variant={localFormat === "opencode-db" || localFormat === BRAND_SOURCE_TYPE ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => { setLocalFormat("opencode-db"); setError(null); }}
-                    >
-                      SQLite (auto)
-                    </Button>
-                  </div>
+              <div className="space-y-2.5">
+                <div className="flex gap-2">
+                  <Input
+                    placeholder={IMPORT_SOURCES_UI[localFormat]?.placeholder ?? "/path/to/file"}
+                    value={filePath}
+                    onChange={(e) => setFilePath(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleBrowseFromInput}
+                    className="gap-1.5 shrink-0"
+                    disabled={sessionsLoading || starting}
+                  >
+                    <FolderIcon className="size-3.5" />
+                    Browse
+                  </Button>
                 </div>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">File Path</label>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder={IMPORT_SOURCES_UI[localFormat]?.placeholder ?? "/path/to/file"}
-                      value={filePath}
-                      onChange={(e) => setFilePath(e.target.value)}
-                      className="flex-1"
-                    />
+                <div className="inline-flex items-center gap-0.5 rounded-lg bg-foreground/[0.05] p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => { setLocalFormat("jsonl"); setError(null); }}
+                    className={cn(
+                      "h-7 rounded-md px-3 text-xs transition-all duration-200",
+                      localFormat === "jsonl"
+                        ? "bg-background font-medium text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    JSONL (auto)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setLocalFormat("opencode-db"); setError(null); }}
+                    className={cn(
+                      "h-7 rounded-md px-3 text-xs transition-all duration-200",
+                      localFormat === "opencode-db" || localFormat === BRAND_SOURCE_TYPE
+                        ? "bg-background font-medium text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    SQLite (auto)
+                  </button>
+                </div>
+                {/* 快捷路径直达（悬停 title 即完整路径，形态在 import-ui 声明）；
+                    不再另设底部路径小字说明 */}
+                {quickDirs.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {quickDirs.map(q => (
+                      <Button
+                        key={q.path}
+                        variant="outline"
+                        size="sm"
+                        className="h-7 rounded-full px-2.5 text-xs gap-1.5"
+                        onClick={() => handleQuickJump(q.path)}
+                        title={q.path}
+                      >
+                        <FolderIcon className="size-3 text-emerald-600 dark:text-emerald-400" />
+                        {q.label}
+                      </Button>
+                    ))}
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={handleBrowseFromInput}
-                      className="gap-1.5 shrink-0"
-                      disabled={sessionsLoading || starting}
+                      className="h-7 rounded-full px-2.5 text-xs gap-1.5"
+                      onClick={() => handleQuickJump("~")}
+                      title="~"
                     >
-                      <FolderIcon className="size-3.5" />
-                      Browse
+                      <FolderIcon className="size-3 text-muted-foreground" />
+                      主目录
                     </Button>
                   </div>
-                  {quickDirs.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                      <span className="text-xs text-muted-foreground">快捷路径:</span>
-                      {quickDirs.map(q => (
-                        <Button
-                          key={q.path}
-                          variant="outline"
-                          size="sm"
-                          className="h-7 px-2 text-xs gap-1"
-                          onClick={() => handleQuickJump(q.path)}
-                          title={q.path}
-                        >
-                          <FolderIcon className="size-3 text-blue-500" />
-                          {q.label}
-                        </Button>
-                      ))}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 px-2 text-xs gap-1"
-                        onClick={() => handleQuickJump("~")}
-                        title="~"
-                      >
-                        <FolderIcon className="size-3 text-muted-foreground" />
-                        主目录
-                      </Button>
-                    </div>
-                  )}
-                  <div className="mt-2 text-xs text-muted-foreground space-y-1">
-                    {localFormat === "jsonl" && (
-                      <>
-                        <p>Claude 原生: ~/.claude/projects/&lt;hash&gt;/&lt;id&gt;.jsonl</p>
-                        <p>cpx proxy 捕获: ~/.context-insight/proxy/cpx-&lt;sid&gt;.jsonl</p>
-                        <p>Codex 原生: ~/.codex/sessions/&lt;年&gt;/&lt;月&gt;/&lt;日&gt;/rollout-&lt;时间戳&gt;-&lt;会话id&gt;.jsonl</p>
-                      </>
-                    )}
-                    {(localFormat === "opencode-db" || localFormat === BRAND_SOURCE_TYPE) && (
-                      <>
-                        <p>opencode: ~/.local/share/opencode/opencode.db</p>
-                        <p>{BRAND_NAME} 导出: {BRAND_SLUG}_session_xxx.db（导入时按库 schema 自动识别）</p>
-                      </>
-                    )}
-                    <p>Run 的 Bundle 目录：含 workflow.json 与 sessions/（manifest.json 同样识别）——输入路径自动识别</p>
-                    <p className="text-blue-500 dark:text-blue-400">Click Browse to explore directories — 绿色条目点击即导入</p>
-                  </div>
-                </div>
-              </>
+                )}
+              </div>
             )}
             {sourceMode === "lake" && lakeLoading && (
               <div className="flex items-center gap-2 py-4 justify-center">
@@ -1081,79 +1055,19 @@ export function ImportDialog() {
 
         {step === "select" && (
           <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="Search by keyword or session ID..."
-                value={sessionFilter}
-                onChange={(e) => setSessionFilter(e.target.value)}
-                className="flex-1"
-              />
-              <SearchIcon className="size-4 text-muted-foreground shrink-0" />
-            </div>
-            <div className="flex items-center gap-2 mb-2">
-              <Checkbox
-                checked={filteredSessions.length > 0 && filteredSessions.every(s => selectedIds.has(s.id))}
-                onCheckedChange={toggleAll}
-              />
-              <span className="text-sm text-muted-foreground">
-                {sessionQuery ? `${filteredSessions.length} of ${sessions.length} shown` : `Select all (${sessions.length} sessions)`}
-              </span>
-            </div>
-            <div className="max-h-[320px] overflow-y-auto border rounded-lg">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[40px]"></TableHead>
-                    <TableHead className="w-[120px]">Session ID</TableHead>
-                    <TableHead>Start Time</TableHead>
-                    <TableHead>End Time</TableHead>
-                    <TableHead className="max-w-[160px]">First Query</TableHead>
-                    <TableHead>Turns</TableHead>
-                    <TableHead>Tokens</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredSessions.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground py-4">
-                        {sessionQuery ? "No sessions match your search" : "No sessions found"}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {filteredSessions.map(s => (
-                    <TableRow key={s.id} className={selectedIds.has(s.id) ? "bg-primary/5" : ""}>
-                      <TableCell>
-                        <Checkbox checked={selectedIds.has(s.id)} onCheckedChange={() => toggleSelection(s.id)} />
-                      </TableCell>
-                      <TableCell className="w-[120px] max-w-[120px]">
-                        {/* 会话 ID 可见可搜（搜索框匹配 id 子串）：codex 等 jsonl 源
-                            firstQuery 常为空，ID 是唯一可靠辨识位 */}
-                        <span
-                          className="block font-mono text-xs text-muted-foreground truncate cursor-pointer hover:text-foreground"
-                          title={`${s.id}（点击复制）`}
-                          role="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void navigator.clipboard?.writeText(s.id).catch(() => { /* 无剪贴板权限时静默 */ })
-                          }}
-                        >
-                          {s.id}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatTime(s.createdAt)}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{s.endedAt ? formatTime(s.endedAt) : "—"}</TableCell>
-                      <TableCell className="max-w-[160px] text-xs">
-                        <span className="block truncate" title={s.firstQuery ?? ""}>
-                          {s.firstQuery ?? "(empty)"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums">{s.turnCount}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{s.totalTokens != null ? formatTokens(s.totalTokens) : "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <LocalSessionTable
+              sessions={sessions}
+              selected={selectedIds}
+              onToggle={toggleSelection}
+              onSetAll={(ids, select) => setSelectedIds(prev => {
+                const next = new Set(prev);
+                for (const id of ids) {
+                  if (select) next.add(id);
+                  else next.delete(id);
+                }
+                return next;
+              })}
+            />
             {selectedIds.size === 0 && (
               <p className="text-sm text-muted-foreground">Select at least one session to import</p>
             )}

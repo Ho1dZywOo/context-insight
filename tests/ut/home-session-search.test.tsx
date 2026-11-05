@@ -37,24 +37,28 @@ const prisma = new PrismaClient()
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'home-search-it-'))
 const SID_A = 'cc-home-search-login-bug'
 const SID_B = 'cc-home-search-bench-ops'
+const SID_C = 'cc-home-search-glm-badge'
+const SID_D = 'cc-home-search-dsw-badge'
 
-function fixture(sid: string, prompt: string): string {
+function fixture(sid: string, prompt: string, model = 'test-model'): string {
   const file = path.join(TMP, `${sid}.jsonl`)
   fs.writeFileSync(file, [
     JSON.stringify({ type: 'user', message: { role: 'user', content: prompt }, timestamp: '2026-09-01T00:00:00.000Z' }),
-    JSON.stringify({ type: 'assistant', message: { id: `msg_${sid}`, role: 'assistant', content: [{ type: 'text', text: 'ok' }], model: 'test-model', usage: { input_tokens: 5, output_tokens: 1 } }, timestamp: '2026-09-01T00:00:05.000Z' }),
+    JSON.stringify({ type: 'assistant', message: { id: `msg_${sid}`, role: 'assistant', content: [{ type: 'text', text: 'ok' }], model, usage: { input_tokens: 5, output_tokens: 1 } }, timestamp: '2026-09-01T00:00:05.000Z' }),
   ].join('\n') + '\n')
   return file
 }
 
 beforeAll(async () => {
-  for (const sid of [SID_A, SID_B]) await prisma.session.deleteMany({ where: { taskId: sid } })
+  for (const sid of [SID_A, SID_B, SID_C, SID_D]) await prisma.session.deleteMany({ where: { taskId: sid } })
   await importSession(fixture(SID_A, '帮我修复登录页渲染错位的 Bug'), SID_A, prisma, path.join(TMP, `${SID_A}.jsonl`), 'claude-jsonl')
   await importSession(fixture(SID_B, '生成 BenchHarnessSoftmax 算子并跑测试'), SID_B, prisma, path.join(TMP, `${SID_B}.jsonl`), 'claude-jsonl')
+  await importSession(fixture(SID_C, 'GLM 模型徽标行', 'glm-4.6'), SID_C, prisma, path.join(TMP, `${SID_C}.jsonl`), 'claude-jsonl')
+  await importSession(fixture(SID_D, 'DeepSeek 模型徽标行', 'volc-gateway/deepseek-v4-pro'), SID_D, prisma, path.join(TMP, `${SID_D}.jsonl`), 'claude-jsonl')
 })
 
 afterAll(async () => {
-  for (const sid of [SID_A, SID_B]) {
+  for (const sid of [SID_A, SID_B, SID_C, SID_D]) {
     try { await prisma.session.deleteMany({ where: { taskId: sid } }); } catch { /* ignore */ }
   }
   await prisma.$disconnect()
@@ -84,11 +88,32 @@ describe('主页 Sessions 搜索（服务端 ?q= 过滤）', () => {
     const html = await renderHome({ q: 'no-such-keyword-xyz' })
     expect(html).toContain('No sessions found')
   })
+
+  it('会话图标跟模型走：glm/deepseek 各自徽标 + 统一绿瓦（provider 前缀剥离）', async () => {
+    const html = await renderHome({ q: '模型徽标行' })
+    expect(html).toContain(SID_C)
+    expect(html).toContain(SID_D)
+    expect(html).toContain('data-asset-icon="glm"')
+    expect(html).toContain('data-asset-icon="deepseek"')
+    expect(html).toContain('from-emerald-500')
+  })
 })
 
-function makeItem(taskId: string, query: string) {
-  return { ...EMPTY_ITEM, sessionId: taskId, key: `session:${taskId}`, taskId, query }
+function makeItem(taskId: string, query: string, model: string | null = null) {
+  return { ...EMPTY_ITEM, sessionId: taskId, key: `session:${taskId}`, taskId, query, model }
 }
+
+// 主流模型覆盖矩阵（组件层消费——图标映射不依赖 DB，避免 beforeAll 批量
+// 入库与并行文件读竞态；页面级全管线由 glm/deepseek 用例锁定）
+const COV_MODELS: Array<[model: string, icon: string]> = [
+  ['meta-llama/Llama-4-Maverick-17B', 'meta'],
+  ['grok-4', 'xai'],
+  ['minimax-m2', 'minimax'],
+  ['doubao-seed-1-6', 'doubao'],
+  ['ernie-4-5-turbo', 'baidu'],
+  ['mistral-large-latest', 'mistral'],
+  ['hunyuan-turbo-latest', 'tencent'],
+]
 
 describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', () => {
   const fetchCalls: string[] = []
@@ -110,7 +135,7 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
   })
 
   function rowOf(el: Element): { taskId: string }[] {
-    return [...el.querySelectorAll('tbody tr')].filter(r => r.querySelector('input[type="checkbox"]')).map(r => ({ taskId: r.textContent ?? '' }))
+    return [...el.querySelectorAll('[data-asset-row]')].map(r => ({ taskId: r.textContent ?? '' }))
   }
 
   it('搜索：输入防抖触发客户端取数（无整页刷新），URL replaceState 同步 ?q=', async () => {
@@ -128,7 +153,7 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
         items: payloads[''].items, total: 61, page: 1, pageSize: 20, totalCount: 61,
       }))
     })
-    expect(container.querySelectorAll('tbody tr').length).toBe(2)
+    expect(container.querySelectorAll('[data-asset-row]').length).toBe(2)
 
     // 输入 → 防抖 400ms 后自动搜索
     const input = [...container.querySelectorAll('input')].find(i => i.placeholder?.includes('keyword or session ID')) as HTMLInputElement
@@ -179,6 +204,64 @@ describe('主页 Sessions 客户端取数（搜索无刷新 + 数字翻页）', 
     root.unmount()
     container.remove()
     window.history.replaceState(null, '', '/')
+  })
+
+  it('选择模式（编辑模式语义）：勾选角标 + 底部浮动操作条（滑入），两会话可对比', async () => {
+    payloads = { '': { items: [makeItem('sel-a', '会话A'), makeItem('sel-b', '会话B')], total: 2, totalCount: 2 } }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createClientRoot(container)
+    await act(async () => {
+      root.render(createElement(AssetList, {
+        items: payloads[''].items, total: 2, page: 1, pageSize: 20, totalCount: 2,
+      }))
+    })
+    const checks = [...container.querySelectorAll('[data-asset-check]')] as HTMLButtonElement[]
+    expect(checks.length).toBe(2)
+    // 未选中：无浮动条；角标常显（空心，未含对勾）、aria-checked=false
+    expect(container.querySelector('[data-selection-bar]')).toBeNull()
+    expect(checks[0].getAttribute('aria-checked')).toBe('false')
+    const badge0 = checks[0].querySelector('[data-check-badge]')!
+    expect(badge0).toBeTruthy()
+    expect(badge0.querySelector('svg')).toBeNull()
+    // 点第一行图标位 → 角标实心对勾 + 浮动条（已选 1，无对比按钮）
+    await act(async () => { checks[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    const bar1 = container.querySelector('[data-selection-bar]')!
+    expect(bar1).toBeTruthy()
+    expect(bar1.textContent).toContain('已选 1 项')
+    expect([...bar1.querySelectorAll('button')].some(b => b.textContent?.includes('对比'))).toBe(false)
+    expect(checks[0].getAttribute('aria-checked')).toBe('true')
+    expect(checks[0].querySelector('[data-check-badge]')!.querySelector('svg')).not.toBeNull()
+    // 第二行也选 → 已选 2 · 可对比（Compare 仅 2 会话）
+    await act(async () => { checks[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    const bar2 = container.querySelector('[data-selection-bar]')!
+    expect(bar2.textContent).toContain('已选 2 项')
+    expect(bar2.textContent).toContain('可对比')
+    expect([...bar2.querySelectorAll('button')].some(b => b.textContent?.includes('对比'))).toBe(true)
+    // 取消选择 → 浮动条收起、全部行复位
+    const cancel = [...bar2.querySelectorAll('button')].find(b => b.title === '取消选择') as HTMLButtonElement
+    await act(async () => { cancel.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    expect(container.querySelector('[data-selection-bar]')).toBeNull()
+    expect(checks[0].getAttribute('aria-checked')).toBe('false')
+    expect(checks[1].getAttribute('aria-checked')).toBe('false')
+
+    root.unmount()
+    container.remove()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('主流模型覆盖：llama/grok/minimax/doubao/ernie/mistral/hunyuan 各映射官方徽标', async () => {
+    const items = COV_MODELS.map(([model], i) => makeItem(`cov-${i}`, '覆盖行', model))
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createClientRoot(container)
+    await act(async () => {
+      root.render(createElement(AssetList, { items, total: items.length, page: 1, pageSize: 20 }))
+    })
+    const icons = [...container.querySelectorAll('[data-asset-icon]')].map(el => el.getAttribute('data-asset-icon'))
+    expect(icons).toEqual(COV_MODELS.map(([, icon]) => icon))
+    root.unmount()
+    container.remove()
   })
 })
 

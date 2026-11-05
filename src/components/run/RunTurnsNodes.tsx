@@ -14,9 +14,10 @@
 // 节点默认折叠、按成员懒加载（turns?member= 既有过滤），节点头摘要直接
 // 来自 SessionRef（未加载即有 turns/tokens/时长）。
 
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRightIcon, Loader2Icon, WrenchIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { BreathCards } from "@/components/ui/loading";
 import { cn } from "@/lib/utils";
 import { ExpandableText } from "@/components/observe/ExpandableText";
 import { isCommandTurn, isCommandCaveat, isCommandStdout, parseCommandTurns, formatCommandDisplay, isContinuationTurn, parseContinuationTurn } from "@/lib/shared/command-parser";
@@ -301,7 +302,55 @@ function laneMatchesFilter(filter: ReadonlySet<string>, lane: SubagentLane): boo
   return filter.size === 0 || lane.turns.some(t => filter.has(t.displayRole));
 }
 
-export function SubagentLaneView({ lane, ctx, path }: { lane: SubagentLane; ctx: LaneCtx; path?: ReadonlySet<string> }) {
+/** 分帧填充片宽：单帧挂载的行数预算 */
+const ROW_FILL_CHUNK = 400;
+
+/** 分帧填充计数：巨型单次 commit（DOM 批插入不可中断，转场只保 render 可
+ *  中断）是「装载完毕→完全展示」窗口整页冻结的主源——分帧摊平。消费方配
+ *  「隐藏填充 + 就绪交换」：填充期容器 display:none（零布局零绘制），呼吸
+ *  卡在场表示加载；填满后一次性交换亮相（此时全量已挂载，交换只做 class
+ *  翻转 + content-visibility 只布局可视区）。total 增长（纪元增量/筛选放
+ *  宽）自动续填。active 门控：未展开/未挂载的窗口不空跑填充 */
+function useProgressiveCount(total: number, active: boolean): number {
+  const [count, setCount] = useState(ROW_FILL_CHUNK);
+  useEffect(() => {
+    if (!active || count >= total) return;
+    let alive = true;
+    const id = requestAnimationFrame(() => {
+      if (alive) setCount(c => Math.min(c + ROW_FILL_CHUNK, total));
+    });
+    return () => { alive = false; cancelAnimationFrame(id); };
+  }, [active, count, total]);
+  return Math.min(count, total);
+}
+
+/** 就绪闩：填充完成前保持「加载展示」（卡片在场、内容隐藏），完成时一次
+ *  性交换；此后（纪元增量/筛选放宽）不再回隐藏——已读内容永不消失 */
+function useRevealLatch(ready: boolean): boolean {
+  const [shownOnce, setShownOnce] = useState(ready);
+  if (ready && !shownOnce) setShownOnce(true);
+  return shownOnce;
+}
+
+/** 填充期尾部呼吸占位：行还在分帧落位，占位与已落位行同视觉语言 */
+function FillTail({ className }: { className?: string }) {
+  return <div aria-hidden className={cn("load-breathe rounded-xl border border-border/40 bg-card/60", className)} />;
+}
+
+function SubagentLaneViewBase({ lane, ctx, path }: { lane: SubagentLane; ctx: LaneCtx; path?: ReadonlySet<string> }) {
+  // hooks 全部在环截断/筛选让位等条件早退之前（不得有条件跳过）；小 lane
+  // （< 片宽）即刻全量，零感知。填充只在展开态推进（折叠不空跑）
+  const isExpanded = ctx.expandedSubagents.has(lane.bridgeId);
+  const laneVisible = useProgressiveCount(lane.turns.length, isExpanded);
+  const laneShownOnce = useRevealLatch(laneVisible >= lane.turns.length);
+  // 路径集身份稳定（memo）：父级分帧重渲时嵌套 lane 的 memo 比较不被新 Set 打散
+  const childPath = useMemo(() => {
+    const next = new Set(path ?? []);
+    next.add(lane.bridgeId);
+    return next;
+  }, [path, lane.bridgeId]);
+  // 切片身份稳定（memo）：就绪交换翻转时 LaneRowsList 的 props 不变、整块跳过
+  const laneTurns = useMemo(() => lane.turns.slice(0, laneVisible), [lane.turns, laneVisible]);
   // 渲染路径防环：建 lane 处已剔自引用桥，但存量库互引等其他形态的畸形桥
   // 仍可能构成 lane 环（A 的派发端在 B、B 的派发端在 A）——按 bridgeId
   // 路径截断，同一条展开链上不重复渲染同一 lane（环处显示截断提示）
@@ -312,13 +361,10 @@ export function SubagentLaneView({ lane, ctx, path }: { lane: SubagentLane; ctx:
       </div>
     );
   }
-  const childPath = new Set(path ?? []);
-  childPath.add(lane.bridgeId);
   // 行与子 lane 分别判可见：行被滤掉但子 lane 有匹配轮时子 lane 仍在原位
   // （子代理的匹配轮也是匹配轮，不能随挂点行陪葬）；两者皆无才整块让位
   const filter = ctx.roleFilter ?? EMPTY_ROLE_FILTER;
   if (!laneMatchesFilter(filter, lane)) return null;
-  const isExpanded = ctx.expandedSubagents.has(lane.bridgeId);
   const isError = lane.status === "error";
   return (
     <div className="min-w-0 rounded-lg border-l-2 border-orange-300/70 bg-foreground/[0.025] dark:border-orange-500/40 dark:bg-foreground/[0.05]">
@@ -343,29 +389,23 @@ export function SubagentLaneView({ lane, ctx, path }: { lane: SubagentLane; ctx:
       </div>
       {isExpanded && lane.turns.length > 0 && (
         <div className="space-y-px px-1.5 pb-1.5">
-          {lane.turns.map(st => {
-            const rowVisible = filter.size === 0 || filter.has(st.displayRole);
-            const lns = ctx.subagentBlocksByTurnId.get(st.turnId);
-            const visible = lns ? lns.filter(l => laneMatchesFilter(filter, l)) : [];
-            if (!rowVisible && visible.length === 0) return null;
-            return (
-              <div key={st.turnId} className="space-y-px">
-                {rowVisible && <TurnRow turn={st} selected={ctx.selectedTurnId === st.turnId} onSelect={ctx.onSelectTurn} />}
-                {visible.length > 0 && (
-                  <div className="ml-3 min-w-0 border-l border-orange-200/70 pl-2 dark:border-orange-500/30">
-                    {visible.length === 1
-                      ? <SubagentLaneView lane={visible[0]} ctx={ctx} path={childPath} />
-                      : <ParallelSubagentGroup lanes={visible} ctx={ctx} path={childPath} />}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {/* 隐藏填充 + 就绪交换：填充期呼吸卡在场、行进隐藏容器分帧落位，
+              填满一次性亮相（data-fill-hidden 同时是揭示意图的保留标记） */}
+          {!laneShownOnce && <BreathCards count={3} compact className="py-1" />}
+          <div
+            className={cn(laneShownOnce ? "animate-in fade-in duration-300" : "hidden")}
+            data-fill-hidden={laneShownOnce ? undefined : ""}
+          >
+            <LaneRowsList turns={laneTurns} ctx={ctx} path={childPath} />
+            {laneVisible < lane.turns.length && laneShownOnce && <FillTail className="mx-2 mt-1 h-7" />}
+          </div>
         </div>
       )}
     </div>
   );
 }
+
+export const SubagentLaneView = memo(SubagentLaneViewBase);
 
 export function ParallelSubagentGroup({ lanes, ctx, path }: { lanes: SubagentLane[]; ctx: LaneCtx; path?: ReadonlySet<string> }) {
   const totalTurns = lanes.reduce((s, l) => s + l.turnCount, 0);
@@ -519,6 +559,67 @@ interface SessionBlockProps {
   roleFilter?: ReadonlySet<string>;
 }
 
+/** 就绪交换的 O(1) 关键：行表抽成 memo 子树——交换翻转（shownOnce）只改
+ *  包装层 class 与卸载卡片，rows/laneCtx 等 props 身份不变，万行级协调整
+ *  块跳过；填充增帧时只有新增片真正渲染 */
+const RowsList = memo(function RowsList({ rows, laneCtx, filter, selectedTurnId, onSelectTurn }: {
+  rows: Array<{ turn: DisplayTurn; lanes: SubagentLane[] }>;
+  laneCtx: LaneCtx;
+  filter: ReadonlySet<string>;
+  selectedTurnId: string | null;
+  onSelectTurn: (turnId: string) => void;
+}) {
+  return (
+    <>
+      {rows.map(({ turn, lanes }) => (
+        <div key={turn.turnId} className="turn-row-cv min-w-0 space-y-1">
+          {(filter.size === 0 || filter.has(turn.displayRole)) && (
+            <TurnRow turn={turn} selected={selectedTurnId === turn.turnId} onSelect={onSelectTurn} />
+          )}
+          {lanes.length > 0 && (
+            <div className="ml-3 min-w-0">
+              {lanes.length === 1
+                ? <SubagentLaneView lane={lanes[0]} ctx={laneCtx} />
+                : <ParallelSubagentGroup lanes={lanes} ctx={laneCtx} />}
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  );
+});
+
+/** 泳道展开行同构（就绪交换 O(1)，同 RowsList 动机） */
+const LaneRowsList = memo(function LaneRowsList({ turns, ctx, path }: {
+  turns: DisplayTurn[];
+  ctx: LaneCtx;
+  path: ReadonlySet<string>;
+}) {
+  const filter = ctx.roleFilter ?? EMPTY_ROLE_FILTER;
+  return (
+    <>
+      {turns.map(st => {
+        const rowVisible = filter.size === 0 || filter.has(st.displayRole);
+        const lns = ctx.subagentBlocksByTurnId.get(st.turnId);
+        const visible = lns ? lns.filter(l => laneMatchesFilter(filter, l)) : [];
+        if (!rowVisible && visible.length === 0) return null;
+        return (
+          <div key={st.turnId} className="turn-row-cv space-y-px">
+            {rowVisible && <TurnRow turn={st} selected={ctx.selectedTurnId === st.turnId} onSelect={ctx.onSelectTurn} />}
+            {visible.length > 0 && (
+              <div className="ml-3 min-w-0 border-l border-orange-200/70 pl-2 dark:border-orange-500/30">
+                {visible.length === 1
+                  ? <SubagentLaneView lane={visible[0]} ctx={ctx} path={path} />
+                  : <ParallelSubagentGroup lanes={visible} ctx={ctx} path={path} />}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+});
+
 /** 会话块 memo 比较：数据/回调不变时，仅当选中轮「进出本会话」才需要重渲
  *  （行高亮与泳道自动展开都只跟随本会话的轮）——换选高频路径上无关会话
  *  整块跳过。60 节点 run、多会话上千行同时挂载时，一次全量重渲是走查/
@@ -541,6 +642,63 @@ export function sessionBlockPropsEqual(a: SessionBlockProps, b: SessionBlockProp
 
 function SessionBlockBase({ session, state, bridges, selectedTurnId, onSelectTurn, onLoadMore, roleFilter }: SessionBlockProps) {
   const filter = roleFilter ?? EMPTY_ROLE_FILTER;
+  // 首次装载闩：两段式拉齐（首页 → 剩余分块续拉）期间不展示半量轮次——
+  // 大 run 渐进追加是行突现与重渲抖动主源（命令归组/泳道配对随每批全量重算，
+  // 且每次都全量重挂行）；装载完成一次性入场。此后再在途（手动补拉/纪元刷新）
+  // 保持已读行，仅头部指示（渲染期 prev 值比较形态，同换选快照门）
+  const [everShown, setEverShown] = useState(false);
+  const gating = state.loading && !everShown && state.turns.length < state.total;
+  if (!gating && !everShown) setEverShown(true);
+  const hasMore = state.turns.length < state.total;
+
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-2 px-1 pb-1">
+        <Badge variant={session.role === "execute" ? "blue" : "purple"} className="shrink-0 text-[10px]">
+          {session.role === "execute" ? "执行" : "验收"}
+        </Badge>
+        <span className="min-w-0 truncate text-xs font-medium text-foreground/80" title={session.taskId}>
+          {session.label ?? session.taskId}
+        </span>
+        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+          {state.loading
+            ? `载入中${state.total > 0 ? ` · ${state.turns.length}/${state.total}` : ""}`
+            : `${state.turns.length}/${state.total} 轮`}
+        </span>
+        <span className="flex-1" />
+        {state.loading && <Loader2Icon className="size-3 shrink-0 animate-spin text-muted-foreground/60" />}
+        {hasMore && !state.loading && (
+          <button
+            type="button"
+            className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors select-none hover:bg-foreground/[0.05] hover:text-foreground"
+            onClick={() => onLoadMore(session.taskId)}
+          >
+            加载更多
+          </button>
+        )}
+      </div>
+      {gating ? (
+        <BreathCards count={6} compact className="px-1 py-2" />
+      ) : (
+        <SessionRows
+          state={state}
+          bridges={bridges}
+          selectedTurnId={selectedTurnId}
+          onSelectTurn={onSelectTurn}
+          filter={filter}
+        />
+      )}
+    </div>
+  );
+}
+
+function SessionRows({ state, bridges, selectedTurnId, onSelectTurn, filter }: {
+  state: MemberTurnsState;
+  bridges: TurnsBridge[];
+  selectedTurnId: string | null;
+  onSelectTurn: (turnId: string) => void;
+  filter: ReadonlySet<string>;
+}) {
   const [expandedSubagents, setExpandedSubagents] = useState<Set<string>>(new Set());
   /** 用户点过的泳道（点过即完全由手动集控制；未点过的跟随选中轮自动展开） */
   const [toggledLanes, setToggledLanes] = useState<Set<string>>(new Set());
@@ -733,7 +891,7 @@ function SessionBlockBase({ session, state, bridges, selectedTurnId, onSelectTur
     return next;
   }, [expandedSubagents, toggledLanes, autoExpandedLanes]);
 
-  const onToggleBridge = (bridgeId: string) => {
+  const onToggleBridge = useCallback((bridgeId: string) => {
     setToggledLanes(prev => (prev.has(bridgeId) ? prev : new Set(prev).add(bridgeId)));
     setExpandedSubagents(prev => {
       const next = new Set(prev);
@@ -741,79 +899,70 @@ function SessionBlockBase({ session, state, bridges, selectedTurnId, onSelectTur
       else next.add(bridgeId);
       return next;
     });
-  };
+  }, []);
 
-  const laneCtx: LaneCtx = {
+  // 泳道上下文身份稳定（useMemo）：分帧填充每帧重渲时已挂载泳道整块 memo
+  // 跳过，只有新增片真正渲染——帧成本恒定，不随已挂载量增长
+  const laneCtx = useMemo<LaneCtx>(() => ({
     subagentBlocksByTurnId: processed.subagentBlocksByTurnId,
     expandedSubagents: effectiveExpandedLanes,
     onToggleBridge,
     selectedTurnId,
     onSelectTurn,
     roleFilter: filter,
-  };
+  }), [processed, effectiveExpandedLanes, onToggleBridge, selectedTurnId, onSelectTurn, filter]);
 
-  const hasMore = state.turns.length < state.total;
   // 渲染期过滤（不进 processed memo）：TurnRow 的 memo 以 turn 对象身份为
   // 前提——过滤只产出新数组、复用既有显示对象，筛选切换不重算命令归组/
   // 泳道窗口配对，未受影响的行整块跳过重渲。行与泳道分别判可见：派发行
   // 被滤掉但其泳道有匹配轮时，泳道仍留在原时间位（子代理的匹配轮也是
   // 匹配轮）；两者皆无才跳过该挂点
+  const visibleRoots = useMemo(() => processed.displayRootTurns
+    .map(turn => ({
+      turn,
+      lanes: (processed.subagentBlocksByTurnId.get(turn.turnId) ?? [])
+        .filter(l => filter.size === 0 || laneMatchesFilter(filter, l)),
+    }))
+    .filter(({ turn, lanes }) => filter.size === 0 || filter.has(turn.displayRole) || lanes.length > 0),
+    [processed, filter]);
+  const visibleCount = useProgressiveCount(visibleRoots.length, true);
+  const filling = visibleCount < visibleRoots.length;
+  const shownOnce = useRevealLatch(!filling);
+  const renderedRoots = useMemo(() => visibleRoots.slice(0, visibleCount), [visibleRoots, visibleCount]);
+
   const anyRootVisible = filter.size === 0 || processed.displayRootTurns.some(t => filter.has(t.displayRole));
   const anyLaneVisible = filter.size === 0
     || [...processed.subagentBlocksByTurnId.values()].some(ls => ls.some(l => laneMatchesFilter(filter, l)));
 
   return (
     <div className="min-w-0">
-      <div className="flex items-center gap-2 px-1 pb-1">
-        <Badge variant={session.role === "execute" ? "blue" : "purple"} className="shrink-0 text-[10px]">
-          {session.role === "execute" ? "执行" : "验收"}
-        </Badge>
-        <span className="min-w-0 truncate text-xs font-medium text-foreground/80" title={session.taskId}>
-          {session.label ?? session.taskId}
-        </span>
-        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-          {state.loading ? "载入中" : `${state.turns.length}/${state.total} 轮`}
-        </span>
-        <span className="flex-1" />
-        {state.loading && <Loader2Icon className="size-3 shrink-0 animate-spin text-muted-foreground/60" />}
-        {hasMore && !state.loading && (
-          <button
-            type="button"
-            className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors select-none hover:bg-foreground/[0.05] hover:text-foreground"
-            onClick={() => onLoadMore(session.taskId)}
-          >
-            加载更多
-          </button>
-        )}
-      </div>
+      {/* 隐藏填充 + 就绪交换：填充期呼吸卡在场、行进隐藏容器分帧落位，填
+          满一次性 fade-in 亮相——展示时刻全量已挂载，交换只有 class 翻转
+          （content-visibility 只布局可视区）；此后增量续填不再回隐藏 */}
+      {!shownOnce && <BreathCards count={6} compact className="px-1 py-2" />}
+      <div
+        className={cn("min-w-0", shownOnce ? "animate-in fade-in duration-300" : "hidden")}
+        data-fill-hidden={shownOnce ? undefined : ""}
+      >
       {/* 离屏会话块跳过布局与绘制（content-visibility），首次渲染后记住真实
           高度——多节点大 run 长列表的滚动帧预算主要花在这里；揭示滚动时经
           .turn-list-revealing 临时展平为真实布局（见 globals.css） */}
       <div className="turn-rows space-y-px [contain-intrinsic-size:auto_600px] [content-visibility:auto]">
-        {processed.displayRootTurns.map(turn => {
-          const rowVisible = filter.size === 0 || filter.has(turn.displayRole);
-          const lanes = processed.subagentBlocksByTurnId.get(turn.turnId);
-          const visible = lanes ? (filter.size === 0 ? lanes : lanes.filter(l => laneMatchesFilter(filter, l))) : [];
-          if (!rowVisible && visible.length === 0) return null;
-          return (
-            <div key={turn.turnId} className="space-y-1">
-              {rowVisible && <TurnRow turn={turn} selected={selectedTurnId === turn.turnId} onSelect={onSelectTurn} />}
-              {visible.length > 0 && (
-                <div className="ml-3 min-w-0">
-                  {visible.length === 1
-                    ? <SubagentLaneView lane={visible[0]} ctx={laneCtx} />
-                    : <ParallelSubagentGroup lanes={visible} ctx={laneCtx} />}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        <RowsList
+          rows={renderedRoots}
+          laneCtx={laneCtx}
+          filter={filter}
+          selectedTurnId={selectedTurnId}
+          onSelectTurn={onSelectTurn}
+        />
+        {filling && shownOnce && <FillTail className="mx-1 mt-1.5 h-8" />}
         {!state.loading && state.turns.length === 0 && (
           <p className="px-2 py-3 text-center text-xs text-muted-foreground">该成员无已入库轮次</p>
         )}
         {filter.size > 0 && !state.loading && !anyRootVisible && !anyLaneVisible && processed.displayRootTurns.length > 0 && (
           <p className="px-2 py-3 text-center text-xs text-muted-foreground">当前角色筛选下无匹配轮次</p>
         )}
+      </div>
       </div>
     </div>
   );
@@ -896,7 +1045,7 @@ function NodeBody({ node, expandedSessions, memberData, bridges, selectedTurnId,
                       roleFilter={roleFilter}
                     />
                   ) : (
-                    <p className="px-2 py-2 text-xs text-muted-foreground">载入成员轮次…</p>
+                    <BreathCards count={3} compact className="py-1" />
                   )}
                 </div>
               );

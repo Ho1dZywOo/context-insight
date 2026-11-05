@@ -11,9 +11,13 @@
 // 单事务内显式清理，否则 turns/toolCalls 等孤儿行跨删除周期累积。
 
 import type { PrismaClient } from '@prisma/client';
+import { archiveSessionsToRecycle } from '@/lib/recycle';
 
 export async function cascadeDeleteSessionRows(prisma: PrismaClient, ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
+  // 回收站：删除前归档快照（best-effort——失败不阻断删除，warn 可追）。
+  // 挂在此处 = 单条/批量/run 级联三路删除统一可逆
+  await archiveSessionsToRecycle(prisma, ids);
   await prisma.$transaction([
     prisma.executionSkill.deleteMany({ where: { execution: { sessionId: { in: ids } } } }),
     prisma.toolCall.deleteMany({ where: { turn: { sessionId: { in: ids } } } }),

@@ -77,7 +77,7 @@ describe('统一导入向导快捷路径按钮', () => {
     expect(trigger, '导入触发按钮未找到').toBeTruthy()
     await act(async () => { click(trigger!) })
     await flush()
-    expect(document.body.textContent).toContain('文件格式')
+    expect(document.body.textContent).toContain('本地文件')
 
     // 默认 JSONL 格式：快捷按钮集 = cpx 捕获 + Claude 原生 + 主目录
     for (const label of ['cpx proxy 捕获', 'Claude 原生', '主目录']) {

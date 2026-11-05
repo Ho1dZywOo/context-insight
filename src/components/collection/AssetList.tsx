@@ -1,18 +1,21 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms of
+// This program is free software; you can redistribute it and/or modify it under the terms of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// Please refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
 'use client';
 
-// 统一资产表（design: docs/design/unified-workbench/design.md §3.1）。
-// 会话 + run 单表混排：Run 行按列语义映射（标题→run name、Tokens→Σ成员、
-// Active/Wall→墙钟），类型徽标区分；「类型」筛选是行过滤器（URL ?kind=），
-// 不是视图切换。多选跨 kind：Compare 仅 2 个会话行，删除按 kind 分发
-// （run 删除级联 owned 会话，确认弹窗明示）。
+// 统一资产列表（design: docs/design/unified-workbench/design.md §3.1）。
+// 会话 + run 单列表混排（分组列表形态）：行 = 模型徽标 App 图标（会话跟
+// 模型走、瓦色全站统一翡翠绿；run 靛紫；右上角常显小勾选角标：未选空心 /
+// 选中实心对勾）+ 标题/元信息 + 右侧定宽微型
+// 统计列；「类型」分段控件是行过滤器（URL ?kind=，非视图切换，滑动指示条
+// 纯 CSS transform）。多选批量操作收进底部浮动毛玻璃条（选中时滑入）；
+// Compare 仅 2 个会话行，删除按 kind 分发（run 级联 owned 会话，确认弹窗
+// 明示）。
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -21,19 +24,12 @@ import { isProxyVersion, agentFrameworkOf } from '@/lib/shared/session-format'
 import type { AssetItem, AssetKindFilter, RunAssetItem, SessionAssetItem } from '@/lib/collection/types'
 import { displayModel } from '@/lib/collection/model-display'
 import { useRouter } from 'next/navigation';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { AssetIcon, modelIconId, type AssetIconId } from '@/components/collection/AssetIcon';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { UploadDialog, type UploadTarget } from '@/components/collection/UploadDialog';
-import { Input } from '@/components/ui/input';
+import {
+  UploadDialog,
+  type UploadTarget,
+} from '@/components/collection/UploadDialog';
 import {
   Dialog,
   DialogContent,
@@ -42,8 +38,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { UploadIcon, LoaderIcon, CheckIcon, XIcon, TrashIcon, DownloadIcon, CheckCircleIcon, SearchIcon, ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from 'lucide-react';
-import { toast } from 'sonner';
+import { UploadIcon, LoaderIcon, CheckIcon, XIcon, TrashIcon, SearchIcon, ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from 'lucide-react';
 
 interface AssetListProps {
   /** SSR 首屏初始数据（此后翻页/搜索/类型过滤走客户端 /api/observe/data，无整页刷新） */
@@ -62,22 +57,45 @@ interface AssetListProps {
 }
 
 type UploadStatus = 'idle' | 'uploading' | 'done' | 'error';
-type ExportStatus = 'idle' | 'exporting' | 'done' | 'error';
 
-const RUN_STATUS_VARIANT: Record<string, 'green' | 'red' | 'orange' | 'gray' | 'slate' | 'yellow'> = {
-  passed: 'green',
-  failed: 'red',
-  running: 'orange',
-  pending: 'gray',
-  carried: 'slate',
-  unknown: 'yellow',
-};
+const KIND_ORDER: AssetKindFilter[] = ['all', 'session', 'run'];
 
 const KIND_LABELS: Record<AssetKindFilter, string> = {
-  all: '全部',
-  session: '会话',
-  run: 'Run',
+  all: 'All',
+  session: 'Sessions',
+  run: 'Runs',
 };
+
+const RUN_STATUS_DOT: Record<string, string> = {
+  passed: 'bg-green-500',
+  failed: 'bg-red-500',
+  running: 'bg-orange-500 animate-pulse',
+  pending: 'bg-gray-400',
+  carried: 'bg-slate-400',
+  unknown: 'bg-yellow-500',
+};
+
+const FRAMEWORK_LABELS: Record<string, string> = {
+  opencode: 'OpenCode',
+  'claude-code': 'Claude',
+  cannbot: 'CANNBot',
+  dsh: 'DSH',
+  codex: 'Codex',
+};
+
+// 会话行图标 id：跟模型走（modelIconId 在 AssetIcon 单点解析），与导入来
+// 源解耦
+function sessionIconId(item: SessionAssetItem): AssetIconId {
+  return modelIconId(item.model);
+}
+
+function sessionFrameworkLabel(item: SessionAssetItem): string | null {
+  const agent = agentFrameworkOf(item.framework) ?? '';
+  if (agent === 'opencode' || agent === 'claude-code' || agent === 'cannbot' || agent === 'dsh' || agent === 'codex') {
+    return FRAMEWORK_LABELS[agent] ?? agent;
+  }
+  return isBrandSourceType(item.framework) ? BRAND_NAME : null;
+}
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -107,7 +125,7 @@ function formatTime(iso: string | null): string {
   return `${month}/${day} ${hour}:${minute}`;
 }
 
-// run 行起止（Start→End 列与 wall 时长共用）：manifest 端点优先，缺失用
+// run 行起止（Start→End 与 wall 时长共用）：manifest 端点优先，缺失用
 // 成员会话聚合兜底（与 run 域 attemptRangeOf 的兜底语义一致——bundle manifest
 // 常缺时间戳，成员会话行起止是更可靠的事实源）
 function runStartEnd(item: RunAssetItem): { start: string | null; end: string | null } {
@@ -139,6 +157,22 @@ function pageWindow(current: number, totalPages: number): Array<number | '…'> 
   return out
 }
 
+// 行右侧微型统计列（tokens / cost / active·wall）：值 + 小标签，列内右对齐、
+// 列宽固定——跨行纵向对齐不随数字长短漂移
+function Stat({ label, value, title, error, width }: { label: string; value: string; title?: string; error?: boolean; width: string }) {
+  return (
+    <div className={`flex flex-col items-center gap-0.5 ${width}`} title={title}>
+      <span
+        data-stat={label}
+        className={`text-xs font-medium tabular-nums ${error ? 'text-red-600 dark:text-red-400' : 'text-foreground/90'}`}
+      >
+        {value}
+      </span>
+      <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">{label}</span>
+    </div>
+  );
+}
+
 export function AssetList({
   items: initialItems,
   total: initialTotal,
@@ -164,6 +198,20 @@ export function AssetList({
   const reqSeq = useRef(0)
   // 防抖闭包需要「当前 kind」——state 在 effect 闭包里会过期，走 ref
   const kindRef = useRef<AssetKindFilter>(initialKind)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  // 「/」直达搜索框（工作台快捷键习惯）：非输入态按下即聚焦；纯原生监听，卸载即除
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || (t instanceof HTMLElement && t.isContentEditable)) return
+      e.preventDefault()
+      searchRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   async function fetchAssets(nextPage: number, nextQ: string, nextKind: AssetKindFilter) {
     const seq = ++reqSeq.current
@@ -197,7 +245,7 @@ export function AssetList({
     }
   }
 
-  // 输入防抖自动搜索（400ms 无操作触发；回车/按钮立即）
+  // 输入防抖自动搜索（400ms 无操作触发；回车立即）
   useEffect(() => {
     const v = searchInput.trim()
     if (v === q) return
@@ -224,7 +272,6 @@ export function AssetList({
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
 
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({})
-  const [exportStatus, setExportStatus] = useState<Record<string, ExportStatus>>({})
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null)
   // 上传弹窗（统一组件，刀3 合一）：kind + target 一体；结果经回调回填行内状态
   const [uploadRequest, setUploadRequest] = useState<{ key: string; kind: 'session' | 'run'; target: UploadTarget } | null>(null)
@@ -274,6 +321,20 @@ export function AssetList({
 
   async function handleDeleteAll() {
     try {
+      // 全资产删除：run 先行（级联删除其导入的成员会话），再清剩余独立会话。
+      // run 列表会随删除收缩——循环取第一页直到取空，避免翻页错位
+      for (;;) {
+        const listRes = await fetch('/api/observe/data?kind=run&pageSize=100&page=1')
+        if (!listRes.ok) break
+        const data = await listRes.json()
+        const runs = (data.items ?? []) as Array<{ runId: string }>
+        if (runs.length === 0) break
+        for (const run of runs) {
+          try {
+            await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}`, { method: 'DELETE' })
+          } catch {}
+        }
+      }
       const res = await fetch('/api/ingest/delete-session', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -321,74 +382,199 @@ export function AssetList({
     } catch {}
   }
 
-  async function handleExport(item: SessionAssetItem) {
-    const key = item.key
-    setExportStatus(prev => ({ ...prev, [key]: 'exporting' }))
-    try {
-      const res = await fetch('/api/ingest/export-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // framework：同 sid 双行（方案一）消歧——不带会导出另一行
-        body: JSON.stringify({ taskId: item.taskId, framework: item.framework ?? undefined }),
-      })
-      if (!res.ok) {
-        const err = await res.json()
-        setExportStatus(prev => ({ ...prev, [key]: 'error' }))
-        toast.error('Export failed', { description: err.error ?? 'Unknown error' })
-        return
-      }
-      const blob = await res.blob()
-      const defaultName = `context_session_${item.taskId}.db`
-      const picker = (window as Window & { showSaveFilePicker?: (options: { suggestedName?: string; types?: Array<{ description: string; accept: Record<string, string[]> }> }) => Promise<{ name: string; createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }> }> }).showSaveFilePicker
-      if (typeof picker === 'function') {
-        try {
-          const handle = await picker({
-            suggestedName: defaultName,
-            types: [{ description: 'SQLite Database', accept: { 'application/x-sqlite3': ['.db'] } }],
-          })
-          const writable = await handle.createWritable()
-          await writable.write(blob)
-          await writable.close()
-          setExportStatus(prev => ({ ...prev, [key]: 'done' }))
-          toast.success('Database exported', {
-            description: `Saved to ${handle.name}.`,
-            icon: <CheckCircleIcon className="size-4" />,
-            duration: 5000,
-          })
-          return
-        } catch (e: unknown) {
-          if (e instanceof DOMException && e.name === 'AbortError') {
-            setExportStatus(prev => ({ ...prev, [key]: 'idle' }))
-            return
-          }
-        }
-      }
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = defaultName
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(url), 10000)
-      setExportStatus(prev => ({ ...prev, [key]: 'done' }))
-      toast.success('Database exported', {
-        description: `${defaultName} has been downloaded.`,
-        icon: <CheckCircleIcon className="size-4" />,
-        duration: 5000,
-      })
-    } catch {
-      setExportStatus(prev => ({ ...prev, [key]: 'error' }))
-      toast.error('Export failed', { description: 'Network error' })
-    }
-  }
-
   const emptyText = kind === 'run'
     ? '暂无导入的 Run。导入包含 workflow.json 与 sessions/ 的 Bundle 目录后在此查看。'
     : kind === 'session'
       ? 'No sessions found. Import a session to get started.'
       : 'No sessions found. Import a session or bundle to get started.'
-  const titleText = kind === 'run' ? `Runs (${total})` : kind === 'session' ? `Sessions (${total})` : `资产 (${total})`
+  const titleText = kind === 'run' ? `Runs (${total})` : kind === 'session' ? `Sessions (${total})` : `Assets (${total})`
+  const kindIndex = KIND_ORDER.indexOf(kind)
+
+  // 选择位：行图标 + 常显微型勾选点（图标右上角）——静息 9px 空心点
+  // （轻量到几乎无感），选中放大为 14px 实心对勾（150ms 过渡）；点击图标/
+  // 角标即勾选
+  const renderSelectSlot = (selected: boolean, iconId: AssetIconId, label: string, onToggle: () => void) => (
+    <button
+      type="button"
+      data-asset-check
+      role="checkbox"
+      aria-checked={selected}
+      aria-label={`选择 ${label}`}
+      title={selected ? '取消选择' : '选择'}
+      onClick={onToggle}
+      className="relative size-10 shrink-0 cursor-pointer rounded-[14px] outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+    >
+      <AssetIcon id={iconId} />
+      <span
+        aria-hidden
+        data-check-badge
+        className={`absolute -right-px -top-px flex items-center justify-center rounded-full border transition-all duration-150 ${
+          selected
+            ? 'size-3.5 border-primary bg-primary text-primary-foreground shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+            : 'size-[9px] border-muted-foreground/30 bg-card shadow-[0_0_0_1.5px_var(--background)]'
+        }`}
+      >
+        {selected && <CheckIcon className="size-2" strokeWidth={4} />}
+      </span>
+    </button>
+  );
+
+  const renderRunRow = (item: RunAssetItem) => {
+    const selected = selectedKeys.has(item.key)
+    const uStatus = uploadStatus[item.key] ?? 'idle'
+    const wall = runWallMs(item)
+    const { start, end } = runStartEnd(item)
+    const models = item.memberStats?.models ?? []
+    const modelMain = models.length > 0
+      ? (
+        <span title={models.map(m => `${m.model} ×${m.count}`).join('\n')}>
+          {models[0]!.model}
+          {models.length > 1 && <span className="text-muted-foreground"> +{models.length - 1}</span>}
+        </span>
+      )
+      : <span>—</span>
+    const statusDot = RUN_STATUS_DOT[item.status] ?? 'bg-gray-400'
+    return (
+      <div
+        key={item.key}
+        data-asset-row
+        data-asset-key={item.key}
+        className={`group flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 ${selected ? 'bg-primary/[0.06]' : 'hover:bg-accent/40'}`}
+      >
+        {renderSelectSlot(selected, 'run', item.name ?? item.runId, () => handleToggle(item.key))}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/run/${encodeURIComponent(item.runId)}`}
+              className="truncate text-sm font-medium text-foreground transition-colors hover:text-primary hover:underline"
+            >
+              {item.name ?? item.runId}
+            </Link>
+            <span data-run-status={item.status} className="inline-flex shrink-0 items-center gap-1 rounded-full bg-foreground/[0.04] px-1.5 py-px text-[10px] text-muted-foreground">
+              <span className={`size-1.5 rounded-full ${statusDot}`} />
+              {item.status}
+            </span>
+            {!item.exportDataComplete && (
+              <span className="shrink-0 text-[10px] text-yellow-600 dark:text-yellow-400" title="导出数据不完整（exportDataComplete=false）">数据不完整</span>
+            )}
+          </div>
+          <p
+            className="mt-0.5 truncate text-xs text-muted-foreground"
+            title={`${item.runId} · ${item.nodeCount} 节点 · ${item.memberCount} 成员 · ${item.sessionMemberCount} 会话成员`}
+          >
+            {modelMain} · {formatTime(start)} → {formatTime(end)} · {item.runId} · {item.nodeCount} 节点 · {item.sessionMemberCount} 会话
+          </p>
+        </div>
+        <div className="hidden shrink-0 items-center gap-6 md:flex">
+          <Stat width="w-16" label="Tokens" value={item.memberStats != null ? formatTokens(item.memberStats.totalTokens) : '—'} title="Σ成员会话指标" />
+          <Stat width="w-14" label="Cost" value={item.memberStats != null ? formatCost(item.memberStats.totalCost) : '—'} title="Σ成员会话成本" />
+          <Stat
+            width="w-28"
+            label="Active / Wall"
+            value={`${formatDuration(item.memberStats?.totalActiveMs ?? null)}${wall != null && item.memberStats?.totalActiveMs != null ? ` / ${formatDuration(wall)}` : ''}`}
+            title="Σ成员会话活跃 / Run 跨度墙钟"
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground/70 opacity-0 transition-opacity hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100"
+            onClick={() => setConfirmDeleteKey(item.key)}
+            title="Delete run"
+          >
+            <TrashIcon className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground/70 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+            onClick={() => openUpload(item)}
+            disabled={uStatus === 'uploading'}
+            title={`上传 Bundle 到 ${BAY_NAME}`}
+            aria-label={`上传 run ${item.runId} 到数据仓`}
+          >
+            {uStatus === 'idle' && <UploadIcon className="size-3.5" />}
+            {uStatus === 'uploading' && <LoaderIcon className="size-3.5 animate-spin" />}
+            {uStatus === 'done' && <CheckIcon className="size-3.5 text-green-600" />}
+            {uStatus === 'error' && <XIcon className="size-3.5 text-red-500" />}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSessionRow = (item: SessionAssetItem) => {
+    const selected = selectedKeys.has(item.key)
+    const uStatus = uploadStatus[item.key] ?? 'idle'
+    const fwLabel = sessionFrameworkLabel(item)
+    const isProxy = isProxyVersion(item.version)
+    return (
+      <div
+        key={item.key}
+        data-asset-row
+        data-asset-key={item.key}
+        className={`group flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 ${selected ? 'bg-primary/[0.06]' : 'hover:bg-accent/40'}`}
+      >
+        {renderSelectSlot(selected, sessionIconId(item), item.query ?? item.taskId, () => handleToggle(item.key))}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/run/solo:${encodeURIComponent(item.taskId)}`}
+              className="truncate text-sm font-medium text-foreground transition-colors hover:text-primary hover:underline"
+            >
+              {item.query ?? item.taskId}
+            </Link>
+            {isProxy && (
+              <span className="shrink-0 rounded-full bg-yellow-500/15 px-1.5 py-px text-[10px] font-medium text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400">proxy</span>
+            )}
+          </div>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground" title={item.taskId}>
+            {fwLabel && <>{fwLabel} · </>}
+            <span title={item.model ?? undefined}>{displayModel(item.model) ?? '—'}</span>
+            {' · '}
+            {formatTime(item.startTime)} → {formatTime(item.endTime)}
+            {' · 导入 '}
+            {formatTime(item.importedAt)}
+          </p>
+        </div>
+        <div className="hidden shrink-0 items-center gap-6 md:flex">
+          <Stat width="w-16" label="Tokens" value={formatTokens(item.totalTokens)} />
+          <Stat width="w-14" label="Cost" value={formatCost(item.totalCost)} />
+          <Stat
+            width="w-28"
+            label="Active / Wall"
+            value={`${formatDuration(item.activeMs ?? null)}${item.wallMs != null && item.activeMs != null ? ` / ${formatDuration(item.wallMs)}` : ''}`}
+            title="活跃 / 墙钟（斜杠后为墙钟）：间隔 >5min 的空档计非活跃，API 调用进行中计活跃"
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground/70 opacity-0 transition-opacity hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100"
+            onClick={() => setConfirmDeleteKey(item.key)}
+            title="Delete session"
+          >
+            <TrashIcon className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground/70 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+            onClick={() => openUpload(item)}
+            disabled={uStatus === 'uploading'}
+            title={`Upload to ${BAY_NAME}`}
+          >
+            {uStatus === 'idle' && <UploadIcon className="size-3.5" />}
+            {uStatus === 'uploading' && <LoaderIcon className="size-3.5 animate-spin" />}
+            {uStatus === 'done' && <CheckIcon className="size-3.5 text-green-600" />}
+            {uStatus === 'error' && <XIcon className="size-3.5 text-red-500" />}
+          </Button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-3">
@@ -397,99 +583,69 @@ export function AssetList({
       ))}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
-          <h2 className="text-lg font-semibold">
+          <h2 className="text-lg font-semibold tracking-tight">
             {titleText}
             {q && allCount !== total && (
               <span className="text-sm font-normal text-muted-foreground ml-1">of {allCount}</span>
             )}
           </h2>
-          <div className="flex items-center gap-1.5">
-            <Input
+          {/* 搜索场（圆角搜索框形态）：Enter 立即，输入防抖自动；进行中右缘转圈 */}
+          <div className="relative">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+            <input
+              data-asset-search
+              ref={searchRef}
               placeholder="Search keyword or session ID"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') submitSearch() }}
-              className="w-52 sm:w-64"
+              className="h-8 w-64 rounded-full border border-foreground/[0.09] bg-muted/40 pl-8.5 pr-8 text-xs text-foreground outline-none transition-colors duration-200 placeholder:text-muted-foreground/60 focus:border-primary/40 focus:bg-background/60 focus:ring-2 focus:ring-primary/15"
             />
-            <Button
-              variant="outline"
-              size="icon"
-              className="size-8 shrink-0"
-              onClick={submitSearch}
-              disabled={loading}
-              title="Search"
-            >
-              {loading ? <LoaderIcon className="size-3.5 animate-spin" /> : <SearchIcon className="size-3.5" />}
-            </Button>
-            {q && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 shrink-0 text-muted-foreground"
+            {!loading && !q && (
+              <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md border border-border/60 bg-muted/60 px-1.5 py-px text-[10px] font-medium text-muted-foreground/70">/</kbd>
+            )}
+            {loading && <LoaderIcon className="absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />}
+            {!loading && q && (
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full text-muted-foreground/60 transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
                 onClick={() => { setSearchInput(''); fetchAssets(1, '', kindRef.current) }}
                 title="Clear"
               >
-                <XIcon className="size-3.5" />
-              </Button>
+                <XIcon className="size-3" />
+              </button>
             )}
           </div>
-          {/* 类型行过滤（design 决策 D1：过滤器，非视图切换——与搜索同层级） */}
-          <div className="flex items-center rounded-md border p-0.5 gap-0.5" role="group" aria-label="类型过滤">
-            {(Object.keys(KIND_LABELS) as AssetKindFilter[]).map(k => (
+        </div>
+        <div className="flex items-center gap-2">
+          {/* 类型行过滤（design 决策 D1：过滤器，非视图切换）：分段控件（等宽
+              三分 + 滑动指示条，transform 过渡，纯 CSS） */}
+          <div role="group" aria-label="类型过滤" className="relative flex h-8 shrink-0 items-center rounded-full border border-foreground/[0.09] bg-muted/40 p-1" data-kind-seg={kind}>
+            <span
+              aria-hidden
+              className="absolute inset-y-1 left-1 w-14 rounded-full bg-card shadow-[0_1px_3px_rgba(0,0,0,0.1)] ring-1 ring-foreground/[0.06] transition-transform duration-200 ease-out"
+              style={{ transform: `translateX(${kindIndex * 100}%)` }}
+            />
+            {KIND_ORDER.map(k => (
               <button
                 key={k}
                 type="button"
                 onClick={() => switchKind(k)}
-                className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                  kind === k
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/40'
-                }`}
+                className={`relative z-10 flex h-6 w-14 shrink-0 cursor-pointer items-center justify-center rounded-full whitespace-nowrap text-xs font-medium transition-colors duration-200 ${kind === k ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 {KIND_LABELS[k]}
               </button>
             ))}
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">
-            {selectedKeys.size === 0 && "Select 2 sessions to compare, or any rows to delete"}
-            {selectedKeys.size === 1 && "1 selected"}
-            {selectedKeys.size === 2 && (compareReady ? "2 selected — Compare ready" : "2 selected")}
-            {selectedKeys.size > 2 && `${selectedKeys.size} selected`}
-          </span>
-          {compareReady && (
-            <Button
-              variant="default"
-              size="sm"
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-              onClick={() => {
-                router.push(`/compare?sessions=${encodeURIComponent(selectedSessions[0].taskId)},${encodeURIComponent(selectedSessions[1].taskId)}`)
-              }}
-            >
-              Compare Selected
-            </Button>
-          )}
-          {selectedKeys.size >= 1 && (
-            <Button
-              variant="destructive"
-              size="sm"
-              className="gap-1"
-              onClick={() => setDeleteMode('selected')}
-            >
-              <TrashIcon className="size-3.5" />
-              Delete Selected ({selectedKeys.size})
-            </Button>
-          )}
-          {total > 0 && kind !== 'run' && (
+          {total > 0 && (
             <Button
               variant="outline"
               size="sm"
-              className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive gap-1"
+              className="rounded-full border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive gap-1"
               onClick={() => setDeleteMode('all')}
             >
               <TrashIcon className="size-3.5" />
-              Delete All Sessions
+              Delete All Assets
             </Button>
           )}
         </div>
@@ -499,11 +655,11 @@ export function AssetList({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {deleteMode === 'all' ? 'Delete All Sessions' : `Delete ${selectedKeys.size} 项`}
+              {deleteMode === 'all' ? 'Delete All Assets' : `Delete ${selectedKeys.size} 项`}
             </DialogTitle>
             <DialogDescription className="text-base">
               {deleteMode === 'all'
-                ? `将从 Insight 数据库中移除全部会话的分析数据（run 不受影响）。原始会话文件不受影响，可随时重新导入。`
+                ? `将删除全部资产：每个 run（含其导入的成员会话）与所有独立会话的分析数据。原始文件不受影响，可随时重新导入。`
                 : selectedRuns.length > 0
                   ? `将删除选中的 ${selectedSessions.length} 个会话与 ${selectedRuns.length} 个 run。删除 run 会同时删除由它导入的成员会话（导入前已存在的会话不受影响）。`
                   : `将从 Insight 数据库中移除选中的 ${selectedSessions.length} 个 session 的分析数据。原始会话文件不受影响，可随时重新导入。`}
@@ -552,235 +708,76 @@ export function AssetList({
           if (uploadRequest) setUploadStatus(prev => ({ ...prev, [uploadRequest.key]: ok ? 'done' : 'error' }))
         }}
       />
-      <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="text-xs w-10 text-center"></TableHead>
-              <TableHead className="text-xs">Query</TableHead>
-              <TableHead className="text-xs">Type</TableHead>
-              <TableHead className="text-xs whitespace-nowrap">Start → End</TableHead>
-              <TableHead className="text-xs whitespace-nowrap">Import Time</TableHead>
-              <TableHead className="text-xs">Model</TableHead>
-              <TableHead className="text-xs text-right whitespace-nowrap">Tokens</TableHead>
-              <TableHead className="text-xs text-right whitespace-nowrap">Cost</TableHead>
-              <TableHead className="text-xs text-right whitespace-nowrap" title="活跃 / 墙钟（斜杠后为墙钟）：间隔 >5min 的空档计非活跃，API 调用进行中计活跃">Active / Wall</TableHead>
-              <TableHead className="text-xs w-8"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
-                  {emptyText}
-                </TableCell>
-              </TableRow>
-            )}
-            {items.map((item) => {
-              const uStatus = uploadStatus[item.key] ?? 'idle'
-              const eStatus = exportStatus[item.key] ?? 'idle'
-              if (item.kind === 'run') {
-                const wall = runWallMs(item)
-                return (
-                  <TableRow key={item.key} className={selectedKeys.has(item.key) ? 'bg-blue-500/10' : ''}>
-                    <TableCell className="w-8 px-2 text-center">
-                      <Checkbox
-                        checked={selectedKeys.has(item.key)}
-                        onCheckedChange={() => handleToggle(item.key)}
-                      />
-                    </TableCell>
-                    <TableCell className="max-w-[300px] truncate text-xs">
-                      <Link
-                        href={`/run/${encodeURIComponent(item.runId)}`}
-                        className="text-primary hover:underline"
-                      >
-                        {item.name ?? item.runId}
-                      </Link>
-                      <div className="text-[11px] text-muted-foreground truncate" title={`${item.runId} · ${item.nodeCount} 节点 · ${item.memberCount} 成员 · ${item.sessionMemberCount} 会话成员`}>
-                        {item.runId} · {item.nodeCount} 节点 · {item.sessionMemberCount} 会话
-                        {!item.exportDataComplete && (
-                          <span className="ml-1 text-yellow-600 dark:text-yellow-400" title="导出数据不完整（exportDataComplete=false）">· 数据不完整</span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      <span className="inline-flex items-center gap-1">
-                        <Badge variant="purple">Run</Badge>
-                        <Badge variant={RUN_STATUS_VARIANT[item.status] ?? 'gray'}>{item.status}</Badge>
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-xs whitespace-nowrap">
-                      {formatTime(runStartEnd(item).start)} → {formatTime(runStartEnd(item).end)}
-                    </TableCell>
-                    <TableCell className="text-xs whitespace-nowrap">{formatTime(item.importedAt)}</TableCell>
-                    <TableCell className="text-xs">
-                      {item.memberStats && item.memberStats.models.length > 0 ? (
-                        <span
-                          className="block truncate max-w-[110px]"
-                          title={item.memberStats.models.map(m => `${m.model} ×${m.count}`).join('\n')}
-                        >
-                          {item.memberStats.models[0]!.model}
-                          {item.memberStats.models.length > 1 && (
-                            <span className="text-muted-foreground"> +{item.memberStats.models.length - 1}</span>
-                          )}
-                        </span>
-                      ) : '—'}
-                    </TableCell>
-                    <TableCell className="text-xs tabular-nums text-right" title="Σ成员会话指标">
-                      {item.memberStats != null ? formatTokens(item.memberStats.totalTokens) : '—'}
-                    </TableCell>
-                    <TableCell className="text-xs tabular-nums text-right" title="Σ成员会话成本">
-                      {item.memberStats != null ? formatCost(item.memberStats.totalCost) : '—'}
-                    </TableCell>
-                    <TableCell className="text-xs tabular-nums text-right whitespace-nowrap" title="Σ成员会话活跃 / Run 跨度墙钟">
-                      {formatDuration(item.memberStats?.totalActiveMs ?? null)}
-                      {wall != null && item.memberStats?.totalActiveMs != null && (
-                        <span className="text-muted-foreground"> / {formatDuration(wall)}</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="px-2">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-6 text-muted-foreground hover:text-red-600"
-                          onClick={() => setConfirmDeleteKey(item.key)}
-                          title="Delete run"
-                        >
-                          <TrashIcon className="size-3.5" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="size-6"
-                          onClick={() => openUpload(item)}
-                          disabled={uStatus === 'uploading'}
-                          title={`上传 Bundle 到 ${BAY_NAME}`}
-                          aria-label={`上传 run ${item.runId} 到数据仓`}
-                        >
-                          {uStatus === 'idle' && <UploadIcon className="size-3.5" />}
-                          {uStatus === 'uploading' && <LoaderIcon className="size-3.5 animate-spin" />}
-                          {uStatus === 'done' && <CheckIcon className="size-3.5 text-green-600" />}
-                          {uStatus === 'error' && <XIcon className="size-3.5 text-red-500" />}
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              }
-              return (
-                <TableRow key={item.key} className={selectedKeys.has(item.key) ? 'bg-blue-500/10' : ''}>
-                  <TableCell className="w-8 px-2 text-center">
-                    <Checkbox
-                      checked={selectedKeys.has(item.key)}
-                      onCheckedChange={() => handleToggle(item.key)}
-                    />
-                  </TableCell>
-                  <TableCell className="max-w-[300px] truncate text-xs">
-                    <Link
-                      href={`/run/solo:${encodeURIComponent(item.taskId)}`}
-                      className="text-primary hover:underline"
-                    >
-                      {item.query ?? item.taskId}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {/* 方案一（同 sid 双会话）：framework 可能带 -proxy 记录后缀，
-                        图标按 agent 归属归一呈现，proxy 与否走 version 徽标 */}
-                    {(() => {
-                      const agent = agentFrameworkOf(item.framework) ?? '';
-                      return agent === 'opencode' || agent === 'claude-code' || agent === 'cannbot' || agent === 'dsh' || agent === 'codex' ? (
-                        <span className="inline-flex items-center gap-1">
-                          {agent === 'opencode'
-                            ? <Badge variant="blue">OpenCode</Badge>
-                            : agent === 'cannbot'
-                              ? <Badge variant="green">CANNBot</Badge>
-                              : agent === 'dsh'
-                                ? <Badge variant="purple">DSH</Badge>
-                              : agent === 'codex'
-                                ? <Badge variant="slate">Codex</Badge>
-                                : <Badge variant="orange">Claude</Badge>}
-                          {isProxyVersion(item.version) && (
-                            <Badge variant="yellow">proxy</Badge>
-                          )}
-                        </span>
-                      ) : isBrandSourceType(item.framework) ? (
-                        <Badge variant="purple">{BRAND_NAME}</Badge>
-                      ) : '—';
-                    })()}
-                  </TableCell>
-                  <TableCell className="text-xs whitespace-nowrap">
-                    {formatTime(item.startTime)} → {formatTime(item.endTime)}
-                  </TableCell>
-                  <TableCell className="text-xs whitespace-nowrap">{formatTime(item.importedAt)}</TableCell>
-                  <TableCell className="text-xs"><span className="block truncate max-w-[110px]" title={item.model ?? undefined}>{displayModel(item.model) ?? '—'}</span></TableCell>
-                  <TableCell className="text-xs tabular-nums text-right">{formatTokens(item.totalTokens)}</TableCell>
-                  <TableCell className="text-xs tabular-nums text-right">{formatCost(item.totalCost)}</TableCell>
-                  <TableCell className="text-xs tabular-nums text-right whitespace-nowrap">
-                    {formatDuration(item.activeMs ?? null)}
-                    {item.wallMs != null && item.activeMs != null && (
-                      <span className="text-muted-foreground"> / {formatDuration(item.wallMs)}</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="px-2">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-6 text-muted-foreground hover:text-red-600"
-                        onClick={() => setConfirmDeleteKey(item.key)}
-                        title="Delete session"
-                      >
-                        <TrashIcon className="size-3.5" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="size-6"
-                        onClick={() => handleExport(item)}
-                        disabled={eStatus === 'exporting'}
-                        title="Export DB"
-                      >
-                        {eStatus === 'idle' && <DownloadIcon className="size-3.5" />}
-                        {eStatus === 'exporting' && <LoaderIcon className="size-3.5 animate-spin" />}
-                        {eStatus === 'done' && <CheckCircleIcon className="size-3.5 text-green-600" />}
-                        {eStatus === 'error' && <XIcon className="size-3.5 text-red-500" />}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="size-6"
-                        onClick={() => openUpload(item)}
-                        disabled={uStatus === 'uploading'}
-                        title={`Upload to ${BAY_NAME}`}
-                      >
-                        {uStatus === 'idle' && <UploadIcon className="size-3.5" />}
-                        {uStatus === 'uploading' && <LoaderIcon className="size-3.5 animate-spin" />}
-                        {uStatus === 'done' && <CheckIcon className="size-3.5 text-green-600" />}
-                        {uStatus === 'error' && <XIcon className="size-3.5 text-red-500" />}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
+      <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 overflow-hidden rounded-2xl border border-border/50 bg-card/50 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_16px_40px_-24px_rgba(0,0,0,0.22)]">
+        <div className="divide-y divide-border/50">
+          {items.length === 0 && (
+            <div className="flex flex-col items-center gap-2 py-14 text-center">
+              <SearchIcon className="size-5 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground">{emptyText}</p>
+            </div>
+          )}
+          {items.map((item) => (
+            item.kind === 'run' ? renderRunRow(item) : renderSessionRow(item)
+          ))}
+        </div>
       </div>
 
+      {/* 选择模式操作条（sticky 悬于列表可见区底部，选中时滑入）：批量动作
+          从工具栏常驻改到此处——未选中时界面零按钮噪声；sticky 而非 fixed，
+          工作台 chrome（底部面板/状态栏）下不越界 */}
+      {selectedKeys.size > 0 && (
+        <div
+          data-selection-bar
+          className="sticky bottom-4 z-30 mx-auto flex w-fit animate-in fade-in slide-in-from-bottom-4 duration-200 items-center gap-1.5 rounded-full border border-border/70 bg-card/80 py-1.5 pl-4 pr-2 shadow-[0_2px_8px_rgba(0,0,0,0.08),0_24px_48px_-16px_rgba(0,0,0,0.32)] backdrop-blur-2xl backdrop-saturate-150"
+        >
+          <span className="text-xs text-muted-foreground">
+            已选 {selectedKeys.size} 项{compareReady ? ' — 可对比' : ''}
+          </span>
+          {compareReady && (
+            <Button
+              variant="default"
+              size="sm"
+              className="rounded-full"
+              onClick={() => {
+                router.push(`/compare?sessions=${encodeURIComponent(selectedSessions[0].taskId)},${encodeURIComponent(selectedSessions[1].taskId)}`)
+              }}
+            >
+              对比
+            </Button>
+          )}
+          <Button
+            variant="destructive"
+            size="sm"
+            className="rounded-full"
+            onClick={() => setDeleteMode('selected')}
+          >
+            删除
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 rounded-full text-muted-foreground"
+            onClick={() => setSelectedKeys(new Set())}
+            title="取消选择"
+          >
+            <XIcon className="size-3.5" />
+          </Button>
+        </div>
+      )}
+
       {(totalPages > 1 || total > 0) && (
-        <div className="flex items-center justify-between gap-3 mt-4 flex-wrap">
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
           <p className="text-xs text-muted-foreground">
             {q ? `${total} of ${allCount}` : `${total}`} 项
             {totalPages > 1 && ` · 第 ${page} / ${totalPages} 页`}
             {loading && <LoaderIcon className="inline size-3 ml-1.5 animate-spin align-[-2px]" />}
           </p>
           {totalPages > 1 && (
-            <div className="flex items-center gap-1">
-              <Button variant="outline" size="icon" className="size-7" disabled={!hasPrev || loading} onClick={() => fetchAssets(1, q, kindRef.current)} title="第一页">
+            <div className="flex items-center gap-0.5 rounded-full border border-foreground/[0.08] bg-card/70 p-1 shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+              <Button variant="ghost" size="icon" className="size-7 rounded-full" disabled={!hasPrev || loading} onClick={() => fetchAssets(1, q, kindRef.current)} title="第一页">
                 <ChevronsLeftIcon className="size-3.5" />
               </Button>
-              <Button variant="outline" size="icon" className="size-7" disabled={!hasPrev || loading} onClick={() => fetchAssets(page - 1, q, kindRef.current)} title="上一页">
+              <Button variant="ghost" size="icon" className="size-7 rounded-full" disabled={!hasPrev || loading} onClick={() => fetchAssets(page - 1, q, kindRef.current)} title="上一页">
                 <ChevronLeftIcon className="size-3.5" />
               </Button>
               {pageWindow(page, totalPages).map((p, i) =>
@@ -789,9 +786,9 @@ export function AssetList({
                 ) : (
                   <Button
                     key={p}
-                    variant={p === page ? 'default' : 'outline'}
+                    variant={p === page ? 'secondary' : 'ghost'}
                     size="icon"
-                    className={`size-7 text-xs tabular-nums ${p === page ? 'font-semibold' : ''}`}
+                    className={`size-7 rounded-full text-xs tabular-nums ${p === page ? 'font-semibold' : ''}`}
                     disabled={loading}
                     onClick={() => { if (p !== page) fetchAssets(p, q, kindRef.current) }}
                   >
@@ -799,15 +796,21 @@ export function AssetList({
                   </Button>
                 )
               )}
-              <Button variant="outline" size="icon" className="size-7" disabled={!hasNext || loading} onClick={() => fetchAssets(page + 1, q, kindRef.current)} title="下一页">
+              <Button variant="ghost" size="icon" className="size-7 rounded-full" disabled={!hasNext || loading} onClick={() => fetchAssets(page + 1, q, kindRef.current)} title="下一页">
                 <ChevronRightIcon className="size-3.5" />
               </Button>
-              <Button variant="outline" size="icon" className="size-7" disabled={!hasNext || loading} onClick={() => fetchAssets(totalPages, q, kindRef.current)} title="最后一页">
+              <Button variant="ghost" size="icon" className="size-7 rounded-full" disabled={!hasNext || loading} onClick={() => fetchAssets(totalPages, q, kindRef.current)} title="最后一页">
                 <ChevronsRightIcon className="size-3.5" />
               </Button>
             </div>
           )}
         </div>
+      )}
+      {/* 未选中时的引导（对比规则提示）：低调一行，选中后由浮动条接管 */}
+      {selectedKeys.size === 0 && (
+        <p className="text-center text-[11px] text-muted-foreground/60">
+          勾选行图标角标可多选：2 个会话可对比，任意行可批量删除 <ChevronRightIcon className="inline size-3 align-[-2px]" />
+        </p>
       )}
     </div>
   );

@@ -24,6 +24,7 @@ import { BundleTable, type BundleItemView } from '@/components/collection/lake/B
 import { RunsTable, type RunItemView } from '@/components/collection/lake/RunsTable';
 import { OpgenProgress } from '@/components/collection/lake/OpgenProgress';
 import { LakeProgressView } from '@/components/collection/lake/LakeProgressView';
+import { LoadState, Spinner } from '@/components/ui/loading';
 
 interface RunsResponse {
   paradigm: string;
@@ -178,6 +179,7 @@ export function LakeSourceView() {
       <div className="flex min-h-0 flex-1">
         <ParadigmSidebar
           paradigms={paradigms ?? []}
+          loading={paradigms == null}
           selected={selected}
           onSelect={name => updateUrl({ paradigm: name })}
         />
@@ -196,19 +198,26 @@ export function LakeSourceView() {
                   {runs?.baselineSid && <span className="ml-2 text-emerald-600" title={`基准 ${runs.baselineSid}`}>◆ baseline</span>}
                 </span>
                 <span>
-                  {loadingView ? '加载中…' : runs ? `共 ${runs.total} 条运行${runs.total > runs.items.length ? `（显示前 ${runs.items.length} 条）` : ''}` : ''}
+                  {loadingView ? '连接数据仓中…' : runs ? `共 ${runs.total} 条运行${runs.total > runs.items.length ? `（显示前 ${runs.items.length} 条）` : ''}` : ''}
                 </span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
                 {error && <p className="p-4 text-sm text-red-600">{error}</p>}
+                {!error && loadingView && (
+                  <div className="flex min-h-full flex-1 flex-col">
+                    <LoadState label="正在连接数据湖，读取运行清单…" className="flex-1" />
+                  </div>
+                )}
                 {!error && runs && runs.items.length === 0 && dirBundles.length === 0 && (
                   <p className="p-8 text-center text-sm text-neutral-400">该目录暂无会话与 Run 包</p>
                 )}
                 {!error && runs && runs.items.length > 0 && (
-                  <RunsTable items={runs.items} onImport={importRun} />
+                  <div className="animate-in fade-in duration-300">
+                    <RunsTable items={runs.items} onImport={importRun} />
+                  </div>
                 )}
                 {dirBundles.length > 0 && (
-                  <div className="border-t border-neutral-200">
+                  <div className="animate-in fade-in duration-300 border-t border-neutral-200">
                     <div className="flex items-center justify-between border-b border-neutral-100 bg-white px-4 py-1.5 text-xs text-neutral-500">
                       <span>工作流包（Run bundle）</span>
                       <span>共 {dirBundles.length} 个</span>
@@ -216,8 +225,11 @@ export function LakeSourceView() {
                     <BundleTable items={dirBundles} onImported={() => setRefreshKey(k => k + 1)} />
                   </div>
                 )}
-                {bundlesLoading && dirBundles.length === 0 && (
-                  <p className="p-2 text-center text-xs text-neutral-400">bundle 清单加载中…</p>
+                {bundlesLoading && dirBundles.length === 0 && !loadingView && (
+                  <p className="flex items-center justify-center gap-2 p-2 text-xs text-neutral-400">
+                    <Spinner className="size-3.5" />
+                    bundle 清单载入中…
+                  </p>
                 )}
               </div>
             </>

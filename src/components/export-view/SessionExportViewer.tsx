@@ -30,8 +30,9 @@ import type { AuditKind } from "@/lib/skill-audit-job"
 import { PerfPanorama } from "@/components/observe/PerfPanorama"
 import { ContextTracker } from "@/components/observe/ContextTracker"
 import { FileReadAnalysis } from "@/components/observe/FileReadAnalysis"
-import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState } from "@/components/run/RunTurnsSearch"
+import { TurnSearchField, TurnHitsPanel, useTurnsHitsFilter, type TurnsSearchState, type TurnJumpOutcome } from "@/components/run/RunTurnsSearch"
 import { matchTurnSearch, type TurnSearchRow, type TurnSearchItem } from "@/lib/observe/collectors/search"
+import { parseTurnsQuery } from "@/lib/observe/collectors/turns-query"
 import { OverviewPanels } from "@/components/observe/OverviewPanels"
 import { summarizeToolCallErrors } from "@/lib/tool-call-errors"
 import { ChatReplayView } from "@/components/observe/ChatReplayView"
@@ -127,7 +128,7 @@ interface TurnRowItem {
   completedAt: string | null
   model: string | null
   finishReason: string | null
-  toolCalls: Array<{ toolCallId: string; toolName: string; argsJson?: string | null; resultJson?: string | null; state: string; durationMs: number }>
+  toolCalls: Array<{ toolCallId: string; toolName: string; argsJson?: string | null; resultJson?: string | null; state: string; durationMs: number; errorMessage?: string | null }>
   skillEvents: Array<{ skillName: string; eventType: string; success: boolean; errorMessage: string | null }>
 }
 
@@ -323,8 +324,15 @@ export default function SessionDetailPage({
     [bridges],
   )
   // 命中过滤：键盘走查（↑↓/Enter）与过滤后列表对齐；改词重搜复位过滤
-  const { filter: hitFilter, setFilter: setHitFilter, visible: visibleHits, sourceOptions, thinkingOption, toolOptions } =
+  const { filter: hitFilter, toggle: toggleHitFilter, reset: resetHitFilter, visible: visibleHits, anyActive: hitFilterActive, sourceOptions, thinkingOption, toolOptions } =
     useTurnsHitsFilter(turnsSearch?.items ?? EMPTY_VIEWER_HITS, bridgeResponseTurnIds)
+  // 过滤/改词收窄后活跃命中序号钳在界内（走查位置就近保持，不硬复位）——
+  // 渲染期 prop 变化模式（与详情自动展开同门，避免 effect 内同步 setState）
+  const [prevViewerHitsLen, setPrevViewerHitsLen] = useState(visibleHits.length);
+  if (prevViewerHitsLen !== visibleHits.length) {
+    setPrevViewerHitsLen(visibleHits.length);
+    setActiveHitIdx(i => Math.min(i, Math.max(visibleHits.length - 1, 0)));
+  }
   // ── Turns 搜索（客户端单点匹配；命中索引驻留左列，退出回会话块）──
   const runTurnsSearch = useCallback((kw: string) => {
     const rows: TurnSearchRow[] = turns.map(t => ({
@@ -341,27 +349,23 @@ export default function SessionDetailPage({
       createdAt_ts: t.createdAt ? new Date(t.createdAt) : null,
       createdAt: t.createdAt ? new Date(t.createdAt) : new Date(0),
       reasoningTokens: t.reasoningTokens,
+      turnMs: t.turnMs ?? null,
+      totalTokens: t.totalTokens,
       toolCalls: (t.toolCalls ?? []).map(tc => ({
         toolCallId: tc.toolCallId,
         toolName: tc.toolName,
         dispatchBridgeId: null,
         argsJson: tc.argsJson ?? null,
         resultJson: tc.resultJson ?? null,
-        errorMessage: null,
+        errorMessage: tc.errorMessage ?? null,
       })),
     }))
     const items = matchTurnSearch(rows, kw)
     setTurnsSearch({ keyword: kw, loading: false, items, total: items.length })
     setActiveHitIdx(0)
     setVisitedHits(new Set())
-    setHitFilter(null)
-  }, [turns, taskId, setHitFilter])
-
-  /** 过滤切换：活跃命中序号随列表收窄复位 */
-  const changeHitFilter = useCallback((key: string | null) => {
-    setHitFilter(key)
-    setActiveHitIdx(0)
-  }, [setHitFilter])
+    resetHitFilter()
+  }, [turns, taskId, resetHitFilter])
 
   const exitTurnsSearch = useCallback(() => {
     setTurnsSearch(null)
@@ -379,21 +383,37 @@ export default function SessionDetailPage({
       turnId: item.turnId,
       subagentHighlightId: item.isSubagent ? item.turnId : null,
       scrollTargetTurnId: item.turnId,
-      searchHighlight: { keyword: turnsSearch?.keyword ?? "", matchField: item.matchField, toolName: item.toolName },
+      searchHighlight: {
+        keyword: turnsSearch?.keyword ?? "",
+        terms: parseTurnsQuery(turnsSearch?.keyword ?? "").positiveTerms,
+        matchField: item.matchField,
+        toolName: item.toolName,
+      },
     })
   }, [turnsSearch, select])
 
   /** #N 直达：会话内按序号定位（离线档案全量在册，无分页截断） */
-  const jumpTurnIndex = useCallback((idx: number) => {
+  /** #N 直达：会话内按序号定位（离线档案全量在册，无分页截断——单会话
+   *  无歧义，客户端解析即可；结果契约与 run 工作台同款 TurnJumpOutcome） */
+  const jumpTurnIndex = useCallback((idx: number): TurnJumpOutcome => {
     const t = [...turns].sort((a, b) => a.turnIndex - b.turnIndex).find(x => x.turnIndex === idx)
-    if (!t) return false
+    if (!t) return { found: false }
+    return {
+      found: true,
+      matches: [{ turnId: t.turnId, memberTaskId: t.turnId, memberLabel: `第 ${t.turnIndex} 轮`, contentSummary: t.contentSummary }],
+    }
+  }, [turns])
+
+  /** 跳转动作（与 run 工作台同契约：解析归胶囊，动作归宿主） */
+  const jumpTurn = useCallback((turnId: string) => {
+    const t = turns.find(x => x.turnId === turnId)
+    if (!t) return
     select({
       turnId: t.turnId,
       subagentHighlightId: t.isSubagent ? t.turnId : null,
       scrollTargetTurnId: t.turnId,
       searchHighlight: null,
     })
-    return true
   }, [turns, select])
   const [executions, setExecutions] = useState<ExecutionItem[]>([])
   const [allSkillEvents, setAllSkillEvents] = useState<SkillEventForDetail[]>([])
@@ -1095,6 +1115,7 @@ export default function SessionDetailPage({
               onSearch={runTurnsSearch}
               onExit={exitTurnsSearch}
               onJumpIndex={jumpTurnIndex}
+              onJumpTurn={jumpTurn}
               onStepHit={dir =>
                 setActiveHitIdx(i => {
                   const max = Math.max(visibleHits.length - 1, 0)
@@ -1130,7 +1151,9 @@ export default function SessionDetailPage({
                 onSelect={openTurnHit}
                 onExit={exitTurnsSearch}
                 filter={hitFilter}
-                onFilterChange={changeHitFilter}
+                onToggle={toggleHitFilter}
+                onReset={resetHitFilter}
+                anyActive={hitFilterActive}
                 sourceOptions={sourceOptions}
                 thinkingOption={thinkingOption}
                 toolOptions={toolOptions}

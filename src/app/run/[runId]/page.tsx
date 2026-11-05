@@ -39,6 +39,7 @@ import { RunDataEpochContext } from "@/lib/run/data-epoch";
 import { METRIC_EMPTY, METRIC_SCALE, REDUNDANCY_BANDS, RUN_COLORS, RUN_STATUS_META, WATER_CRITICAL_PCT, bandLabel } from "@/components/run/run-theme";
 import { LENS_META, type LensKey } from "@/lib/run/run-metrics";
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/components/BrandMark";
 import { UploadDialog } from "@/components/collection/UploadDialog";
 import { BAY_NAME, BRAND_NAME } from "@/lib/branding";
 import { VERSION_DISPLAY } from "@/lib/version";
@@ -48,7 +49,7 @@ import { cn } from "@/lib/utils";
 import type { RunMemberIdentity, RunMemberStats } from "@/lib/collection/types";
 import type { RunViewModel } from "@/lib/run/view-model";
 import { useRunView, type RunTabKey } from "@/app/run/[runId]/run-view";
-import { Loader2Icon, ArrowLeftIcon, UploadIcon, FileTextIcon, GlobeIcon, RefreshCwIcon, WifiIcon, ActivityIcon, AlertTriangleIcon } from "lucide-react";
+import { Loader2Icon, ArrowLeftIcon, UploadIcon, FileTextIcon, GlobeIcon, RefreshCwIcon, WifiIcon, AlertTriangleIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 
@@ -95,9 +96,7 @@ function BrandLockup() {
       className="flex min-w-0 shrink-0 items-center gap-2 rounded-full py-0.5 pl-0.5 pr-3 transition-colors hover:bg-foreground/[0.04] dark:hover:bg-foreground/[0.08]"
       title={`${BRAND_NAME} · 回到工作台`}
     >
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_1px_4px_rgba(59,113,224,0.45)]">
-        <ActivityIcon className="size-4 text-white" strokeWidth={2.5} />
-      </span>
+      <BrandMark />
       <span className="flex items-baseline gap-1 tracking-tight">
         <span className="text-sm font-bold">Context</span>
         <span className="text-sm font-semibold text-muted-foreground">Insight</span>
@@ -107,7 +106,7 @@ function BrandLockup() {
   );
 }
 
-/** 返回钮（导航行最左，与 tab 同行）：iOS 风圆头 chevron，工作台内有可回退
+/** 返回钮（导航行最左，与 tab 同行）：圆头 chevron，工作台内有可回退
  *  历史时亮出残影双 chevron（可达性反馈），悬停轻推、按压回缩——纯 CSS
  *  transform/opacity，动效零 JS */
 function BackButton({ canBack, onBack }: { canBack: boolean; onBack: () => void }) {

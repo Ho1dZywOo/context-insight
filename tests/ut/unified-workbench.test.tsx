@@ -137,8 +137,8 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     expect(document.body.textContent).toContain('failed')
     // 规模副行（节点/会话成员）
     expect(document.body.textContent).toContain('节点')
-    // 指标卡首卡：Sessions N + Run 1 并列
-    expect(document.body.textContent).toContain('+ 1')
+    // 指标卡首卡：Assets 总量（独立会话 + run 行数）+ 副行 run/session 拆分
+    expect(document.body.textContent).toContain('1 Run')
   })
 
   it('run 行 Σ成员会话指标渲染：Model 分布 / Start→End 兜底 / ΣTokens / ΣCost（memberStats → AssetList）', async () => {
@@ -207,33 +207,33 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     });
     await settle();
 
-    const runRow = document.querySelector('a[href="/run/minidemo01"]')?.closest('tr') as HTMLTableRowElement | null;
+    const runRow = document.querySelector('a[href="/run/minidemo01"]')?.closest('[data-asset-row]') as HTMLElement | null;
     expect(runRow).not.toBeNull();
-    const cells = [...runRow!.querySelectorAll('td')].map(td => td.textContent ?? '');
+    const runText = runRow!.textContent ?? '';
+    const stat = (name: string): string => runRow!.querySelector(`[data-stat="${name}"]`)?.textContent ?? '';
 
-    // Model 列：主模型（按会话计数、去 provider 前缀归一）glm-4.7，多模型 +1
-    expect(cells.some(c => c.includes('glm-4.7') && c.includes('+1'))).toBe(true);
+    // Model：主模型（按会话计数、去 provider 前缀归一）glm-4.7，多模型 +1
+    expect(runText.includes('glm-4.7') && runText.includes('+1')).toBe(true);
     // Start → End：manifest 无起止 → 成员会话极值兜底（earliest → latest，本地时区格式）
     const fmt = (iso: string): string => {
       const d = new Date(iso);
       const p = (n: number) => String(n).padStart(2, '0');
       return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
     };
-    const startEnd = cells.find(c => c.includes('→')) ?? '';
-    expect(startEnd).toContain(fmt('2026-10-14T09:00:00.000Z'));
-    expect(startEnd).toContain(fmt('2026-10-14T11:04:00.000Z'));
+    expect(runText).toContain(fmt('2026-10-14T09:00:00.000Z'));
+    expect(runText).toContain(fmt('2026-10-14T11:04:00.000Z'));
     // ΣTokens 2300 → 2.3K；ΣCost → $0.20
-    expect(cells.some(c => c.includes('2.3K'))).toBe(true);
-    expect(cells.some(c => c.includes('$0.20'))).toBe(true);
+    expect(stat('Tokens')).toBe('2.3K');
+    expect(stat('Cost')).toBe('$0.20');
     // Active / Wall：Σ成员活跃 18.5min / Run 跨度墙钟 2.1h（09:00→11:04）
-    expect(cells.some(c => c.includes('18.5min / 2.1h'))).toBe(true);
+    expect(stat('Active / Wall')).toBe('18.5min / 2.1h');
 
-    // 会话行 Model 列：展示口径去 provider 前缀（悬停 title 保留原始值）
-    const sesRow = document.querySelector('a[href^="/run/solo:uw-ses-model"]')?.closest('tr') as HTMLTableRowElement | null;
+    // 会话行 Model：展示口径去 provider 前缀（悬停 title 保留原始值）
+    const sesRow = document.querySelector('a[href^="/run/solo:uw-ses-model"]')?.closest('[data-asset-row]') as HTMLElement | null;
     expect(sesRow).not.toBeNull();
-    const sesCells = [...sesRow!.querySelectorAll('td')].map(td => td.textContent ?? '');
-    expect(sesCells.some(c => c.includes('deepseek-v4-pro'))).toBe(true);
-    expect(sesCells.some(c => c.includes('volc-gateway'))).toBe(false);
+    const sesText = sesRow!.textContent ?? '';
+    expect(sesText.includes('deepseek-v4-pro')).toBe(true);
+    expect(sesText.includes('volc-gateway')).toBe(false);
     expect(sesRow!.querySelector('span[title="volc-gateway/deepseek-v4-pro"]')).not.toBeNull();
 
     // memberStats = null（join 失败 / 无 prisma）→ 指标列降级 —
@@ -245,11 +245,10 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
       root!.render(createElement(AssetList, { items: [{ ...runItem, memberStats: null }], total: 1, page: 1, pageSize: 20, kind: 'all' }));
     });
     await settle();
-    const row2 = document.querySelector('a[href="/run/minidemo01"]')?.closest('tr') as HTMLTableRowElement | null;
+    const row2 = document.querySelector('a[href="/run/minidemo01"]')?.closest('[data-asset-row]') as HTMLElement | null;
     expect(row2).not.toBeNull();
-    const cells2 = [...row2!.querySelectorAll('td')].map(td => td.textContent ?? '');
-    expect(cells2.some(c => c.includes('— → —'))).toBe(true);
-    expect(cells2.some(c => c.trim() === '—')).toBe(true);
+    expect(row2!.textContent ?? '').toContain('— → —');
+    expect(row2!.querySelector('[data-stat="Tokens"]')?.textContent ?? '').toBe('—');
   })
 
   it('指标卡系统总消耗口径：Σtokens/Σcost/平均时长/Errors = 独立会话 + run 成员（页面层）', async () => {
@@ -274,7 +273,7 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     const expTotalMs = rows.reduce((s, r) => s + sessionDurationMs(r.startTime, r.endTime, Number(r.totalLatencyMs)), 0);
 
     const values = [...document.querySelectorAll('p.text-2xl')].map(el => el.textContent ?? '');
-    expect(values.length).toBe(5); // Sessions / Tokens / Cost / Total Duration / Errors
+    expect(values.length).toBe(5); // Assets / Tokens / Cost / Total Duration / Errors
     const parseNum = (text: string): number => {
       const m = text.match(/([\d.]+)\s*([KM]?)/);
       return m ? parseFloat(m[1]!) * (m[2] === 'K' ? 1e3 : m[2] === 'M' ? 1e6 : 1) : NaN;
@@ -289,10 +288,10 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     expect(Math.abs(parseFloat(values[2]!.replace('$', '')) - expCost)).toBeLessThanOrEqual(Math.max(0.05, expCost * 0.01));
     // Total Duration：Σ全库时长（独立 + run 成员；漏并成员会少 ~10min，2% 容差必炸）
     expect(Math.abs(parseDur(values[3]!) - expTotalMs)).toBeLessThanOrEqual(Math.max(5_000, expTotalMs * 0.02));
-    // Sessions = 全库 − 本 run 的 3 个成员（隔离闸：成员不双计；±2 吸收残余竞态，
-    // 双计会 +3 必超）；副行说明成员规模
-    expect(Math.abs(parseInt(values[0]!, 10) - (rows.length - 3))).toBeLessThanOrEqual(2);
-    expect(document.body.textContent).toContain('3 member sessions');
+    // Assets 首卡 = 独立会话数 + run 行数（隔离闸：成员不双计；±2 吸收残余
+    // 竞态，双计会 +3 必超）；run 成员会话数不再出现在首页计数口径
+    expect(Math.abs(parseInt(values[0]!, 10) - (rows.length - 3 + 1))).toBeLessThanOrEqual(2);
+    expect(document.body.textContent).not.toContain('member sessions');
     // Errors：run 行在首页，其成员的失败工具调用计入页级 Errors
     expect(parseInt(values[4]!, 10)).toBeGreaterThanOrEqual(1);
   })
@@ -331,7 +330,7 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
         root!.render(createElement(AssetList, { items: [], total: 0, page: 1, pageSize: 20, kind: 'all' }))
       })
       // 切到 Run：行过滤器触发客户端取数（kind=run），行内渲染 run 数据
-      await act(async () => { click([...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Run')!) })
+      await act(async () => { click([...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Runs')!) })
       await settle()
       expect(fetchUrls.some(u => u.includes('kind=run'))).toBe(true)
       expect(document.body.textContent).toContain('mini-bundle')

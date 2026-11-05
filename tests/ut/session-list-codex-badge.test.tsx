@@ -7,10 +7,10 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // @vitest-environment happy-dom
-// 主列表 Type 列 codex 适配 IT：codex 会话此前落白名单外显示 "——"（详情页
+// 主列表 Type 位 codex 适配 IT：codex 会话此前落白名单外显示 "——"（详情页
 // Tool 字段显示原始 "codex" 正常，主列表缺适配）。种入真实 codex 会话
 // （fixture 全链路导入）+ 真实 Home 服务端组件渲染，按 taskId 过滤到目标行，
-// 断言 Type 列渲染 Codex 徽标（slate），不再落 "—"。
+// 断言类型位渲染 Codex（元信息标签 + codex 渐变 App 图标），不再落 "—"。
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
@@ -47,18 +47,17 @@ async function renderHome(params: Record<string, string | undefined>): Promise<s
   return renderToString(el)
 }
 
-describe('主列表 Type 列：codex 会话徽标适配', () => {
-  it('codex 会话行渲染 Codex 徽标（slate），不再显示 "—"', async () => {
+describe('主列表 Type 位：codex 会话类型适配', () => {
+  it('codex 会话行渲染 Codex 类型位（图标 + 元信息标签），不再显示 "—"', async () => {
     // q 过滤到目标行：列表只剩这一个会话
     const html = await renderHome({ q: MAIN })
     expect(html).toContain(MAIN) // 会话行在
-    expect(html).toContain('Codex') // Type 列徽标文本（修复前此处落 "—"）
-    expect(html).toContain('bg-slate-500/15') // 徽标走 slate variant
-    // 修复前该行 Type 列是全角/长划 "—"：会话行存在但无 Codex 字样即回归
-    expect(html).not.toMatch(/<td class="text-xs">—<\/td>/)
+    expect(html).toContain('Codex') // 元信息行框架标签（修复前此处落 "—"：会话行存在但无 Codex 字样即回归）
+    expect(html).toContain('data-asset-icon="model"') // 图标位跟模型走：fixture 模型 test-model-pro 非已知品牌 → 通用模型徽标
+    expect(html).toContain('from-emerald-500') // 徽标瓦色全站统一翡翠绿（品牌蓝 / run 靛紫三分不撞色）
   })
 
-  it('无 q 全量渲染下 codex 与其他会话共存时徽标各自正确', async () => {
+  it('无 q 全量渲染下 codex 与其他会话共存时类型位各自正确', async () => {
     const html = await renderHome({})
     expect(html).toContain('Codex')
   })
