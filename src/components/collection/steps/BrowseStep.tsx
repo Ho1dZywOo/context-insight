@@ -17,13 +17,13 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableCard } from "./TableCard";
 import { sortDirEntries, type DirEntry } from "@/components/ingest/browse";
 import { BRAND_NAME, isBrandSourceType } from "@/lib/branding";
 import {
@@ -101,9 +101,8 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
               </span>
             )}
           </div>
-          <div className="max-h-[320px] overflow-y-auto overflow-x-hidden rounded-xl border border-border/40">
-            <Table className="table-fixed">
-              <TableHeader>
+          <TableCard>
+            <TableHeader>
                 <TableRow>
                   <TableHead className="w-[40px]"></TableHead>
                   <TableHead>Name</TableHead>
@@ -181,8 +180,7 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
-          </div>
+          </TableCard>
         </>
       )}
       <div className="flex items-center gap-2">

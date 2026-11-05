@@ -34,8 +34,8 @@ import { BrowseStep } from "./steps/BrowseStep";
 import { LakeDirsStep, type LakeDirCard } from "./steps/LakeDirsStep";
 import { LakeSessionTable, lakeEntryKey, type LakeSession } from "./steps/LakeSessionTable";
 import { LakeBundleTable, type LakeBundleItem } from "./steps/LakeBundleTable";
+import { LocalSessionTable } from "./steps/LocalSessionTable";
 import { ImportProgress, type BundleJobState, type ImportProgressItem } from "./steps/ImportProgress";
-import { formatTime, formatTokens } from "./steps/format";
 import {
   Dialog,
   DialogContent,
@@ -46,17 +46,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { DownloadIcon, FolderIcon, GlobeIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import { DownloadIcon, FolderIcon, GlobeIcon, LoaderIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -131,7 +122,6 @@ export function ImportDialog() {
   // 会话扫描/选择（本地通路）
   const [sessions, setSessions] = useState<SessionPreview[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [sessionFilter, setSessionFilter] = useState("");
   const [sessionsLoading, setSessionsLoading] = useState(false);
 
   // 本地目录浏览
@@ -183,7 +173,6 @@ export function ImportDialog() {
     setFilePath("/");
     setSessions([]);
     setSelectedIds(new Set());
-    setSessionFilter("");
     setSessionsLoading(false);
     setDirEntries([]);
     setCurrentDir(null);
@@ -446,7 +435,6 @@ export function ImportDialog() {
         setError("No sessions found in this database");
         return;
       }
-      setSessionFilter("");
       setStep("select");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
@@ -464,26 +452,7 @@ export function ImportDialog() {
     });
   }
 
-  // select 步的过滤结果：keyword 匹配 firstQuery，或 sessionID 子串（大小写不敏感）
-  const sessionQuery = sessionFilter.trim().toLowerCase();
-  const filteredSessions = sessionQuery
-    ? sessions.filter(s =>
-        s.firstQuery?.toLowerCase().includes(sessionQuery)
-        || s.id.toLowerCase().includes(sessionQuery))
-    : sessions;
-
-  function toggleAll() {
-    // 全选作用于当前过滤视图（与数据仓列表同款语义）
-    if (filteredSessions.length > 0 && filteredSessions.every(s => selectedIds.has(s.id))) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        for (const s of filteredSessions) next.delete(s.id);
-        return next;
-      });
-    } else {
-      setSelectedIds(prev => new Set([...prev, ...filteredSessions.map(s => s.id)]));
-    }
-  }
+  // select 步的过滤/全选内聚在 LocalSessionTable（与数据仓表同构）
 
   async function handleImportSelected() {
     if (selectedIds.size === 0) return;
@@ -1103,79 +1072,19 @@ export function ImportDialog() {
 
         {step === "select" && (
           <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="Search by keyword or session ID..."
-                value={sessionFilter}
-                onChange={(e) => setSessionFilter(e.target.value)}
-                className="flex-1"
-              />
-              <SearchIcon className="size-4 text-muted-foreground shrink-0" />
-            </div>
-            <div className="flex items-center gap-2 mb-2">
-              <Checkbox
-                checked={filteredSessions.length > 0 && filteredSessions.every(s => selectedIds.has(s.id))}
-                onCheckedChange={toggleAll}
-              />
-              <span className="text-sm text-muted-foreground">
-                {sessionQuery ? `${filteredSessions.length} of ${sessions.length} shown` : `Select all (${sessions.length} sessions)`}
-              </span>
-            </div>
-            <div className="max-h-[320px] overflow-y-auto rounded-xl border border-border/40">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[40px]"></TableHead>
-                    <TableHead className="w-[120px]">Session ID</TableHead>
-                    <TableHead>Start Time</TableHead>
-                    <TableHead>End Time</TableHead>
-                    <TableHead className="max-w-[160px]">First Query</TableHead>
-                    <TableHead>Turns</TableHead>
-                    <TableHead>Tokens</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredSessions.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground py-4">
-                        {sessionQuery ? "No sessions match your search" : "No sessions found"}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {filteredSessions.map(s => (
-                    <TableRow key={s.id} className={selectedIds.has(s.id) ? "bg-primary/5" : ""}>
-                      <TableCell>
-                        <Checkbox checked={selectedIds.has(s.id)} onCheckedChange={() => toggleSelection(s.id)} />
-                      </TableCell>
-                      <TableCell className="w-[120px] max-w-[120px]">
-                        {/* 会话 ID 可见可搜（搜索框匹配 id 子串）：codex 等 jsonl 源
-                            firstQuery 常为空，ID 是唯一可靠辨识位 */}
-                        <span
-                          className="block font-mono text-xs text-muted-foreground truncate cursor-pointer hover:text-foreground"
-                          title={`${s.id}（点击复制）`}
-                          role="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void navigator.clipboard?.writeText(s.id).catch(() => { /* 无剪贴板权限时静默 */ })
-                          }}
-                        >
-                          {s.id}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatTime(s.createdAt)}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{s.endedAt ? formatTime(s.endedAt) : "—"}</TableCell>
-                      <TableCell className="max-w-[160px] text-xs">
-                        <span className="block truncate" title={s.firstQuery ?? ""}>
-                          {s.firstQuery ?? "(empty)"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums">{s.turnCount}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{s.totalTokens != null ? formatTokens(s.totalTokens) : "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <LocalSessionTable
+              sessions={sessions}
+              selected={selectedIds}
+              onToggle={toggleSelection}
+              onSetAll={(ids, select) => setSelectedIds(prev => {
+                const next = new Set(prev);
+                for (const id of ids) {
+                  if (select) next.add(id);
+                  else next.delete(id);
+                }
+                return next;
+              })}
+            />
             {selectedIds.size === 0 && (
               <p className="text-sm text-muted-foreground">Select at least one session to import</p>
             )}

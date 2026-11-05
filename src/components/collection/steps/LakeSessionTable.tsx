@@ -17,7 +17,6 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -27,6 +26,7 @@ import {
 import { isProxyVersion } from "@/lib/shared/session-format";
 import { SearchIcon } from "lucide-react";
 import { formatTime } from "./format";
+import { TableCard } from "./TableCard";
 
 export interface LakeSession {
   sid: string;
@@ -102,9 +102,8 @@ export function LakeSessionTable({ sessions, paradigm, scope, selected, onToggle
           {q ? `${filtered.length} of ${scoped.length} shown` : `${scoped.length} sessions`}
         </span>
       </div>
-      <div className="max-h-[320px] overflow-y-auto rounded-xl border border-border/40">
-        <Table className="table-fixed">
-          <TableHeader>
+      <TableCard>
+        <TableHeader>
             <TableRow>
               <TableHead className="w-[36px] px-2"></TableHead>
               <TableHead className="w-[170px] px-2">First Query</TableHead>
@@ -177,8 +176,7 @@ export function LakeSessionTable({ sessions, paradigm, scope, selected, onToggle
               </TableRow>
             ))}
           </TableBody>
-        </Table>
-      </div>
+      </TableCard>
       {selected.size === 0 && (
         <p className="text-sm text-muted-foreground">Select at least one session to import</p>
       )}
