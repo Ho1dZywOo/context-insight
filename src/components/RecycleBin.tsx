@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronDownIcon, RotateCcwIcon, TrashIcon, LoaderIcon } from 'lucide-react'
+import { toast } from 'sonner'
 import { AssetIcon, modelIconId } from '@/components/collection/AssetIcon'
 import { cn } from '@/lib/utils'
 
@@ -66,25 +67,33 @@ export function RecycleBin() {
     setTimeout(() => setArm(prev => (prev === name ? null : prev)), 3500)
   }, [])
 
-  const post = useCallback(async (body: Record<string, unknown>): Promise<boolean> => {
+  // 返回响应体而非布尔：restore 需要区分 imported:true/false（服务端 200 但
+  // imported:false = 未回流也未删快照），只凭 res.ok 会把失败当成功移除条目。
+  const post = useCallback(async (body: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
     try {
       const res = await fetch('/api/recycle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      return res.ok
+      if (!res.ok) return null
+      return await res.json()
     } catch {
-      return false
+      return null
     }
   }, [])
 
   const handleRestore = useCallback(async (name: string) => {
     setBusy(name)
     try {
-      if (await post({ action: 'restore', name })) {
+      const data = await post({ action: 'restore', name })
+      if (data?.imported === true) {
         setEntries(prev => (prev ?? []).filter(e => e.name !== name))
         router.refresh()
+      } else if (data) {
+        // imported:false（空会话 0 轮 / 同 taskId 已存在走 merge/dedup）：快照
+        // 未回流也未删除——保留条目并如实提示，不静默抹掉列表条目
+        toast.error(data.query ? '恢复失败：会话已存在' : '恢复失败：空会话无法恢复')
       }
     } finally {
       setBusy(null)

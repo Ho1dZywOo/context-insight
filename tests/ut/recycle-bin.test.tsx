@@ -17,13 +17,15 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { RecycleBin } from '../../src/components/RecycleBin'
 
-const { pushSpy, refreshSpy } = vi.hoisted(() => ({ pushSpy: vi.fn(), refreshSpy: vi.fn() }))
+const { pushSpy, refreshSpy, toastErrorSpy } = vi.hoisted(() => ({ pushSpy: vi.fn(), refreshSpy: vi.fn(), toastErrorSpy: vi.fn() }))
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: pushSpy, replace: () => {}, back: () => {}, refresh: refreshSpy }),
   useSearchParams: () => new URLSearchParams(''),
   usePathname: () => '/',
 }))
+
+vi.mock('sonner', () => ({ toast: { error: toastErrorSpy, success: vi.fn(), warning: vi.fn() } }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -33,6 +35,8 @@ const ENTRIES = [
 ]
 
 let entries = [...ENTRIES]
+// restore 服务端返回的 imported 标记（默认成功导入；imported:false 用例覆盖空会话/已存在）
+let restorePayload: { imported: boolean; query: string | null } = { imported: true, query: null }
 const calls: Array<{ url: string; body: Record<string, unknown> | null }> = []
 const fetchMock = vi.fn()
 
@@ -47,16 +51,22 @@ describe('回收站面板', () => {
 
   beforeEach(() => {
     entries = [...ENTRIES]
+    restorePayload = { imported: true, query: null }
     calls.length = 0
     pushSpy.mockClear()
     refreshSpy.mockClear()
+    toastErrorSpy.mockClear()
     fetchMock.mockClear()
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const body = init?.body ? JSON.parse(String(init.body)) : null
       if (url === '/api/recycle' && init?.method === 'POST') {
         calls.push({ url: 'POST /api/recycle', body: body as Record<string, unknown> })
-        if (body?.action === 'restore') entries = entries.filter(e => e.name !== body.name)
+        if (body?.action === 'restore') {
+          // imported:true 才真正回流并移除快照（服务端语义）；imported:false 保留
+          if (restorePayload.imported) entries = entries.filter(e => e.name !== body.name)
+          return { ok: true, json: async () => ({ ok: true, imported: restorePayload.imported, query: restorePayload.query }) }
+        }
         if (body?.action === 'purge') entries = entries.filter(e => e.name !== body.name)
         if (body?.action === 'empty') entries = []
         return { ok: true, json: async () => ({ ok: true }) }
@@ -99,6 +109,33 @@ describe('回收站面板', () => {
     expect(calls.some(c => c.body?.action === 'restore' && c.body?.name === 'ses-a__dsh.db')).toBe(true)
     expect(refreshSpy).toHaveBeenCalled()
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(1)
+  })
+
+  it('恢复 imported:false（空会话）：保留条目 + 提示失败，不 refresh', async () => {
+    restorePayload = { imported: false, query: null }
+    act(() => root!.render(createElement(RecycleBin)))
+    await settle()
+    const restoreBtn = [...container!.querySelectorAll('[data-recycle-restore]')][0] as HTMLButtonElement
+    await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await settle()
+    // 服务端 imported:false 不删快照、未回流——条目必须保留，不能静默移除
+    expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
+    expect(refreshSpy).not.toHaveBeenCalled()
+    expect(toastErrorSpy).toHaveBeenCalled()
+    expect(String(toastErrorSpy.mock.calls[0][0])).toContain('空会话无法恢复')
+  })
+
+  it('恢复 imported:false（会话已存在）：保留条目 + 提示「会话已存在」', async () => {
+    restorePayload = { imported: false, query: '登录 bug 修复' }
+    act(() => root!.render(createElement(RecycleBin)))
+    await settle()
+    const restoreBtn = [...container!.querySelectorAll('[data-recycle-restore]')][0] as HTMLButtonElement
+    await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await settle()
+    expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
+    expect(refreshSpy).not.toHaveBeenCalled()
+    expect(toastErrorSpy).toHaveBeenCalled()
+    expect(String(toastErrorSpy.mock.calls[0][0])).toContain('会话已存在')
   })
 
   it('彻底删除两步确认：首次点击武装、再次点击才 POST purge', async () => {
