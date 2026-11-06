@@ -59,7 +59,7 @@ export function RunContextTab({ runId, onNavigateToTurn }: RunContextTabProps) {
   }, [runId, dataEpoch])
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-background shadow-sm">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-muted/30">
       <div className="run-scroll-fade min-h-0 flex-1 overflow-y-auto">
         {!loaded ? (
           <LoadState label="载入上下文数据…" className="min-h-full justify-center" />

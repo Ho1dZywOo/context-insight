@@ -225,6 +225,14 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(tab!.querySelectorAll('path[fill="none"]')).toHaveLength(2);
     // 概览面板退役：页面无卡片网格（数字全归弹窗，页面只留曲线形状）
     expect(tab!.querySelectorAll('[data-agent-row]')).toHaveLength(0);
+    // 单卡契约：tab 外壳退卡（工作台 tint 约定，无边框/阴影——与 Perf/
+    // Overview 同款），图表 Card 是唯一卡片层（此前外壳 border + Card
+    // border 叠两层卡）
+    const shell = tab!.firstElementChild as HTMLElement;
+    expect(shell.className).toContain('bg-muted/30');
+    expect(shell.className).not.toContain('shadow-sm');
+    expect(shell.className).not.toContain('border');
+    expect(tab!.querySelectorAll('[data-slot="card"]')).toHaveLength(1);
     // 刀G：表头无成员选择模块（观测恒为全成员融合）；显隐快捷在画布内分段控件
     expect(tab!.querySelector('[data-quick-filter]')).toBeTruthy();
 
