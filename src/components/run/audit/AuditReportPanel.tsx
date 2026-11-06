@@ -17,6 +17,7 @@ import { useSyncExternalStore } from "react";
 import { ChevronRightIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { useRunHostCaps } from "@/lib/run/host-caps";
 import {
   subscribeSkillAudit,
   getSkillAuditSnapshot,
@@ -271,6 +272,7 @@ export interface AuditReportPanelProps {
 export function AuditReportPanel({ runId, kind, name, title, members, onOpenTurn, onClose }: AuditReportPanelProps) {
   const key = runAuditKey(runId, kind, name);
   const job = useSyncExternalStore(subscribeSkillAudit, () => getSkillAuditSnapshot(key), getSkillAuditServerSnapshot);
+  const { offline } = useRunHostCaps();
   const [verdictFilter, setVerdictFilter] = useState<AuditVerdict | null>(null);
   const [memberFilter, setMemberFilter] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
@@ -283,7 +285,7 @@ export function AuditReportPanel({ runId, kind, name, title, members, onOpenTurn
   }, [job.running]);
 
   useEffect(() => {
-    if (!job.running && job.result == null && job.error == null) {
+    if (!offline && !job.running && job.result == null && job.error == null) {
       startRunAudit({ runId, kind, name, members });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -393,14 +395,16 @@ export function AuditReportPanel({ runId, kind, name, title, members, onOpenTurn
             </p>
           </div>
           <span className="ml-auto" />
-          <button
-            type="button"
-            title="重跑对账"
-            className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground/80 transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
-            onClick={() => startRunAudit({ runId, kind, name, members })}
-          >
-            <RefreshCwIcon className="size-3" />
-          </button>
+          {!offline ? (
+            <button
+              type="button"
+              title="重跑对账"
+              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground/80 transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
+              onClick={() => startRunAudit({ runId, kind, name, members })}
+            >
+              <RefreshCwIcon className="size-3" />
+            </button>
+          ) : null}
           <button
             type="button"
             title="关闭"

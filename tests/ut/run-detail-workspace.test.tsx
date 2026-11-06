@@ -24,6 +24,9 @@ import { act } from 'react';
 import fs from 'node:fs';
 import path from 'node:path';
 import RunDetailPage from '@/app/run/[runId]/page';
+import { RunOfflineHostCapsProvider } from '@/lib/run/host-caps';
+import { createOfflineFetch, type OfflineMemberTurns } from '@/export-view/offline-kernel';
+import { urlKeyOf } from '@/lib/observe/export-html';
 import { parseAndIndex } from '@/lib/run/reader';
 import { buildViewModel } from '@/lib/run/view-model';
 import { attachSessionRefs } from '@/lib/run/session-link';
@@ -129,6 +132,53 @@ function clickNode(labelPart: string) {
   )
   expect(node, `图上应存在含「${labelPart}」的节点`).toBeTruthy()
   node!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+/** 离线宿主渲染：离线内核（静态档案 = 本文件 fixture 的 run 详情 + 空成员
+ *  富轮仓）+ offline caps provider——模拟导出 HTML 里挂载的真实工作台 */
+async function renderOfflinePage() {
+  const archive = { [urlKeyOf('/api/observe/run/minidemo01')]: responseBody };
+  const members: OfflineMemberTurns[] = [
+    { member: { taskId: 'ses_mini_a', label: 'build 执行' }, sessionId: 'ses_mini_a', framework: 'opencode', items: [] },
+  ];
+  const orig = vi.fn(async () => new Response('x'));
+  const offlineFetch = createOfflineFetch(members, archive, 'minidemo01', orig as unknown as typeof fetch);
+  const prevFetch = (globalThis as unknown as { fetch: unknown }).fetch;
+  vi.stubGlobal('fetch', offlineFetch);
+  try {
+    searchState.current = ''
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root!.render(
+        createElement(
+          Suspense,
+          { fallback: null },
+          createElement(
+            RunOfflineHostCapsProvider,
+            null,
+            createElement(RunDetailPage, { params: Promise.resolve({ runId: 'minidemo01' }) }),
+          ),
+        ),
+      )
+    })
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 0))
+    })
+    const body = document.body.textContent ?? ''
+    // 离线宿主：服务端协作动作全隐藏（刷新/导出/上传），工作台数据照常渲染
+    expect(document.querySelector('button[title="立即刷新"]')).toBeNull()
+    expect(document.querySelector('button[title="导出 Markdown"]')).toBeNull()
+    expect(document.querySelector('button[title="导出离线 HTML"]')).toBeNull()
+    expect([...document.querySelectorAll('button')].find(b => b.textContent?.includes('上传到'))).toBeUndefined()
+    expect(body).toContain('Context')
+    expect(body).toContain('minidemo01')
+    // 详情经内核静态档案应答（非原 fetch 直通）
+    expect(orig).not.toHaveBeenCalled()
+  } finally {
+    vi.stubGlobal('fetch', prevFetch)
+  }
 }
 
 afterEach(() => {
@@ -495,13 +545,17 @@ describe('Run 详情页暗色工作台', () => {
     expect(body).toContain('failed')
     expect(body).toContain('工作流')
     expect(body).toContain('minidemo01')
-    // 动作簇：刷新图标钮（title=立即刷新）+ 上传实心药丸；bundle 形态无
-    // MD/HTML 导出钮（solo 专属）
+    // 动作簇：刷新图标钮（title=立即刷新）+ 上传实心药丸；bundle 形态 HTML
+    // 导出全 run 可用（工作台即离线查看器），MD 导出仍 solo 专属
     expect(document.querySelector('button[title="立即刷新"]')).toBeTruthy()
     const upload = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('上传到'))
     expect(upload).toBeTruthy()
     expect(document.querySelector('button[title="导出 Markdown"]')).toBeNull()
-    expect(document.querySelector('button[title="导出离线 HTML"]')).toBeNull()
+    expect(document.querySelector('button[title="导出离线 HTML"]')).toBeTruthy()
+  })
+
+  it('离线宿主（导出 HTML 形态）：服务端协作动作全隐藏，工作台经内核档案照常渲染', async () => {
+    await renderOfflinePage()
   })
 })
 

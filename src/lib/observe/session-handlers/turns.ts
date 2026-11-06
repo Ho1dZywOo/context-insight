@@ -78,7 +78,10 @@ export async function GET(request: NextRequest) {
     const role = searchParams.get('role');
     const subagentSessionId = searchParams.get('subagentSessionId');
     const includeContent = searchParams.get('includeContent') === 'true';
-    const includeDetail = searchParams.get('includeDetail') === 'true';
+    // includeMeta：轮详情元数据投影（contentJson/ttftMs/modelId/providerId/
+    // errorType）——离线导出档案用；不带 inputMessagesJson 重建（O(n²) 负载
+    // 不进响应，窗口重建由消费侧经 input-reconstruct 纯函数单点按需执行）
+    const includeMeta = searchParams.get('includeMeta') === 'true';
     const includeToolDetail = searchParams.get('includeToolDetail') === 'true';
     // skipOverhead: when the caller doesn't need systemOverheadTokens (e.g. the
     // compare page), skips the per-(root+subagent) computeSystemOverhead loop
@@ -162,31 +165,33 @@ export async function GET(request: NextRequest) {
       omit: maxContentLen === 0 ? { content: true } : undefined,
       include: {
         toolCalls: {
-          select: includeDetail || includeToolDetail
+          select: includeMeta || includeToolDetail
             ? {
                 id: true,
                 toolCallId: true,
                 toolName: true,
+                dispatchBridgeId: true,
                 argsJson: true,
                 resultJson: true,
                 state: true,
-                errorType: includeDetail ? true : undefined,
+                errorType: includeMeta ? true : undefined,
                 // 工具错误面进工具详情视图（含离线导出档案——错误文本是
                 // 搜索六路之一，离线 error: 查询依赖它）
-                errorMessage: (includeDetail || includeToolDetail) ? true : undefined,
+                errorMessage: (includeMeta || includeToolDetail) ? true : undefined,
                 durationMs: true,
-                isSkillRelated: (includeDetail || includeToolDetail) ? true : undefined,
+                isSkillRelated: (includeMeta || includeToolDetail) ? true : undefined,
               }
             : {
                 id: true,
                 toolCallId: true,
                 toolName: true,
+                dispatchBridgeId: true,
                 state: true,
                 durationMs: true,
               },
         },
         skillEvents: {
-          select: includeDetail || includeToolDetail
+          select: includeMeta || includeToolDetail
             ? {
                 id: true,
                 skillName: true,
@@ -245,131 +250,6 @@ export async function GET(request: NextRequest) {
         })()
       : new Map<string, TurnIdentity>();
 
-    // Reconstruct inputMessagesJson for assistant turns if not stored (import optimization)
-    if (includeDetail) {
-      const assistantTurnsNeedingReconstruction = turns.filter(
-        t => t.role === 'assistant' && !t.inputMessagesJson
-      );
-      if (assistantTurnsNeedingReconstruction.length > 0) {
-        const allSessionTurns = await prisma.turn.findMany({
-          where: { sessionId: session.id },
-          orderBy: [{ turnIndex: 'asc' }],
-          select: { id: true, role: true, content: true, turnIndex: true, isSubagent: true, subagentSessionId: true, agentName: true },
-        });
-
-        const rootContextTurns = allSessionTurns.filter(t => !t.isSubagent);
-        const subagentContextMap = new Map<string, typeof allSessionTurns>();
-        for (const t of allSessionTurns.filter(t => t.isSubagent && t.subagentSessionId)) {
-          const arr = subagentContextMap.get(t.subagentSessionId!) ?? [];
-          arr.push(t);
-          subagentContextMap.set(t.subagentSessionId!, arr);
-        }
-
-        // Fetch tool calls (args + result) for prior assistant turns
-        const allAssistantIds = allSessionTurns.filter(t => t.role === 'assistant').map(t => t.id);
-        const allToolCalls = allAssistantIds.length > 0 ? await prisma.toolCall.findMany({
-          where: { turnId: { in: allAssistantIds } },
-          select: { turnId: true, toolCallId: true, toolName: true, argsJson: true, resultJson: true, isSkillRelated: true },
-          orderBy: [{ id: 'asc' }],
-        }) : [];
-        const toolCallsByTurnId = new Map<string, typeof allToolCalls>();
-        for (const tc of allToolCalls) {
-          const arr = toolCallsByTurnId.get(tc.turnId) ?? [];
-          arr.push(tc);
-          toolCallsByTurnId.set(tc.turnId, arr);
-        }
-
-        const compactionTokenMap = new Map<string, number>();
-        for (const ct of turns) {
-          if (ct.agentName === 'compaction') {
-            compactionTokenMap.set(ct.id, ct.totalTokens);
-          }
-        }
-
-        const inputMessagesMap = new Map<string, string>();
-        for (const t of assistantTurnsNeedingReconstruction) {
-          const contextTurns = t.isSubagent && t.subagentSessionId
-            ? (subagentContextMap.get(t.subagentSessionId!) ?? [])
-            : rootContextTurns;
-          // Reconstruct the LLM input window: start at the most recent /compact
-          // continuation before this turn (a compact replaces prior history with
-          // a summary), and skip local CLI command noise. See input-reconstruct.
-          const isCompactionAgent = t.agentName === 'compaction';
-          const previous = selectInputContextTurns(contextTurns, t.turnIndex, t.agentName);
-
-          if (isCompactionAgent && previous.length > 0) {
-            const compactionTotalTokens = compactionTokenMap.get(t.id) ?? 0;
-            let totalPriorTokens = 0;
-            const lines: string[] = [];
-            for (const ct of previous) {
-              const contentLen = ct.content?.length ?? 0;
-              const baseTokens = Math.round(contentLen / 3.5);
-              if (ct.role === 'assistant') {
-                const tcs = toolCallsByTurnId.get(ct.id) ?? [];
-                const argsTokens = tcs.reduce((s, tc) => s + Math.round((tc.argsJson?.length ?? 0) / 3.5), 0);
-                totalPriorTokens += baseTokens + argsTokens;
-              } else {
-                totalPriorTokens += baseTokens;
-              }
-              const preview = (ct.content ?? '').substring(0, 120);
-              lines.push(`[${ct.role}] ${preview}${preview.length < (ct.content?.length ?? 0) ? '...' : ''}`);
-            }
-            const effectiveTokens = compactionTotalTokens > 0 ? compactionTotalTokens : totalPriorTokens;
-            const summaryContent = `Prior conversation context (${previous.length} turns before /compact, ≈${effectiveTokens} tokens):\n\n${lines.join('\n')}`;
-            const msgs = [{ role: 'user', content: summaryContent, tokenCount: effectiveTokens }];
-            inputMessagesMap.set(t.id, JSON.stringify(msgs));
-          } else {
-            const targetInputTokens = t.agentName === 'compaction'
-              ? (t.inputMessagesTokens > 0 ? t.inputMessagesTokens : 0)
-              : (t.inputMessagesTokens > 0 ? Math.max(0, t.inputMessagesTokens - t.outputTokens) : 0);
-            const msgs: Array<{ role: string; content: string | null; tokenCount: number; agentName?: string; tool_calls?: Array<{ name: string; args: string | null; result: string | null; isSkillRelated?: boolean }> }> = [];
-            for (const ct of previous) {
-              const contentLen = ct.content?.length ?? 0;
-              const baseTokens = Math.round(contentLen / 3.5);
-              const isCompaction = ct.agentName === 'compaction';
-              const isContinuation = isCompaction || (ct.role === 'user' && ct.content && isContinuationTurn(ct.content));
-              const effectiveRole = isContinuation ? 'user' : ct.role;
-              if (ct.role === 'assistant') {
-                const tcs = toolCallsByTurnId.get(ct.id) ?? [];
-                const argsTokens = tcs.reduce((s, tc) => s + Math.round((tc.argsJson?.length ?? 0) / 3.5), 0);
-                const compactionTotal = compactionTokenMap.get(ct.id) ?? 0;
-                const continuationTokens = isCompaction && compactionTotal > 0 ? compactionTotal : (isContinuation && targetInputTokens > 0 ? targetInputTokens : baseTokens + argsTokens);
-                const msg: typeof msgs[0] = { role: effectiveRole, content: ct.content ?? null, tokenCount: continuationTokens };
-                if (isContinuation) msg.agentName = 'continuation';
-                if (tcs.length > 0 && !isCompaction) {
-                  msg.tool_calls = tcs.map(tc => {
-                    const isSkill = tc.isSkillRelated;
-                    const argsMax = isSkill ? 2000 : 1500;
-                    const resultMax = isSkill ? 5000 : 3000;
-                    return {
-                      name: tc.toolName,
-                      args: tc.argsJson ? (tc.argsJson.length > argsMax ? tc.argsJson.substring(0, argsMax) + '...' : tc.argsJson) : null,
-                      result: tc.resultJson ? (tc.resultJson.length > resultMax ? tc.resultJson.substring(0, resultMax) + '...' : tc.resultJson) : null,
-                      isSkillRelated: isSkill ? true : undefined,
-                    };
-                  });
-                }
-                msgs.push(msg);
-              } else {
-                const isContinuationUser = isContinuation && ct.role === 'user';
-                const continuationTokens = isContinuationUser && targetInputTokens > 0 ? targetInputTokens : baseTokens;
-                const msg: typeof msgs[0] = { role: effectiveRole, content: ct.content ?? null, tokenCount: continuationTokens };
-                if (isContinuation) msg.agentName = 'continuation';
-                msgs.push(msg);
-              }
-            }
-            inputMessagesMap.set(t.id, JSON.stringify(msgs));
-          }
-        }
-
-        // Patch original turn data so it flows through the map below
-        for (const t of turns) {
-          if (inputMessagesMap.has(t.id)) {
-            t.inputMessagesJson = inputMessagesMap.get(t.id) ?? null;
-          }
-        }
-      }
-    }
 
     const items = turns.map(t => {
       // Prisma omit (maxContentLen===0) makes t.content type-optional at the
@@ -387,11 +267,10 @@ export async function GET(request: NextRequest) {
       content: includeContent
         ? (maxContentLen && tContent ? tContent.substring(0, maxContentLen) : tContent)
         : undefined,
-      contentJson: includeDetail ? t.contentJson : undefined,
-      inputMessagesJson: includeDetail ? t.inputMessagesJson : undefined,
-      ttftMs: includeDetail ? t.ttftMs : undefined,
-      modelId: includeDetail ? t.modelId : undefined,
-      providerId: includeDetail ? t.providerId : undefined,
+      contentJson: includeMeta ? t.contentJson : undefined,
+      ttftMs: includeMeta ? t.ttftMs : undefined,
+      modelId: includeMeta ? t.modelId : undefined,
+      providerId: includeMeta ? t.providerId : undefined,
       contentSummary: t.contentSummary ?? tContent?.substring(0, 200) ?? null,
       contentLength: tContent?.length ?? 0,
       agentName: t.agentName,
@@ -429,15 +308,16 @@ export async function GET(request: NextRequest) {
           id: tc.id,
           toolCallId: tc.toolCallId,
           toolName: tc.toolName,
-          argsJson: (includeDetail || includeToolDetail) ? (detail.argsJson ?? null) : undefined,
-          resultJson: (includeDetail || includeToolDetail) ? (detail.resultJson ?? null) : undefined,
+          dispatchBridgeId: tc.dispatchBridgeId ?? null,
+          argsJson: (includeMeta || includeToolDetail) ? (detail.argsJson ?? null) : undefined,
+          resultJson: (includeMeta || includeToolDetail) ? (detail.resultJson ?? null) : undefined,
           state: tc.state,
-          errorType: includeDetail ? (detail.errorType ?? null) : undefined,
-          errorMessage: (includeDetail || includeToolDetail) ? (detail.errorMessage ?? null) : undefined,
+          errorType: includeMeta ? (detail.errorType ?? null) : undefined,
+          errorMessage: (includeMeta || includeToolDetail) ? (detail.errorMessage ?? null) : undefined,
           // DB per-call duration 采集侧未回填（全 0）：wire 轮间隙推导覆盖（cpx 捕获）；
           // 无 wire（原生 opencode）保持 0，Perf 分段退回 token 估算
           durationMs: effectiveToolDurations[i],
-          isSkillRelated: (includeDetail || includeToolDetail) ? (detail.isSkillRelated ?? false) : undefined,
+          isSkillRelated: (includeMeta || includeToolDetail) ? (detail.isSkillRelated ?? false) : undefined,
         }
       }),
       skillEvents: (() => {
@@ -453,12 +333,12 @@ export async function GET(request: NextRequest) {
           return {
             id: se.id,
             skillName: se.skillName,
-            skillVersion: (includeDetail || includeToolDetail) ? (detail.skillVersion ?? null) : undefined,
+            skillVersion: (includeMeta || includeToolDetail) ? (detail.skillVersion ?? null) : undefined,
             eventType: se.eventType,
             success: resultError ? false : se.success,
-            errorMessage: resultError ? (matchedResult!.substring(0, 200)) : ((includeDetail || includeToolDetail) ? (detail.errorMessage ?? null) : undefined),
-            argsJson: (includeDetail || includeToolDetail) ? (detail.argsJson ?? null) : undefined,
-            durationMs: (includeDetail || includeToolDetail) ? (detail.durationMs ?? 0) : undefined,
+            errorMessage: resultError ? (matchedResult!.substring(0, 200)) : ((includeMeta || includeToolDetail) ? (detail.errorMessage ?? null) : undefined),
+            argsJson: (includeMeta || includeToolDetail) ? (detail.argsJson ?? null) : undefined,
+            durationMs: (includeMeta || includeToolDetail) ? (detail.durationMs ?? 0) : undefined,
           }
         })
       })(),
@@ -483,7 +363,6 @@ export async function GET(request: NextRequest) {
             role: 'user',
             content: compContent ?? compSummary,
             contentJson: undefined,
-            inputMessagesJson: null,
             ttftMs: undefined,
             modelId: undefined,
             providerId: undefined,

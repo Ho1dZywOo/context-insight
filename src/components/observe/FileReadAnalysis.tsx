@@ -35,6 +35,7 @@ import {
   XIcon,
 } from "lucide-react"
 import { PerfSegmented, PERF_CARD_CLS, PERF_CARD_SM } from "@/components/observe/perf-shared"
+import { useRunHostCaps } from "@/lib/run/host-caps"
 
 interface ReadEntry {
   turnId: string
@@ -441,6 +442,8 @@ const FileRow = memo(function FileRow({
 })
 
 export function FileReadAnalysis({ taskId, endpoints, onNavigateToTurn }: FileReadAnalysisProps) {
+  // 宿主能力门控：离线档案不做 zip 重编（逐文件还原已随档案离线可用）
+  const { offline } = useRunHostCaps()
   const [data, setData] = useState<FileReadsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -715,26 +718,28 @@ export function FileReadAnalysis({ taskId, endpoints, onNavigateToTurn }: FileRe
                 ariaLabel="文件过滤"
               />
               <span className="ml-auto" />
-              <button
-                type="button"
-                data-dir-restore
-                title="重编汇册：按时间戳逐行重建本会话工作目录下全部被读/写过的文件，保留路径树打包下载 zip"
-                className={cn(
-                  "inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium text-white transition-[background-color,transform,opacity] duration-200 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)] active:scale-95",
-                  allDone || allError
-                    ? "bg-teal-600/80 hover:bg-teal-600 dark:bg-teal-500/80 dark:hover:bg-teal-500"
-                    : "bg-teal-500 hover:bg-teal-600 dark:bg-teal-600 dark:hover:bg-teal-500",
-                  restoringAll && "cursor-wait opacity-80",
-                )}
-                onClick={() => {
-                  if (restoringAll) return
-                  if (allDone || allError) { setAllDone(null); setAllError(null); return }
-                  restoreAll()
-                }}
-              >
-                <FolderArchiveIcon className="size-3.5" />
-                {restoringAll ? "重编中…" : "重编汇册"}
-              </button>
+              {!offline && (
+                <button
+                  type="button"
+                  data-dir-restore
+                  title="重编汇册：按时间戳逐行重建本会话工作目录下全部被读/写过的文件，保留路径树打包下载 zip"
+                  className={cn(
+                    "inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium text-white transition-[background-color,transform,opacity] duration-200 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)] active:scale-95",
+                    allDone || allError
+                      ? "bg-teal-600/80 hover:bg-teal-600 dark:bg-teal-500/80 dark:hover:bg-teal-500"
+                      : "bg-teal-500 hover:bg-teal-600 dark:bg-teal-600 dark:hover:bg-teal-500",
+                    restoringAll && "cursor-wait opacity-80",
+                  )}
+                  onClick={() => {
+                    if (restoringAll) return
+                    if (allDone || allError) { setAllDone(null); setAllError(null); return }
+                    restoreAll()
+                  }}
+                >
+                  <FolderArchiveIcon className="size-3.5" />
+                  {restoringAll ? "重编中…" : "重编汇册"}
+                </button>
+              )}
             </div>
             {typeChips.length > 1 && (
               <div className="flex flex-wrap items-center gap-1.5">

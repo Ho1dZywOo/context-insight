@@ -43,7 +43,8 @@ import { BrandMark } from "@/components/BrandMark";
 import { UploadDialog } from "@/components/collection/UploadDialog";
 import { BAY_NAME, BRAND_NAME } from "@/lib/branding";
 import { VERSION_DISPLAY } from "@/lib/version";
-import { assembleEmbeddedHtml, captureStylesheets, downloadHtml, fallbackDownload, gatherExportData } from "@/lib/observe/export-html";
+import { assembleEmbeddedHtml, captureStylesheets, downloadHtml, fallbackDownload, gatherRunExportData } from "@/lib/observe/export-html";
+import { useRunHostCaps } from "@/lib/run/host-caps";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { RunMemberIdentity, RunMemberStats } from "@/lib/collection/types";
@@ -223,6 +224,8 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   // tab/member 视图状态（URL 镜像单点，契约对齐 session-view）；goBack/canBack
   // 为工作台内回退栈（navigate 前值入栈、select 不入栈）
   const { view, navigate, select, goBack, canBack } = useRunView();
+  // 宿主能力门控（live 页面 = 全能力；离线导出 bundle = 只读档案）
+  const { offline } = useRunHostCaps();
   // 懒挂载护栏（design §6）：Turns/Trace 等自取数 tab 首次访问才挂载拉数，
   // 此后保持挂载 hidden 切换（回切不丢状态）——避免 Overview 落地即全量拉取
   const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<RunTabKey>>(() => new Set([view.tab]));
@@ -376,7 +379,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
     return () => { document.title = prev; };
   }, [data?.run]);
   useEffect(() => {
-    if (!autoSyncEligible || soloRow == null) return;
+    if (offline || !autoSyncEligible || soloRow == null) return;
     // 基线是 effect 局部量：run 切换/数据重载后重开即重置（防跨 run 残留基线）
     let initialized = false;
     let lastMaxTime = -1;
@@ -530,12 +533,13 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         .map(n => ({ key: n.key, generation: n.generation, status: n.status }))
     : [];
 
-  // 离线导出（solo run = 会话维度，与 compare 同口径）：MD 走 run 成员视图端点；
-  // HTML 经 export-html 装配（取数 run 端点、按 session 键存档，离线查看器零改动消费）
+  // 离线导出：solo = 会话维度导出（与 compare 同口径），bundle = run 全员
+  // 工作台导出；MD 走 run 成员视图端点（solo-only），HTML 经 export-html
+  // 装配（取数 run 端点 + 成员富轮仓，离线查看器即本工作台组件树）
   const soloMember = run.kind === "solo" ? memberRows[0] ?? null : null;
   // 刷新目标：有源的成员会话（solo = 1 个；bundle = 全部有源成员）
   const refreshTargets = memberRows.filter(m => m.sourcePath);
-  const refreshable = refreshTargets.length > 0;
+  const refreshable = !offline && refreshTargets.length > 0;
 
   async function handleExportMd() {
     if (!soloMember || exportingMd) return;
@@ -558,22 +562,27 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   }
 
   async function handleExportHtml() {
-    if (!soloMember || exportingHtml) return;
+    if (exportingHtml) return;
     setExportingHtml(true);
     try {
       const cssText = captureStylesheets();
-      const payload = await gatherExportData(run.runId, soloMember.taskId, soloMember.framework);
+      const payload = await gatherRunExportData(run.runId);
       const bundleRes = await fetch("/export-view.js");
       if (!bundleRes.ok) throw new Error("export-view.js 未构建，请先运行 npm run build:export-view");
+      const runName = run.name ?? run.runId;
       const html = assembleEmbeddedHtml(
         cssText,
         await bundleRes.text(),
-        soloMember.taskId,
-        soloMember.framework,
+        run.runId,
+        runName,
         payload,
       );
-      downloadHtml(html, `session_${soloMember.taskId}.html`);
-      toast.success("HTML exported", { description: `session_${soloMember.taskId}.html — 嵌入式 SPA（离线可交互）` });
+      // solo 保持会话文件名口径；bundle 用 run 身份（文件系统安全字符收敛）
+      const filename = soloMember
+        ? `session_${soloMember.taskId}.html`
+        : `run_${runName.replace(/[\\/:*?"<>|\s]+/g, "_")}.html`;
+      downloadHtml(html, filename);
+      toast.success("HTML exported", { description: `${filename} — 嵌入式工作台（离线可交互）` });
     } catch (e) {
       toast.error("Export HTML failed", { description: e instanceof Error ? e.message : "Unknown error" });
     } finally {
@@ -597,8 +606,8 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         <div className="flex shrink-0 animate-in fade-in slide-in-from-top-2 duration-300 items-center gap-2">
           <BrandLockup />
           <span className="flex-1" />
-          {/* 同步态 chip（仅活动时可见） */}
-          {refreshing ? (
+          {/* 同步态 chip（仅活动时可见；离线档案无同步语义） */}
+          {!offline && (refreshing ? (
             <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-blue-500/[0.08] px-2.5 py-1 text-[11px] font-medium text-blue-600 dark:bg-blue-500/[0.14] dark:text-blue-400">
               <Loader2Icon className="size-3 animate-spin" />
               同步中…
@@ -611,69 +620,75 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
               <WifiIcon className="size-3" />
               自动同步
             </span>
-          ) : null}
+          ) : null)}
           {/* 动作簇：图标动作收进工具条药丸容器（刷新三态合一——自动同步
               态也可手动立即刷新），上传为实心主操作药丸 */}
           <div className="flex shrink-0 items-center gap-1.5">
             <div className="flex items-center gap-0.5 rounded-full bg-foreground/[0.04] p-1 dark:bg-foreground/[0.08]">
-              <button
-                type="button"
-                className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
-                onClick={() => { if (!refreshing && refreshable) void refreshMembers(refreshTargets, false) }}
-                disabled={refreshing || !refreshable}
-                title={refreshing ? "同步中…" : autoSyncEligible ? "自动同步已开启 · 点击立即刷新" : "立即刷新"}
-              >
-                {refreshing ? (
-                  <Loader2Icon className="size-3.5 animate-spin text-blue-500" />
-                ) : autoSyncEligible ? (
-                  <span className="relative flex size-3.5 items-center justify-center text-emerald-500 dark:text-emerald-400">
-                    <WifiIcon className="size-3.5" />
-                    <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-emerald-500" aria-hidden />
-                  </span>
-                ) : (
-                  <RefreshCwIcon className="size-3.5" />
-                )}
-              </button>
-              {soloMember ? (
-                <>
-                  <button
-                    type="button"
-                    className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
-                    onClick={handleExportMd}
-                    disabled={exportingMd}
-                    title="导出 Markdown"
-                  >
-                    {exportingMd ? <Loader2Icon className="size-3.5 animate-spin" /> : <FileTextIcon className="size-3.5" />}
-                  </button>
-                  <button
-                    type="button"
-                    className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
-                    onClick={handleExportHtml}
-                    disabled={exportingHtml}
-                    title="导出离线 HTML"
-                  >
-                    {exportingHtml ? <Loader2Icon className="size-3.5 animate-spin" /> : <GlobeIcon className="size-3.5" />}
-                  </button>
-                </>
+              {!offline ? (
+                <button
+                  type="button"
+                  className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
+                  onClick={() => { if (!refreshing && refreshable) void refreshMembers(refreshTargets, false) }}
+                  disabled={refreshing || !refreshable}
+                  title={refreshing ? "同步中…" : autoSyncEligible ? "自动同步已开启 · 点击立即刷新" : "立即刷新"}
+                >
+                  {refreshing ? (
+                    <Loader2Icon className="size-3.5 animate-spin text-blue-500" />
+                  ) : autoSyncEligible ? (
+                    <span className="relative flex size-3.5 items-center justify-center text-emerald-500 dark:text-emerald-400">
+                      <WifiIcon className="size-3.5" />
+                      <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-emerald-500" aria-hidden />
+                    </span>
+                  ) : (
+                    <RefreshCwIcon className="size-3.5" />
+                  )}
+                </button>
+              ) : null}
+              {soloMember && !offline ? (
+                <button
+                  type="button"
+                  className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
+                  onClick={handleExportMd}
+                  disabled={exportingMd}
+                  title="导出 Markdown"
+                >
+                  {exportingMd ? <Loader2Icon className="size-3.5 animate-spin" /> : <FileTextIcon className="size-3.5" />}
+                </button>
+              ) : null}
+              {!offline ? (
+                <button
+                  type="button"
+                  className="flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]"
+                  onClick={handleExportHtml}
+                  disabled={exportingHtml}
+                  title="导出离线 HTML"
+                >
+                  {exportingHtml ? <Loader2Icon className="size-3.5 animate-spin" /> : <GlobeIcon className="size-3.5" />}
+                </button>
               ) : null}
             </div>
-            <button
-              type="button"
-              className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-foreground px-3.5 text-xs font-medium text-background transition-opacity hover:opacity-85"
-              onClick={() => setUploadOpen(true)}
-            >
-              <UploadIcon className="size-3.5" />
-              上传到{BAY_NAME}
-            </button>
+            {!offline ? (
+              <button
+                type="button"
+                className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-foreground px-3.5 text-xs font-medium text-background transition-opacity hover:opacity-85"
+                onClick={() => setUploadOpen(true)}
+              >
+                <UploadIcon className="size-3.5" />
+                上传到{BAY_NAME}
+              </button>
+            ) : null}
           </div>
         </div>
 
-        <UploadDialog
-          open={uploadOpen}
-          onOpenChange={setUploadOpen}
-          kind="run"
-          target={{ runId: run.runId, runName: run.name }}
-        />
+        {!offline ? (
+          <UploadDialog
+            open={uploadOpen}
+            onOpenChange={setUploadOpen}
+            kind="run"
+            target={{ runId: run.runId, runName: run.name }}
+          />
+        ) : null}
 
         {/* 数据纪元提供者：刷新走「原地重取」（tab 保持挂载），阅读态不被重挂清场 */}
         <RunDataEpochContext.Provider value={refreshEpoch}>

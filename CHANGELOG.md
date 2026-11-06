@@ -2,6 +2,11 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [Unreleased]
+
+### Changed
+- 【离线 HTML 导出全 run 可用】run 页头的离线 HTML 导出从 solo 专属扩展到全部 run（多成员 bundle 同样可导），且导出文件内嵌的就是真实 run 工作台本身——与 live 默认视图同款的观测面（全员成员、搜索/轮次直达/轮详情含输入窗口重建，旧版离线详情缺位不再）单文件离线可交互；此前与工作台平行的会话查看器实现退役，由工作台组件单一真相源取代
+
 ## [1.0.2] - 2026-11-05
 
 ### Added

@@ -51,7 +51,7 @@ All three modes are pure API clients of the same `/api/observe/*` endpoints（ru
 | **CLI** | `src/cli/index.ts` (Commander) | chalk + string-width + cli-truncate |
 
 Run 统一工作台（`run/[runId]`）is `"use client"` with 11 tabs
-（Overview/Graph/Turns/Context/Audit/Perf/Skills/Files/Wire/Replay/Score；`wire`/`replay` 默认隐藏，URL `?a` 或 `NEXT_PUBLIC_SHOW_ADVANCED_TABS` 展开）fetching from `/api/observe/*`——会话以 solo run（`solo:<taskId>`）形态打开同一工作台；离线 HTML bundle 的查看器组件在 `src/components/export-view/`（装配层 `src/lib/observe/export-html.ts`，run 页头导出）。
+（Overview/Graph/Turns/Context/Audit/Perf/Skills/Files/Wire/Replay/Score；`wire`/`replay` 默认隐藏，URL `?a` 或 `NEXT_PUBLIC_SHOW_ADVANCED_TABS` 展开）fetching from `/api/observe/*`——会话以 solo run（`solo:<taskId>`）形态打开同一工作台；离线 HTML 导出 = 工作台自身即查看器：导出入口 `src/export-view/entry.tsx` 挂载本页组件，离线内核 `src/export-view/offline-kernel.ts`（静态档案 + turns/搜索/by-index/轮详情四个动态合成器）应答 fetch，装配层 `src/lib/observe/export-html.ts`（run 页头导出，全员 run 可用）。
 
 ### Key Code Paths
 

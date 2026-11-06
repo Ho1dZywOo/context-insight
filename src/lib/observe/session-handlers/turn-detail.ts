@@ -11,8 +11,7 @@ import { prisma } from '@/lib/db';
 import { getContextWindowLimit } from '@/lib/context-window-config';
 import { isProxyVersion } from '@/lib/shared/session-format';
 import { resolveSubagentIdentity } from '@/lib/subagent-identity';
-import { selectInputContextTurns, toWireOrder } from '@/lib/ingest/input-reconstruct';
-import { isContinuationTurn } from '@/lib/shared/command-parser';
+import { selectInputContextTurns, toWireOrder, buildInputMessages, type PriorTurnRef } from '@/lib/ingest/input-reconstruct';
 import { listSubagentSessions } from '@/lib/ingest/adapters/claude-jsonl';
 import { readFullContext, readTurnRequestParams, type FullContext } from '@/lib/ingest/adapters/claude-jsonl-full-context';
 import { isClaudeFormatSession } from '@/lib/shared/session-format';
@@ -266,7 +265,11 @@ export const GET = withRouteLog('observe/session/turns/[turnId]', async (request
     // before this turn and skip local CLI command noise. See input-reconstruct.
     // toWireOrder then folds reminder-split system turns back into their user
     // message so the list mirrors the original request exactly.
-    const filtered = toWireOrder(selectInputContextTurns(previousTurns, turn.turnIndex, turn.agentName));
+    const priorTurns: PriorTurnRef[] = previousTurns.map(ct => ({
+      ...ct,
+      toolCalls: toolCallsByTurnId.get(ct.id) ?? [],
+    }));
+    const filtered = toWireOrder(selectInputContextTurns(priorTurns, turn.turnIndex, turn.agentName)) as PriorTurnRef[];
 
     // Fetch compaction turn totalTokens for accurate continuation tokenCount
     const compactionIds = filtered.filter(ct => ct.agentName === 'compaction').map(ct => ct.id);
@@ -279,56 +282,11 @@ export const GET = withRouteLog('observe/session/turns/[turnId]', async (request
       compactionTokenMap.set(cr.id, cr.totalTokens);
     }
 
-    const messages: Array<{ role: string; content: string | null; tokenCount: number; agentName?: string; tool_calls?: Array<{ name: string; args: string | null; result: string | null; isSkillRelated?: boolean }> }> = [];
-    const targetInputTokens = turn.agentName === 'compaction'
-      ? (turn.inputMessagesTokens > 0 ? turn.inputMessagesTokens : 0)
-      : (turn.inputMessagesTokens > 0 ? Math.max(0, turn.inputMessagesTokens - turn.outputTokens) : 0);
-    for (const ct of filtered) {
-      const contentLen = ct.content?.length ?? 0;
-      const baseTokens = Math.round(contentLen / 3.5);
-      const isCompaction = ct.agentName === 'compaction';
-      const isContinuation = isCompaction || (ct.role === 'user' && ct.content && isContinuationTurn(ct.content));
-      const effectiveRole = isContinuation ? 'user' : ct.role;
-
-      if (ct.role === 'assistant') {
-        const tcs = toolCallsByTurnId.get(ct.id) ?? [];
-        const argsTokens = tcs.reduce((s, tc) => s + Math.round((tc.argsJson?.length ?? 0) / 3.5), 0);
-        const compactionTotal = compactionTokenMap.get(ct.id) ?? 0;
-        const continuationTokens = isCompaction && compactionTotal > 0 ? compactionTotal : (isContinuation && targetInputTokens > 0 ? targetInputTokens : baseTokens + argsTokens);
-        const msg: typeof messages[0] = {
-          role: effectiveRole,
-          content: ct.content ?? null,
-          tokenCount: continuationTokens,
-        };
-        if (isContinuation) msg.agentName = 'continuation';
-        if (tcs.length > 0 && !isCompaction) {
-          msg.tool_calls = tcs.map(tc => {
-            const isSkill = tc.isSkillRelated;
-            const argsMax = isSkill ? 2000 : 1500;
-            const resultMax = isSkill ? 5000 : 3000;
-            return {
-              name: tc.toolName,
-              args: tc.argsJson ? (tc.argsJson.length > argsMax ? tc.argsJson.substring(0, argsMax) + '...' : tc.argsJson) : null,
-              result: tc.resultJson ? (tc.resultJson.length > resultMax ? tc.resultJson.substring(0, resultMax) + '...' : tc.resultJson) : null,
-              isSkillRelated: isSkill ? true : undefined,
-            };
-          });
-        }
-        messages.push(msg);
-      } else {
-        const isContinuationUser = isContinuation && ct.role === 'user';
-        const continuationTokens = isContinuationUser && targetInputTokens > 0 ? targetInputTokens : baseTokens;
-        const msg: typeof messages[0] = {
-          role: effectiveRole,
-          content: ct.content ?? null,
-          tokenCount: continuationTokens,
-        };
-        if (isContinuation) msg.agentName = 'continuation';
-        messages.push(msg);
-      }
-    }
-
-    inputMessagesJson = JSON.stringify(messages);
+    inputMessagesJson = buildInputMessages(
+      filtered,
+      { agentName: turn.agentName, inputMessagesTokens: turn.inputMessagesTokens, outputTokens: turn.outputTokens },
+      compactionTokenMap,
+    );
     reconstructionCache.set(cacheKey, inputMessagesJson);
     }
     // The stored count predates the wire-order merge (reminder turn was its

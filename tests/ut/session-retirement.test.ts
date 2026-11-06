@@ -45,10 +45,11 @@ describe('run-first 刀J2：session 面退役锁', () => {
     expect(page).toContain('soloRunIdOf');
   });
 
-  it('离线导出查看器组件保活（export-view 入口挂载它，路由退役组件不平移删除）', () => {
-    expect(srcExists('components/export-view/SessionExportViewer.tsx')).toBe(true);
-    expect(srcExists('components/export-view/session-view.ts')).toBe(true);
+  it('离线导出查看器 = run 工作台自身（entry 挂载 run 页组件，不再有平行查看器实现）', () => {
+    expect(srcExists('components/export-view/SessionExportViewer.tsx')).toBe(false);
+    expect(srcExists('components/export-view/session-view.ts')).toBe(false);
     const entry = fs.readFileSync(path.join(src, 'export-view/entry.tsx'), 'utf-8');
-    expect(entry).toContain('SessionExportViewer');
+    expect(entry).toContain('app/run/[runId]/page');
+    expect(srcExists('export-view/offline-kernel.ts')).toBe(true);
   });
 });
