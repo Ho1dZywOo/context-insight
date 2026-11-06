@@ -229,14 +229,16 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     // 刀G：表头无成员选择模块（观测恒为全成员融合）；显隐快捷在画布内分段控件
     expect(tab!.querySelector('[data-quick-filter]')).toBeTruthy();
 
-    // 组详情渐进披露：成员A 胶囊 → 详情（主agent 徽标）→ → Turns 跳转带
-    // member 归因（root 组 = 成员会话；turnId 首轮）
+    // 组详情渐进披露：成员A 胶囊 → 右侧弹窗（主agent 徽标；弹窗经 Portal 挂
+    // body）→ → Turns 跳转带 member 归因（root 组 = 成员会话；turnId 首轮）
     const detailBtn = (tab!.querySelector('[data-legend="成员A"]') as HTMLElement)
       .parentElement!.querySelector('button') as HTMLElement;
     await act(async () => { detailBtn.click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(tab!.textContent ?? '').toContain('主agent');
-    const turnBtn = [...tab!.querySelectorAll('button')].find(b => b.textContent === '→ Turns');
+    const detail = document.querySelector('[data-agent-detail]');
+    expect(detail).toBeTruthy();
+    expect(detail!.textContent).toContain('主agent');
+    const turnBtn = [...detail!.querySelectorAll('button')].find(b => b.textContent === '→ Turns');
     expect(turnBtn).toBeTruthy();
     await act(async () => { turnBtn!.click() });
     expect(nav.replace.mock.calls.some(([url]) =>

@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button"
 import { ZoomInIcon, ZoomOutIcon, MaximizeIcon, ChevronRightIcon, PlayIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ContextReplayDialog } from "@/components/observe/ContextReplayDialog"
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { isCommandTurn, isContinuationTurn, parseCommandTurns, formatCommandDisplay } from "@/lib/shared/command-parser"
 import { buildRunActors, subagentBaseNameOf, type RunActor } from "@/components/observe/run-actor"
 import { contextAgentKeyOf, contextLegendKeyOf, contextColorMapOf } from "@/components/observe/context-legend"
@@ -109,6 +110,17 @@ interface ContextEvent {
   contTimestamp?: string | null
   preCompactTokens?: number
   postCompactTokens?: number
+}
+
+/** 图例组（胶囊/组详情弹窗同构）：root 一键一会话、type 聚合 ×N */
+interface LegendGroup {
+  key: string
+  kind: "root" | "type"
+  label: string
+  color: string
+  sessionIds: string[]
+  count: number
+  visibleCount: number
 }
 
 /** /compact + continuation 事件检测（单个 root 分组内）：命令轮常
@@ -449,14 +461,6 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   const [cardsExpanded, setCardsExpanded] = useState(false)
   const [detailKey, setDetailKey] = useState<string | null>(null)
   const [detailSid, setDetailSid] = useState<string | null>(null)
-  // 详情可见性契约：入口在画布旁（胶囊 chevron）或概览网格（卡片点击），
-  // 详情块可能距点击点数千像素（94 agent 的网格在下）——不滚动定位等于
-  // 没打开。block:'nearest' 已可见时不扰动（卡片点击场景）
-  const detailRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!detailKey) return
-    detailRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" })
-  }, [detailKey])
 
   // ── 时间窗模型（Perf 效率分布同款）：图框恒定（SVG 随视口满铺，缩放绝不
   // 作用于图框本身），缩放/平移只改时间轴——窗口内重新采样（LTTB）+ 刻度
@@ -496,7 +500,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   // 图例分组：root 一键一会话（成员短名）、subagent 按类型聚合（×N 计数）——
   // 百级子代理折叠成十级类型条目，与泳道图例同构
   const groups = useMemo(() => {
-    const byKey = new Map<string, { key: string; kind: "root" | "type"; label: string; color: string; sessionIds: string[]; count: number; visibleCount: number }>()
+    const byKey = new Map<string, LegendGroup>()
     for (const s of agentStats) {
       const key = contextLegendKeyOf(s)
       let g = byKey.get(key)
@@ -1400,123 +1404,41 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
           </div>
           <div className={cn(cardsBig && cardsExpanded && "max-h-[560px] overflow-y-auto run-scroll-fade")}>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-1.5">
-              {shownStats.map(s => {
-              const groupKey = contextLegendKeyOf(s)
-              const actor = actors.get(s.sessionId)
-              const winPct = s.maxContextWindowPct
-              const barColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : "#22c55e"
-              return (
-                <div
+              {shownStats.map(s => (
+                <AgentOverviewCard
                   key={s.sessionId}
-                  data-agent-row
-                  // 卡片常亮：不随图中显隐/选中变化（隐藏组淡出曾在此联动——
-                  // 显隐语义归图与胶囊，概览是恒定参照面板）
-                  className="cursor-pointer rounded-lg border px-3 py-1.5 transition-colors hover:bg-accent/40"
-                  onClick={() => { setDetailKey(groupKey); setDetailSid(s.sessionId) }}
-                >
-                  {/* 名字单行全显：nowrap 不截断（列宽 340px 起容纳常规名），
-                      超长名把右侧指标挤到次行——名字永远完整 */}
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: colorMap.get(groupKey) ?? "#94a3b8" }} />
-                    <span className="whitespace-nowrap text-xs font-medium">{displayLabel(s)}</span>
-                    {s.isRoot && <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px]">root</Badge>}
-                    {!s.isRoot && actor?.nameSource === "step" && (
-                      <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px] text-muted-foreground">派发</Badge>
-                    )}
-                    <span className="ml-auto shrink-0 text-xs font-medium tabular-nums">{formatTokenCount(s.peak)}</span>
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      <span className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
-                        <span className="block h-full rounded-full" style={{ width: `${Math.min(winPct, 100)}%`, backgroundColor: barColor }} />
-                      </span>
-                      <span className="w-13 text-right text-xs tabular-nums">{winPct > 0 ? `${winPct.toFixed(1)}%` : "—"}</span>
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-3 pl-3.5 text-[11px] tabular-nums text-muted-foreground">
-                    <span>{s.totalTurns} 轮</span>
-                    <span>平均 {formatTokenCount(s.average)}</span>
-                    <span>缓存命中 {(s.cacheHitRate * 100).toFixed(0)}%</span>
-                    {onNavigateToTurn && (
-                      <button
-                        type="button"
-                        className="ml-auto shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                        onClick={e => { e.stopPropagation(); onNavigateToTurn(s.turns[0].turnId, s.memberTaskId) }}
-                      >
-                        → Turns
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
+                  stats={s}
+                  color={colorMap.get(contextLegendKeyOf(s)) ?? "#94a3b8"}
+                  label={displayLabel(s)}
+                  actors={actors}
+                  onClick={() => { setDetailKey(contextLegendKeyOf(s)); setDetailSid(s.sessionId) }}
+                  onNavigateToTurn={onNavigateToTurn}
+                />
+              ))}
             </div>
           </div>
 
-        {/* 组详情（第四层：构成下钻）——两个入口一个面板：胶囊 chevron =
-            组视角（这一类 agent 由哪些实例构成、各自贡献多少：实例排行 +
-            成员归因 + 组级 Σ 摘要）；概览卡片点击 = 实例视角（直达该实例
-            详情）。多实例组给构成清单（行即实例切换器），单实例组直开详情；
-            打开即滚动定位（上方 detailRef 契约） */}
-        {detailKey && (() => {
-          const g = groups.find(x => x.key === detailKey)
-          if (!g) return null
-          const members = agentStats
-            .filter(s => g.sessionIds.includes(s.sessionId))
-            .sort((a, b) => b.peak - a.peak)
-          if (members.length === 0) return null
-          const sel = members.find(m => m.sessionId === detailSid) ?? members[0]
-          const sumTurns = members.reduce((s, m) => s + m.totalTurns, 0)
-          const sumPeak = members.reduce((s, m) => s + m.peak, 0)
-          const sumSaved = members.reduce((s, m) => s + m.turns.reduce((x, t) => x + (t.cacheReadTokens ?? 0), 0), 0)
-          return (
-            <div data-agent-detail ref={detailRef} className="animate-in fade-in-0 slide-in-from-bottom-2 space-y-2 rounded-xl border bg-muted/30 p-3 duration-300">
-              <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="size-2 rounded-full" style={{ backgroundColor: g.color }} />
-                <span className="font-medium">{g.label}</span>
-                {members.length > 1 ? (
-                  <>
-                    <Badge variant="outline" className="text-xs">{members.length} 个实例</Badge>
-                    <span className="text-muted-foreground">Σ {sumTurns} 轮 · Σ 峰值 {formatTokenCount(sumPeak)} · Σ 缓存节省 {formatTokenCount(sumSaved)}</span>
-                  </>
-                ) : (
-                  <span className="text-muted-foreground">上下文详情</span>
-                )}
-                <Button variant="ghost" size="sm" className="ml-auto h-5 text-xs" onClick={() => { setDetailKey(null); setDetailSid(null) }}>关闭</Button>
-              </div>
-              {members.length > 1 && (
-                <div data-agent-instances className="space-y-1">
-                  {members.map(m => {
-                    const winPct = m.maxContextWindowPct
-                    const barColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : "#22c55e"
-                    return (
-                      <button
-                        key={m.sessionId} type="button"
-                        onClick={() => setDetailSid(m.sessionId)}
-                        className={cn(
-                          "flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-left text-xs transition-colors",
-                          m.sessionId === sel.sessionId ? "border-foreground/25 bg-accent/50" : "hover:bg-accent/40",
-                        )}
-                      >
-                        <span className="font-medium whitespace-nowrap">{displayLabel(m)}</span>
-                        {m.memberTaskId && <Badge variant="slate" className="text-xs">{m.memberLabel ?? m.memberTaskId}</Badge>}
-                        <span className="text-muted-foreground tabular-nums">{m.totalTurns} 轮</span>
-                        <span className="text-muted-foreground tabular-nums">峰值 {formatTokenCount(m.peak)}</span>
-                        <span className="ml-auto flex items-center gap-1.5">
-                          <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
-                            <span className="block h-full rounded-full" style={{ width: `${Math.min(100, Math.max(2, winPct))}%`, backgroundColor: barColor }} />
-                          </span>
-                          <span className="w-9 text-right tabular-nums text-muted-foreground">{winPct.toFixed(0)}%</span>
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-              <AgentDetail stats={sel} label={displayLabel(sel)} onClose={() => { setDetailKey(null); setDetailSid(null) }} onNavigateToTurn={onNavigateToTurn} />
-            </div>
-          )
-        })()}
+        {/* 组详情（第四层：构成下钻）——右侧滑出抽屉（两个入口一个弹窗）：
+            胶囊 chevron = 组视角（这一类 agent 由哪些实例构成、各自贡献多少）；
+            概览卡片点击 = 实例视角（直达该实例）。抽屉内容自上而下：组头（Σ
+            摘要）→ 该 agent 独立增长趋势小图（逐轮轴 + 上下文窗口参考线 +
+            /compact 标记，多实例组灰色同框对比）→ 概览卡 → 实例清单（行即
+            切换器）→ 上下文组成/关键事件/缓存效率 */}
       </CardContent>
     </Card>
+
+    <AgentDetailDialog
+      open={detailKey != null}
+      onOpenChange={o => { if (!o) { setDetailKey(null); setDetailSid(null) } }}
+      group={groups.find(x => x.key === detailKey) ?? null}
+      agentStats={agentStats}
+      selectedSid={detailSid}
+      onSelectSid={setDetailSid}
+      displayLabel={displayLabel}
+      actors={actors}
+      colorMap={colorMap}
+      onNavigateToTurn={onNavigateToTurn}
+    />
     </>
   )
 }
@@ -1530,7 +1452,7 @@ const EVENT_CONFIG: Record<string, { icon: string; color: string }> = {
   end: { icon: "🔴", color: "text-gray-600 dark:text-gray-400" },
 }
 
-function AgentDetail({ stats, label, onClose, onNavigateToTurn }: { stats: AgentStats; label: string; onClose: () => void; onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void }) {
+function AgentDetail({ stats, label, onNavigateToTurn }: { stats: AgentStats; label: string; onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void }) {
   const peakTurn = stats.turns.reduce((max, t) => t.totalTokens > max.totalTokens ? t : max, stats.turns[0])
   const peakCacheRead = peakTurn.cacheReadTokens ?? 0
   const peakRealInput = peakTurn.inputTokens + peakTurn.cacheReadTokens + peakTurn.cacheWriteTokens
@@ -1556,7 +1478,6 @@ function AgentDetail({ stats, label, onClose, onNavigateToTurn }: { stats: Agent
             → Turns
           </Button>
         )}
-        <Button variant="ghost" size="sm" className="ml-auto h-5 text-xs" onClick={onClose}>关闭</Button>
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
@@ -1613,5 +1534,342 @@ function AgentDetail({ stats, label, onClose, onNavigateToTurn }: { stats: Agent
         </div>
       </div>
     </div>
+  )
+}
+
+/** 概览卡（单一源）：趋势卡网格与详情弹窗同款卡片——常亮不随图中显隐/
+ *  选中变化（显隐语义归图与胶囊，概览是恒定参照面板）；onClick 缺省 =
+ *  弹窗内嵌形态（无指针语义、铺 muted 底与图区分） */
+function AgentOverviewCard({ stats, color, label, actors, onClick, onNavigateToTurn }: {
+  stats: AgentStats
+  color: string
+  label: string
+  actors: Map<string, RunActor>
+  onClick?: () => void
+  onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void
+}) {
+  const actor = actors.get(stats.sessionId)
+  const winPct = stats.maxContextWindowPct
+  const barColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : "#22c55e"
+  return (
+    <div
+      data-agent-row
+      className={cn("rounded-lg border px-3 py-1.5 transition-colors", onClick ? "cursor-pointer hover:bg-accent/40" : "bg-muted/30")}
+      onClick={onClick}
+    >
+      {/* 名字单行全显：nowrap 不截断（列宽 340px 起容纳常规名），超长名把
+          右侧指标挤到次行——名字永远完整 */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+        <span className="whitespace-nowrap text-xs font-medium">{label}</span>
+        {stats.isRoot && <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px]">root</Badge>}
+        {!stats.isRoot && actor?.nameSource === "step" && (
+          <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px] text-muted-foreground">派发</Badge>
+        )}
+        <span className="ml-auto shrink-0 text-xs font-medium tabular-nums">{formatTokenCount(stats.peak)}</span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
+            <span className="block h-full rounded-full" style={{ width: `${Math.min(winPct, 100)}%`, backgroundColor: barColor }} />
+          </span>
+          <span className="w-13 text-right text-xs tabular-nums">{winPct > 0 ? `${winPct.toFixed(1)}%` : "—"}</span>
+        </span>
+      </div>
+      <div className="mt-0.5 flex items-center gap-3 pl-3.5 text-[11px] tabular-nums text-muted-foreground">
+        <span>{stats.totalTurns} 轮</span>
+        <span>平均 {formatTokenCount(stats.average)}</span>
+        <span>缓存命中 {(stats.cacheHitRate * 100).toFixed(0)}%</span>
+        {onNavigateToTurn && (
+          <button
+            type="button"
+            className="ml-auto shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            onClick={e => { e.stopPropagation(); onNavigateToTurn(stats.turns[0].turnId, stats.memberTaskId) }}
+          >
+            → Turns
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 详情弹窗内的独立增长趋势小图：逐轮轴（agent 自身轮序，非全局时间轴——
+ *  单 agent 的增长故事按轮读最直观），y = 实际输入（含缓存读），底部琥珀
+ *  带为缓存读份额；80%/100% 上下文窗口参考线 + /compact 标记 + 关键事件
+ *  点；多实例组以灰线同框对比形态。静态图（无缩放——聚焦单 agent 不需要
+ *  窗口操作，主图的窗口交互在趋势卡上） */
+const TREND_W = 560
+const TREND_H = 220
+const TREND_PAD_L = 46
+const TREND_PAD_R = 14
+const TREND_PAD_T = 14
+const TREND_PAD_B = 20
+
+const TREND_EVENT_COLORS: Record<string, string> = {
+  start: "#22c55e", growth: "#3b82f6", peak: "#eab308", warning: "#ef4444", compact: "#a855f7", end: "#94a3b8",
+}
+
+function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: string; peers: AgentStats[] }) {
+  const plotW = TREND_W - TREND_PAD_L - TREND_PAD_R
+  const plotH = TREND_H - TREND_PAD_T - TREND_PAD_B
+  const baselineY = TREND_H - TREND_PAD_B
+
+  // 时间序（缺失回落原序）：agent 自身轮序即 x 轴
+  const turns = useMemo(() => {
+    const arr = stats.turns.map((t, i) => ({ t, i }))
+    arr.sort((a, b) => {
+      const ta = a.t.createdAt ? new Date(a.t.createdAt).getTime() : a.i
+      const tb = b.t.createdAt ? new Date(b.t.createdAt).getTime() : b.i
+      return (ta - tb) || (a.i - b.i)
+    })
+    return arr.map(({ t }) => t)
+  }, [stats])
+  const n = turns.length
+  const yOf = (t: TurnRowItem) => t.inputMessagesTokens || t.totalTokens
+  const peak = Math.max(...turns.map(yOf), 1)
+  // y 量程与主图同式（可见峰值 1.15 余量整步上取，钳窗口 1.1 倍——逼近时
+  // 100% 参考线可及）
+  const yMax = Math.min(Math.ceil(peak * 1.15 / 10000) * 10000, stats.contextLimit * 1.1)
+  const xAt = (i: number) => TREND_PAD_L + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW)
+  const yAt = (v: number) => TREND_PAD_T + plotH - (Math.min(v, yMax) / yMax) * plotH
+
+  const points = turns.map((t, i) => ({ x: xAt(i), y: yAt(yOf(t)), cache: Math.min(t.cacheReadTokens ?? 0, yOf(t)) }))
+  const renderPoints = n > 160 ? lttb(points, 140) : points
+
+  const yTicks = (() => {
+    const raw = yMax / 4
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)))
+    const norm = raw / mag
+    const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag
+    const ticks: Array<{ y: number; label: string }> = []
+    for (let v = 0; v <= yMax; v += step) ticks.push({ y: yAt(v), label: formatTokenCount(v) })
+    return ticks
+  })()
+
+  const xTicks = (() => {
+    if (n <= 1) return [{ x: xAt(0), label: `#${turns[0]?.turnIndex ?? 0}` }]
+    const target = Math.min(5, n - 1)
+    const ticks: Array<{ x: number; label: string }> = []
+    const seen = new Set<number>()
+    for (let k = 0; k <= target; k++) {
+      const idx = Math.round((k * (n - 1)) / target)
+      if (seen.has(idx)) continue
+      seen.add(idx)
+      ticks.push({ x: xAt(idx), label: `#${turns[idx].turnIndex}` })
+    }
+    return ticks
+  })()
+
+  // 事件点位：turnIndex 直配（start/growth/peak/warning/end 出自 stats 轮）；
+  // /compact 命令轮常 0 token 不在 stats 轮里，回落时间序首个 ≥ 命令时刻的轮
+  const posOfTurnIndex = new Map<number, number>()
+  turns.forEach((t, i) => { if (!posOfTurnIndex.has(t.turnIndex)) posOfTurnIndex.set(t.turnIndex, i) })
+  const evtPos = (evt: ContextEvent): number | null => {
+    const direct = posOfTurnIndex.get(evt.turnIndex)
+    if (direct != null) return direct
+    if (!evt.timestamp) return null
+    const ts = new Date(evt.timestamp).getTime()
+    for (let i = 0; i < turns.length; i++) {
+      const at = turns[i].createdAt
+      if (at && new Date(at).getTime() >= ts) return i
+    }
+    return turns.length - 1
+  }
+  const markers = stats.events
+    .map(evt => ({ evt, i: evtPos(evt) }))
+    .filter((m): m is { evt: ContextEvent; i: number } => m.i != null)
+
+  const limitY = yAt(stats.contextLimit)
+  const cautionY = yAt(stats.contextLimit * 0.8)
+  const showLimit = stats.contextLimit <= yMax * 1.05
+
+  // 对比实例（灰线）：同管线（时间序 + LTTB），无标签无事件——形态对比；
+  // 单轮实例无轨迹线（与主图单轮走在场点的口径一致）。y 计算内联（yAt 是
+  // 每渲染新建闭包，进依赖数组会击穿 memo；量程只随 stats/peers 变化）
+  const peerLines = useMemo(() => peers.map(p => {
+    const arr = p.turns.map((t, i) => ({ t, i }))
+    arr.sort((a, b) => {
+      const ta = a.t.createdAt ? new Date(a.t.createdAt).getTime() : a.i
+      const tb = b.t.createdAt ? new Date(b.t.createdAt).getTime() : b.i
+      return (ta - tb) || (a.i - b.i)
+    })
+    const pn = arr.length
+    if (pn < 2) return null
+    const pts = arr.map(({ t }, i) => ({
+      x: TREND_PAD_L + (i / (pn - 1)) * plotW,
+      y: TREND_PAD_T + plotH - (Math.min(yOf(t), yMax) / yMax) * plotH,
+    }))
+    return { sessionId: p.sessionId, d: monotonePath(pn > 160 ? lttb(pts, 140) : pts) }
+  }).filter((x): x is { sessionId: string; d: string } => x != null), [peers, plotW, plotH, yMax])
+
+  const lineD = n >= 2 ? monotonePath(renderPoints) : ""
+  const areaD = n >= 2 ? monotonePath(renderPoints) : ""
+  const cacheD = n >= 2 ? monotonePath(renderPoints.map(p => ({ x: p.x, y: TREND_PAD_T + plotH - (p.cache / yMax) * plotH }))) : ""
+
+  return (
+    <div className="rounded-xl border bg-card p-2">
+      <svg data-chart="agent-trend" viewBox={`0 0 ${TREND_W} ${TREND_H}`} width="100%" role="img" aria-label="上下文增长趋势" className="block">
+        {/* 网格 + y 刻度 */}
+        {yTicks.map((tick, i) => (
+          <g key={i}>
+            <line x1={TREND_PAD_L} y1={tick.y} x2={TREND_W - TREND_PAD_R} y2={tick.y} stroke="currentColor" strokeOpacity={0.06} />
+            <text x={TREND_PAD_L - 6} y={tick.y + 3} fontSize={9} textAnchor="end" fill="currentColor" fillOpacity={0.5}>{tick.label}</text>
+          </g>
+        ))}
+        {/* x 刻度（agent 自身轮序，标全局轮号——与关键事件行 #N 对位） */}
+        {xTicks.map((tick, i) => (
+          <text key={i} x={tick.x} y={baselineY + 14} fontSize={9} textAnchor="middle" fill="currentColor" fillOpacity={0.5}>{tick.label}</text>
+        ))}
+        <line x1={TREND_PAD_L} y1={baselineY} x2={TREND_W - TREND_PAD_R} y2={baselineY} stroke="currentColor" strokeOpacity={0.15} />
+
+        {/* 上下文窗口参考线（该 agent 精确限） */}
+        {showLimit && (
+          <>
+            <line x1={TREND_PAD_L} y1={limitY} x2={TREND_W - TREND_PAD_R} y2={limitY} stroke="#ef4444" strokeWidth={1} strokeDasharray="5 4" opacity={0.65} />
+            <text x={TREND_W - TREND_PAD_R} y={limitY - 4} fontSize={9} textAnchor="end" fill="#ef4444" opacity={0.8}>100%</text>
+            <line x1={TREND_PAD_L} y1={cautionY} x2={TREND_W - TREND_PAD_R} y2={cautionY} stroke="#eab308" strokeWidth={1} strokeDasharray="5 4" opacity={0.5} />
+            <text x={TREND_W - TREND_PAD_R} y={cautionY - 4} fontSize={9} textAnchor="end" fill="#eab308" opacity={0.75}>80%</text>
+          </>
+        )}
+
+        {/* 对比实例（组内其他实例，灰线形态对比） */}
+        {peerLines.map(p => (
+          <path key={p.sessionId} d={p.d} fill="none" stroke="#94a3b8" strokeWidth={1} opacity={0.35} />
+        ))}
+
+        {/* 缓存读份额（底部琥珀带）：曲线下沿到缓存份额的堆叠带 */}
+        {n >= 2 && (
+          <>
+            <path d={`${cacheD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill="#eab308" opacity={0.18} />
+            <path d={`${areaD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill={color} opacity={0.12} />
+            <path d={lineD} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          </>
+        )}
+        {n === 1 && (
+          <circle cx={xAt(0)} cy={yAt(yOf(turns[0]))} r={4} fill={color} />
+        )}
+
+        {/* /compact 标记（纵虚线 + ⚡）与关键事件点 */}
+        {markers.map((m, i) => {
+          const x = xAt(m.i)
+          const c = TREND_EVENT_COLORS[m.evt.type] ?? "#94a3b8"
+          if (m.evt.type === "compact") {
+            return (
+              <g key={`mk-${i}`}>
+                <line x1={x} y1={TREND_PAD_T} x2={x} y2={baselineY} stroke={c} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
+                <text x={x} y={TREND_PAD_T - 3} fontSize={9} textAnchor="middle" fill={c}>⚡</text>
+              </g>
+            )
+          }
+          const y = yAt(yOf(turns[m.i]))
+          return <circle key={`mk-${i}`} cx={x} cy={y} r={m.evt.type === "peak" || m.evt.type === "warning" ? 3.5 : 2.5} fill={c} opacity={0.9} />
+        })}
+      </svg>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 pt-1 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-3 rounded-sm" style={{ backgroundColor: color, opacity: 0.6 }} />实际输入</span>
+        <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-3 rounded-sm bg-yellow-500/40" />缓存读份额</span>
+        {showLimit && <span className="flex items-center gap-1"><span className="inline-block h-0 w-3 border-t border-dashed border-red-500" />窗口上限</span>}
+      </div>
+    </div>
+  )
+}
+
+/** 组详情弹窗（右侧滑出抽屉）：两个入口一个弹窗——胶囊 chevron = 组视角、
+ *  概览卡点击 = 实例视角。内容自上而下：组头（Σ 摘要）→ 独立增长趋势小图
+ *  → 概览卡 → 实例清单（多实例组，行即切换器）→ 上下文组成/关键事件/缓存
+ *  效率。抽屉替代旧内联面板的「打开即滚动定位」契约——入口与详情再无
+ *  距离问题 */
+function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid, onSelectSid, displayLabel, actors, colorMap, onNavigateToTurn }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  group: LegendGroup | null
+  agentStats: AgentStats[]
+  selectedSid: string | null
+  onSelectSid: (sid: string) => void
+  displayLabel: (s: AgentStats) => string
+  actors: Map<string, RunActor>
+  colorMap: Map<string, string>
+  onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void
+}) {
+  const members = useMemo(
+    () => (group ? agentStats.filter(s => group.sessionIds.includes(s.sessionId)).sort((a, b) => b.peak - a.peak) : []),
+    [group, agentStats],
+  )
+  const sel = members.find(m => m.sessionId === selectedSid) ?? members[0] ?? null
+  const sumTurns = members.reduce((s, m) => s + m.totalTurns, 0)
+  const sumPeak = members.reduce((s, m) => s + m.peak, 0)
+  const sumSaved = members.reduce((s, m) => s + m.turns.reduce((x, t) => x + (t.cacheReadTokens ?? 0), 0), 0)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent side="right" data-agent-detail className="flex max-w-full flex-col gap-0 p-0 sm:max-w-[620px]">
+        <DialogTitle className="sr-only">Agent 上下文详情</DialogTitle>
+        <DialogDescription className="sr-only">上下文增长趋势与用量统计</DialogDescription>
+        {group && sel && (
+          <div className="run-scroll-fade flex-1 space-y-3 overflow-y-auto p-4 pt-9">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
+              <span className="text-sm font-semibold">{group.label}</span>
+              <Badge variant="outline" className="text-[10px]">{sel.isRoot ? "root" : "subagent"}</Badge>
+              {members.length > 1 ? (
+                <>
+                  <Badge variant="outline" className="text-[10px]">{members.length} 个实例</Badge>
+                  <span className="text-xs text-muted-foreground">Σ {sumTurns} 轮 · Σ 峰值 {formatTokenCount(sumPeak)} · Σ 缓存节省 {formatTokenCount(sumSaved)}</span>
+                </>
+              ) : (
+                <span className="text-xs text-muted-foreground">上下文详情</span>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium">上下文增长趋势（逐轮）</span>
+                {members.length > 1 && <span className="text-[10px] text-muted-foreground">灰线 = 组内其他实例</span>}
+              </div>
+              <AgentTrendChart stats={sel} color={group.color} peers={members.filter(m => m.sessionId !== sel.sessionId)} />
+            </div>
+
+            <AgentOverviewCard
+              stats={sel}
+              color={colorMap.get(group.key) ?? group.color}
+              label={displayLabel(sel)}
+              actors={actors}
+              onNavigateToTurn={onNavigateToTurn}
+            />
+
+            {members.length > 1 && (
+              <div data-agent-instances className="space-y-1">
+                {members.map(m => {
+                  const winPct = m.maxContextWindowPct
+                  const barColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : "#22c55e"
+                  return (
+                    <button
+                      key={m.sessionId} type="button"
+                      onClick={() => onSelectSid(m.sessionId)}
+                      className={cn(
+                        "flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-left text-xs transition-colors",
+                        m.sessionId === sel.sessionId ? "border-foreground/25 bg-accent/50" : "hover:bg-accent/40",
+                      )}
+                    >
+                      <span className="font-medium whitespace-nowrap">{displayLabel(m)}</span>
+                      {m.memberTaskId && <Badge variant="slate" className="text-xs">{m.memberLabel ?? m.memberTaskId}</Badge>}
+                      <span className="text-muted-foreground tabular-nums">{m.totalTurns} 轮</span>
+                      <span className="text-muted-foreground tabular-nums">峰值 {formatTokenCount(m.peak)}</span>
+                      <span className="ml-auto flex items-center gap-1.5">
+                        <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                          <span className="block h-full rounded-full" style={{ width: `${Math.min(100, Math.max(2, winPct))}%`, backgroundColor: barColor }} />
+                        </span>
+                        <span className="w-9 text-right tabular-nums text-muted-foreground">{winPct.toFixed(0)}%</span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            <AgentDetail stats={sel} label={displayLabel(sel)} onNavigateToTurn={onNavigateToTurn} />
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }

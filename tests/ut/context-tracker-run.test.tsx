@@ -38,9 +38,12 @@
 //   展示名（类型别名归一 + 同名编号 + 派发步骤回落）单点组合，卡片/图例/回放
 //   同源；无类型子代理（无桥归因）回落派发步骤并带「派发」徽标，不再与类型
 //   名裸混一列。
-// ⑬组构成下钻（第四层）：胶囊 chevron = 组视角——实例排行（峰值降序）+
-//   成员归因徽标 + 组级 Σ 摘要，行即实例切换器；单实例组直开详情；打开即
-//   滚动定位（详情距入口可能数千像素，不滚 = 感知空实现）。
+// ⑬组构成下钻（第四层）：右侧滑出弹窗（胶囊 chevron = 组视角 / 概览卡点击
+//   = 实例视角，两个入口一个弹窗）——组头 Σ 摘要 + 该 agent 独立增长趋势小图
+//   （逐轮轴、缓存读份额带、80/100% 窗口参考线、/compact 标记、多实例组灰
+//   线同框）+ 概览卡 + 实例排行（峰值降序、带成员归因徽标，行即实例切换
+//   器）+ 上下文组成/关键事件/缓存效率；单实例组直开详情；弹窗替代旧内联
+//   面板的「打开即滚动定位」契约——入口与详情再无距离问题。
 // ⑫图内点选聚焦：原地点击曲线选中该组（其余变灰、选中加亮），再点同线或点
 //   空白取消；与悬浮/胶囊 hover 的瞬时高亮叠加（hover 优先）。图选只在图内
 //   表达——胶囊行/概览卡均不随图亮起；隐藏组淡出仅存于胶囊（显隐语义），
@@ -174,26 +177,29 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(fetchUrls.filter(u => u.includes('/api/config/context-windows'))).toHaveLength(0);
   });
 
-  it('组构成下钻（胶囊 chevron = 组视角）：实例排行 + 成员归因 + 组级 Σ + 打开即滚动定位 + 行即实例切换器', async () => {
-    const scrollIntoView = vi
-      .spyOn(Element.prototype, 'scrollIntoView')
-      .mockImplementation(() => {});
+  it('组构成下钻（胶囊 chevron = 组视角）：右侧弹窗承载——趋势小图 + 概览卡 + 实例排行 + 组级 Σ + 行即实例切换器', async () => {
     const container = await render();
 
     await act(async () => { detailBtnOf(container, 'research').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
 
-    // 打开即滚动定位（可见性契约）：详情距胶囊入口可能数千像素，不滚 = 空实现
-    expect(scrollIntoView).toHaveBeenCalled();
+    // 右侧滑出抽屉打开（弹窗替代旧内联面板的「打开即滚动定位」契约——
+    // 入口与详情再无距离问题）；弹窗经 Portal 挂 body，断言走 body 域
+    const dialog = document.querySelector('[data-agent-detail]');
+    expect(dialog).toBeTruthy();
+    // 弹窗内容三件套：独立增长趋势小图 + 概览卡 + 下钻数字
+    expect(dialog!.querySelector('svg[data-chart="agent-trend"]')).toBeTruthy();
+    expect(dialog!.querySelector('[data-agent-row]')).toBeTruthy();
+    expect(dialog!.querySelector('.px-2.py-1.rounded.border')).toBeTruthy();
 
     // 组级 Σ 摘要（2 实例：sub-a 5000 + sub-b 3000）
-    const t = text(container);
+    const t = text();
     expect(t).toContain('2 个实例');
     expect(t).toContain('Σ 2 轮');
     expect(t).toContain('Σ 峰值 6.5K');
 
     // 构成清单：实例行带成员归因徽标（sub-a→成员A、sub-b→成员B）
-    const rows = Array.from(container.querySelectorAll('[data-agent-instances] button'));
+    const rows = Array.from(document.querySelectorAll('[data-agent-instances] button'));
     expect(rows.length).toBe(2);
     expect(rows[0].textContent).toContain('成员A');
     expect(rows[1].textContent).toContain('成员B');
@@ -203,16 +209,46 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     // 行即实例切换器：点第二行 → 选中态迁移（首行失焦、AgentDetail 随行切换）
     await act(async () => { (rows[1] as HTMLButtonElement).click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    const rows2 = Array.from(container.querySelectorAll('[data-agent-instances] button'));
+    const rows2 = Array.from(document.querySelectorAll('[data-agent-instances] button'));
     expect(rows2[0].className).not.toContain('bg-accent/50');
     expect(rows2[1].className).toContain('bg-accent/50');
-    expect(text(container)).toContain('research #2');
+    expect(text()).toContain('research #2');
 
     // 单实例组（成员 root）无构成清单，直开上下文详情
     await act(async () => { detailBtnOf(container, '成员A').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(container.querySelector('[data-agent-instances]')).toBeNull();
-    scrollIntoView.mockRestore();
+    expect(document.querySelector('[data-agent-instances]')).toBeNull();
+
+    // 关闭（弹窗右上 ✕）：抽屉卸载，detail 归零
+    await act(async () => { (document.querySelector('[data-slot="dialog-close"]') as HTMLButtonElement).click() });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
+    expect(document.querySelector('[data-agent-detail]')).toBeNull();
+  });
+
+  it('详情弹窗趋势小图（逐轮轴）：主曲线 + 缓存读份额带 + /compact 标记 + 轮号刻度', async () => {
+    const container = await render();
+
+    await act(async () => { detailBtnOf(container, '成员A').click() });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
+
+    const svg = document.querySelector('svg[data-chart="agent-trend"]') as SVGSVGElement | null;
+    expect(svg, '趋势小图应存在').toBeTruthy();
+    const texts = Array.from(svg!.querySelectorAll('text')).map(t => t.textContent ?? '');
+    // x 轴 = agent 自身轮序，标全局轮号（与关键事件行 #N 对位）：成员A 两数据轮 #0/#3
+    expect(texts.some(t => t === '#0')).toBe(true);
+    expect(texts.some(t => t === '#3')).toBe(true);
+    // 主曲线（stroke 线）与面积/缓存份额带（fill 带）
+    expect(svg!.querySelectorAll('path[fill="none"]').length).toBeGreaterThanOrEqual(1);
+    expect(svg!.querySelector('path[fill="#eab308"]')).toBeTruthy();
+    expect(svg!.querySelector('path[opacity="0.12"]')).toBeTruthy();
+    // /compact 标记：紫色纵虚线（命令轮 0 token 不在数据轮里——时间序回落
+    // 到其后首数据轮 #3）+ ⚡
+    expect(svg!.querySelector('line[stroke="#a855f7"]')).toBeTruthy();
+    expect(texts.includes('⚡')).toBe(true);
+    // 关键事件点（start/peak 圆点）落在曲线上
+    expect(svg!.querySelectorAll('circle').length).toBeGreaterThanOrEqual(2);
+    // 弹窗头部 = 组视角（成员A 单实例组）
+    expect(text(document.querySelector('[data-agent-detail]')!)).toContain('上下文详情');
   });
 
   it('图例按类型分组（root 一键 + 类型条目 ×N），类型整组显隐联动 + 仅 Root 快捷', async () => {
@@ -299,7 +335,7 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
   it('/compact 逐成员独立归因：A 卡详情 -67%、B 卡详情 -17%（pre/post 不跨成员错配）', async () => {
     const container = await render();
 
-    const eventRows = () => Array.from(container.querySelectorAll('.px-2.py-1.rounded.border'))
+    const eventRows = () => Array.from(document.querySelectorAll('.px-2.py-1.rounded.border'))
       .map(r => r.textContent ?? '');
 
     await act(async () => { detailBtnOf(container, '成员A').click() });
@@ -321,7 +357,7 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
 
     await act(async () => { detailBtnOf(container, '成员A').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    const btns = Array.from(container.querySelectorAll('button')).filter(b => b.textContent === '→ Turns');
+    const btns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-agent-detail] button')).filter(b => b.textContent === '→ Turns');
     expect(btns.length).toBeGreaterThanOrEqual(1);
     await act(async () => { btns[0]!.click() });
     expect(onNavigateToTurn).toHaveBeenCalled();
@@ -348,10 +384,10 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(rows()[0]!.textContent).toContain('平均');
     expect(rows()[0]!.textContent).toContain('缓存命中');
 
-    // 行点击直达组详情（research #2 行 → 详情打开，选中该实例）
+    // 行点击直达组详情（research #2 行 → 弹窗打开，选中该实例）
     await act(async () => { rows()[3]!.click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    const detail = container.querySelector('[data-agent-detail]');
+    const detail = document.querySelector('[data-agent-detail]');
     expect(detail).toBeTruthy();
     expect(detail!.textContent).toContain('research');
 
@@ -558,7 +594,7 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     // 组详情（单实例组直开）：主agent 徽标在渐进披露层
     await act(async () => { detailBtnOf(container, 'build').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(text(container)).toContain('主agent');
+    expect(text()).toContain('主agent');
     // member 缺省 → agentContextLimits 未给 → 回落 config fetch（session 模型）
     expect(fetchUrls.some(u => u.includes('/api/config/context-windows'))).toBe(true);
 
