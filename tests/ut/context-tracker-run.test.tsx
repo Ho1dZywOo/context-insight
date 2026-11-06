@@ -43,7 +43,8 @@
 // ⑬组构成下钻（第四层）：右侧滑出档案弹窗，胶囊 chevron 唯一入口——实例排
 //   行（峰值降序、带成员归因徽标，行即实例切换器）承载构成；趋势小图（逐轮
 //   轴、缓存读份额带、80/100% 窗口参考线、/compact 标记、多实例组灰线同框）
-//   承载形状；单实例组直开档案。
+//   承载形状；单实例组直开档案。曲线自出生锚从 0 生长（主图同口径——出生轮
+//   = 0-token 派发轮，独立槽位；无独立出生轮时锚在首数据轮处零宽 riser）。
 // ⑫图内点选聚焦：原地点击曲线选中该组（其余变灰、选中加亮），再点同线或点
 //   空白取消；与悬浮/胶囊 hover 的瞬时高亮叠加（hover 优先）。图选只在图内
 //   表达——胶囊行/概览卡均不随图亮起；隐藏组淡出仅存于胶囊（显隐语义），
@@ -259,6 +260,73 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(detailText).toContain('窗口水位');
     expect(detailText).toContain('增速');
     expect(detailText).toContain('缓存命中');
+  });
+
+  it('增长曲线从 0 生长（出生锚点）：主图与趋势小图首点落基线，随后升到首测量值', async () => {
+    const container = await render();
+
+    // 主图：线路径首点 y = 基线（与面积闭合 L 段的 y 同源）——出生轮此前
+    // 被统计过滤（totalTokens<=0），曲线一律从首测量值起步；锚只进绘制
+    // 序列不进命中点，悬浮仍只对真实轮次
+    const svg = container.querySelector('svg[data-chart="growth"]') as SVGSVGElement;
+    const linePath = svg.querySelector('path[fill="none"]') as SVGPathElement;
+    const areaPath = svg.querySelector('path.ctx-area-in') as SVGPathElement;
+    expect(linePath).toBeTruthy();
+    expect(areaPath).toBeTruthy();
+    const baselineY = Number((areaPath.getAttribute('d') ?? '').match(/L [\d.]+,([\d.]+) Z$/)?.[1]);
+    const firstY = Number((linePath.getAttribute('d') ?? '').match(/^M [\d.]+,([\d.]+)/)?.[1]);
+    expect(Number.isFinite(baselineY)).toBe(true);
+    expect(firstY).toBe(baselineY);
+
+    // 趋势小图：首点 M 46,200（x=TREND_PAD_L=46，y=0 即基线 200）；成员A
+    // 出生轮即首数据轮 → 零宽 riser：第二命令 L 46,y 同 x 直线升离基线
+    await act(async () => { detailBtnOf(container, '成员A').click() });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
+    const trendD = (document.querySelector('svg[data-chart="agent-trend"] path[fill="none"]') as SVGPathElement).getAttribute('d') ?? '';
+    expect(trendD.startsWith('M 46,200')).toBe(true);
+    const riser = trendD.match(/^M 46,200 L 46,([\d.]+)/);
+    expect(riser).toBeTruthy();
+    expect(Number(riser![1])).toBeLessThan(200);
+    // 缓存份额带同从基线起步（锚点 cache=0）
+    const cacheD = (document.querySelector('svg[data-chart="agent-trend"] path[fill="#eab308"]') as SVGPathElement).getAttribute('d') ?? '';
+    expect(cacheD.startsWith('M 46,200')).toBe(true);
+  });
+
+  it('真实出生轮（0-token 派发消息，独立时刻/轮号）：锚占独立槽位——首段为真实曲线段，出生轮号上刻度', async () => {
+    // 真实数据形态：各 agent 首个原始轮是 role=user 的派发消息（totalTokens=0，
+    // 有自己的时刻/轮号，先于首个 assistant 数据轮）——此前被统计过滤
+    const birthTurns: TurnRowItem[] = [
+      turn({ turnId: 'w-0', turnIndex: 0, role: 'user', createdAt: '2026-10-13T03:00:00Z', contentSummary: '派发任务' }),
+      turn({ turnId: 'w-1', turnIndex: 1, createdAt: '2026-10-13T03:00:05Z', totalTokens: 20000, inputMessagesTokens: 18000, contextWindowPct: 15 }),
+      turn({ turnId: 'w-2', turnIndex: 2, createdAt: '2026-10-13T03:00:40Z', totalTokens: 30000, inputMessagesTokens: 26000, contextWindowPct: 22 }),
+    ];
+    const birthContainer = document.createElement('div');
+    document.body.appendChild(birthContainer);
+    root = createRoot(birthContainer);
+    await act(async () => {
+      root!.render(createElement(ContextTracker, { turns: birthTurns, sessionModel: 'glm-4.7' }));
+    });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
+
+    // 主图：出生锚在出生轮时刻（≠首数据轮时刻）——首点落基线，随后是真实
+    // 曲线段（C，非零宽 L 直跳）
+    const linePath = birthContainer.querySelector('svg[data-chart="growth"] path[fill="none"]') as SVGPathElement;
+    const areaPath = birthContainer.querySelector('path.ctx-area-in') as SVGPathElement;
+    const lineD = linePath.getAttribute('d') ?? '';
+    const baselineY = Number((areaPath.getAttribute('d') ?? '').match(/L [\d.]+,([\d.]+) Z$/)?.[1]);
+    expect(Number(lineD.match(/^M [\d.]+,([\d.]+)/)?.[1])).toBe(baselineY);
+    expect(/^M [\d.]+,[\d.]+ C /.test(lineD)).toBe(true);
+
+    // 档案小图：slots = [出生 #0, 数据 #1, 数据 #2]——出生轮占独立槽位（首
+    // 段 C 到槽 1），出生轮号上刻度
+    await act(async () => { detailBtnOf(birthContainer, 'build').click() });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
+    const trendSvg = document.querySelector('svg[data-chart="agent-trend"]') as SVGSVGElement;
+    const trendD = (trendSvg.querySelector('path[fill="none"]') as SVGPathElement).getAttribute('d') ?? '';
+    expect(trendD.startsWith('M 46,200 C ')).toBe(true);
+    const labels = Array.from(trendSvg.querySelectorAll('text')).map(t => t.textContent ?? '');
+    expect(labels).toContain('#0');
+    expect(labels).toContain('#2');
   });
 
   it('图例按类型分组（root 一键 + 类型条目 ×N），类型整组显隐联动 + 仅 Root 快捷', async () => {

@@ -97,6 +97,10 @@ interface AgentStats {
   cacheHitRate: number
   maxContextWindowPct: number
   events: ContextEvent[]
+  /** 出生轮（该 agent 的首个原始轮——常为 0-token 派发消息，不在 turns 里）：
+   *  增长曲线的原点锚——曲线从 0 生长到初始上下文；出生轮即首数据轮（无
+   *  0-token 轮）时锚与首数据点同 x（零宽 riser） */
+  birth: TurnRowItem | null
 }
 
 interface ContextEvent {
@@ -207,10 +211,15 @@ function detectCompactEvents(memberTurns: TurnRowItem[]): ContextEvent[] {
 
 function computeAgentStats(turns: TurnRowItem[], limitOf: (sid: string) => number): AgentStats[] {
   const sessionMap = new Map<string, TurnRowItem[]>()
+  // 出生轮（该 agent 键的首个原始轮——常为 0-token 派发消息，被统计过滤
+  // 排除）：增长曲线的原点锚。context 从 0 生长，曲线须以「0 → 初始上下文」
+  // 开局，而非从首个测量值起步
+  const birthMap = new Map<string, TurnRowItem>()
 
   for (const t of turns) {
-    if (t.totalTokens <= 0) continue
     const sid = contextAgentKeyOf(t)
+    if (!birthMap.has(sid)) birthMap.set(sid, t)
+    if (t.totalTokens <= 0) continue
     if (!sessionMap.has(sid)) sessionMap.set(sid, [])
     sessionMap.get(sid)!.push(t)
   }
@@ -305,7 +314,7 @@ function computeAgentStats(turns: TurnRowItem[], limitOf: (sid: string) => numbe
       })
     }
 
-    stats.push({ sessionId: sid, agentName, isRoot, subagentType, memberTaskId: member?.taskId ?? null, memberLabel: member?.label ?? null, contextLimit, turns: agentTurns, peak, average, min, totalTurns: agentTurns.length, avgGrowthPerTurn, cacheHitRate, maxContextWindowPct, events })
+    stats.push({ sessionId: sid, agentName, isRoot, subagentType, memberTaskId: member?.taskId ?? null, memberLabel: member?.label ?? null, contextLimit, turns: agentTurns, peak, average, min, totalTurns: agentTurns.length, avgGrowthPerTurn, cacheHitRate, maxContextWindowPct, events, birth: birthMap.get(sid) ?? null })
   }
 
   stats.sort((a, b) => {
@@ -560,6 +569,12 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       for (const t of s.turns) {
         pts.push({ turnIndex: t.turnIndex, timestamp: t.createdAt ? new Date(t.createdAt).getTime() : 0, inputTokens: t.inputMessagesTokens })
       }
+      // 出生轮入时间域：run 时间线自派发消息起算（曲线原点锚可及），但
+      // 不占 y 量程（inputTokens=0）也不进命中/悬浮域（allPoints 只供
+      // minTime/maxTime/globalMaxInput）
+      if (s.birth?.createdAt) {
+        pts.push({ turnIndex: s.birth.turnIndex, timestamp: new Date(s.birth.createdAt).getTime(), inputTokens: 0 })
+      }
     }
     return pts
   }, [filteredStats])
@@ -657,8 +672,19 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
           turn: t,
         }))
       const peakInput = points.reduce((m, p) => Math.max(m, p.turn.inputMessagesTokens), 0)
-      const renderPoints = lttb(points, RENDER_PT_TARGET)
-      return { sessionId: s.sessionId, groupKey, color, label, isRoot, points, renderPoints, totalTurns: s.totalTurns, peakInput }
+      const ltp = lttb(points, RENDER_PT_TARGET)
+      // 出生锚点：曲线从 0 生长——锚在出生轮时刻（出生轮即首数据轮时与其
+      // 同 x，零宽 riser；monotonePath 零宽段直线跳转）；单轮 agent 不锚
+      // （保留在场点口径）。锚只进绘制序列（线 + 面积），不进命中点——
+      // 悬浮/点选仍只对真实轮次。x 取 min(birth, 首点)——序列保单调
+      //（原始轮序异常时不出回拐）
+      const birthTs = s.birth?.createdAt ? new Date(s.birth.createdAt).getTime() : null
+      const anchor = points.length >= 2
+        ? { x: Math.min(birthTs != null ? toXFn(birthTs) : points[0].x, points[0].x), y: toYFn(0) }
+        : null
+      const renderPoints = anchor ? [anchor, ...ltp] : ltp
+      const areaPoints = anchor ? [anchor, ...points] : points
+      return { sessionId: s.sessionId, groupKey, color, label, isRoot, points, renderPoints, areaPoints, totalTurns: s.totalTurns, peakInput }
     })
 
     return {
@@ -998,19 +1024,20 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                   if (!line.isRoot && !isActive) return null
                   return (
                     <g key={`area-${line.sessionId}`} opacity={isWeakened ? 0.06 : isActive ? 1 : line.isRoot ? 0.75 : 0.5} clipPath="url(#plotClip)">
-                      <path className="ctx-area-in" d={areaPathStr(line.points)} fill={`url(#areaGrad-${line.sessionId})`} />
+                      <path className="ctx-area-in" d={areaPathStr(line.areaPoints)} fill={`url(#areaGrad-${line.sessionId})`} />
                     </g>
                   )
                 })}
 
                 {/* Agent lines：root 主线粗、子代理细线弱透明；逐轮圆点退役（悬浮
-                    定位环仍在 tooltip 层），单轮子代理保留一个点——在场可证 */}
+                    定位环仍在 tooltip 层），单轮子代理保留一个点——在场可证。
+                    组带 plotClip：出生锚点可能在缩放窗左缘之外（出生早于窗口） */}
                 {agentLines.map(line => {
                   const isActive = activeHighlight === line.groupKey
                   const isWeakened = activeHighlight != null && !isActive
                   const d = line.renderPoints.length >= 2 ? monotonePath(line.renderPoints) : ""
                   return (
-                    <g key={line.sessionId} opacity={isWeakened ? 0.12 : 1}>
+                    <g key={line.sessionId} opacity={isWeakened ? 0.12 : 1} clipPath="url(#plotClip)">
                       {d ? (
                         <path
                           d={d}
@@ -1399,9 +1426,10 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
 /** 详情弹窗内的独立增长趋势小图：逐轮轴（agent 自身轮序，非全局时间轴——
  *  单 agent 的增长故事按轮读最直观），y = 实际输入（含缓存读），底部琥珀
- *  带为缓存读份额；80%/100% 上下文窗口参考线 + /compact 标记 + 关键事件
- *  点；多实例组以灰线同框对比形态。静态图（无缩放——聚焦单 agent 不需要
- *  窗口操作，主图的窗口交互在趋势卡上） */
+ *  带为缓存读份额；曲线自出生锚（0-token 派发轮）从 0 生长——出生轮占
+ *  独立槽位，无独立出生轮时锚在首数据轮处（零宽 riser）；80%/100% 上下文
+ *  窗口参考线 + /compact 标记 + 关键事件点；多实例组以灰线同框对比形态。
+ *  静态图（无缩放——聚焦单 agent 不需要窗口操作，主图的窗口交互在趋势卡上） */
 const TREND_W = 560
 const TREND_H = 220
 const TREND_PAD_L = 46
@@ -1428,7 +1456,13 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
     })
     return arr.map(({ t }) => t)
   }, [stats])
-  const n = turns.length
+  // 出生锚点：context 从 0 生长——出生轮（0-token 派发消息，独立轮号/时刻）
+  // 在轴上占自己的槽位；出生轮即首数据轮（无 0-token 轮）时锚与首数据轮
+  // 同 x——零宽 riser（monotonePath 零宽段直线跳转）。数据轮槽位统一后移
+  const anchorTurn = stats.birth && !turns.includes(stats.birth) ? stats.birth : null
+  const dataAt = anchorTurn ? 1 : 0
+  const slots = anchorTurn ? [anchorTurn, ...turns] : turns
+  const n = slots.length
   const yOf = (t: TurnRowItem) => t.inputMessagesTokens || t.totalTokens
   const peak = Math.max(...turns.map(yOf), 1)
   // y 量程与主图同式（可见峰值 1.15 余量整步上取，钳窗口 1.1 倍——逼近时
@@ -1437,8 +1471,12 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
   const xAt = (i: number) => TREND_PAD_L + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW)
   const yAt = (v: number) => TREND_PAD_T + plotH - (Math.min(v, yMax) / yMax) * plotH
 
-  const points = turns.map((t, i) => ({ x: xAt(i), y: yAt(yOf(t)), cache: Math.min(t.cacheReadTokens ?? 0, yOf(t)) }))
-  const renderPoints = n > 160 ? lttb(points, 140) : points
+  // 渲染点：出生锚在槽 0（y=0 基线，缓存份额 0；真实出生轮 yOf 亦为 0）
+  const points = [
+    { x: xAt(0), y: yAt(0), cache: 0 },
+    ...turns.map((t, i) => ({ x: xAt(i + dataAt), y: yAt(yOf(t)), cache: Math.min(t.cacheReadTokens ?? 0, yOf(t)) })),
+  ]
+  const renderPoints = turns.length > 160 ? lttb(points, 140) : points
 
   const yTicks = (() => {
     const raw = yMax / 4
@@ -1451,7 +1489,7 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
   })()
 
   const xTicks = (() => {
-    if (n <= 1) return [{ x: xAt(0), label: `#${turns[0]?.turnIndex ?? 0}` }]
+    if (n <= 1) return [{ x: xAt(0), label: `#${slots[0]?.turnIndex ?? 0}` }]
     const target = Math.min(5, n - 1)
     const ticks: Array<{ x: number; label: string }> = []
     const seen = new Set<number>()
@@ -1459,15 +1497,16 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
       const idx = Math.round((k * (n - 1)) / target)
       if (seen.has(idx)) continue
       seen.add(idx)
-      ticks.push({ x: xAt(idx), label: `#${turns[idx].turnIndex}` })
+      ticks.push({ x: xAt(idx), label: `#${slots[idx].turnIndex}` })
     }
     return ticks
   })()
 
   // 事件点位：turnIndex 直配（start/growth/peak/warning/end 出自 stats 轮）；
-  // /compact 命令轮常 0 token 不在 stats 轮里，回落时间序首个 ≥ 命令时刻的轮
+  // /compact 命令轮常 0 token 不在 stats 轮里，回落时间序首个 ≥ 命令时刻的
+  // 轮。槽位 = 数据序 + 出生锚占位数（anchorTurn 时 dataAt=1）
   const posOfTurnIndex = new Map<number, number>()
-  turns.forEach((t, i) => { if (!posOfTurnIndex.has(t.turnIndex)) posOfTurnIndex.set(t.turnIndex, i) })
+  turns.forEach((t, i) => { if (!posOfTurnIndex.has(t.turnIndex)) posOfTurnIndex.set(t.turnIndex, i + dataAt) })
   const evtPos = (evt: ContextEvent): number | null => {
     const direct = posOfTurnIndex.get(evt.turnIndex)
     if (direct != null) return direct
@@ -1475,9 +1514,9 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
     const ts = new Date(evt.timestamp).getTime()
     for (let i = 0; i < turns.length; i++) {
       const at = turns[i].createdAt
-      if (at && new Date(at).getTime() >= ts) return i
+      if (at && new Date(at).getTime() >= ts) return i + dataAt
     }
-    return turns.length - 1
+    return turns.length - 1 + dataAt
   }
   const markers = stats.events
     .map(evt => ({ evt, i: evtPos(evt) }))
@@ -1487,9 +1526,10 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
   const cautionY = yAt(stats.contextLimit * 0.8)
   const showLimit = stats.contextLimit <= yMax * 1.05
 
-  // 对比实例（灰线）：同管线（时间序 + LTTB），无标签无事件——形态对比；
-  // 单轮实例无轨迹线（与主图单轮走在场点的口径一致）。y 计算内联（yAt 是
-  // 每渲染新建闭包，进依赖数组会击穿 memo；量程只随 stats/peers 变化）
+  // 对比实例（灰线）：同管线（时间序 + LTTB + 出生锚——灰线也从 0 生长），
+  // 无标签无事件——形态对比；单轮实例画 riser（与选中实例口径一致）。
+  // y 计算内联（yAt 是每渲染新建闭包，进依赖数组会击穿 memo；量程只随
+  // stats/peers 变化）
   const peerLines = useMemo(() => peers.map(p => {
     const arr = p.turns.map((t, i) => ({ t, i }))
     arr.sort((a, b) => {
@@ -1498,17 +1538,20 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
       return (ta - tb) || (a.i - b.i)
     })
     const pn = arr.length
-    if (pn < 2) return null
-    const pts = arr.map(({ t }, i) => ({
-      x: TREND_PAD_L + (i / (pn - 1)) * plotW,
-      y: TREND_PAD_T + plotH - (Math.min(yOf(t), yMax) / yMax) * plotH,
-    }))
-    return { sessionId: p.sessionId, d: monotonePath(pn > 160 ? lttb(pts, 140) : pts) }
+    const pts = [
+      { x: TREND_PAD_L, y: TREND_PAD_T + plotH },
+      ...arr.map(({ t }, i) => ({
+        x: TREND_PAD_L + ((i + 1) / pn) * plotW,
+        y: TREND_PAD_T + plotH - (Math.min(yOf(t), yMax) / yMax) * plotH,
+      })),
+    ]
+    return { sessionId: p.sessionId, d: monotonePath(pts.length > 161 ? lttb(pts, 140) : pts) }
   }).filter((x): x is { sessionId: string; d: string } => x != null), [peers, plotW, plotH, yMax])
 
-  const lineD = n >= 2 ? monotonePath(renderPoints) : ""
-  const areaD = n >= 2 ? monotonePath(renderPoints) : ""
-  const cacheD = n >= 2 ? monotonePath(renderPoints.map(p => ({ x: p.x, y: TREND_PAD_T + plotH - (p.cache / yMax) * plotH }))) : ""
+  // 数据轮 ≥ 1 即有轨迹（出生锚 + 数据点 ≥ 2 点）——riser 也是增长故事
+  const lineD = monotonePath(renderPoints)
+  const areaD = monotonePath(renderPoints)
+  const cacheD = monotonePath(renderPoints.map(p => ({ x: p.x, y: TREND_PAD_T + plotH - (p.cache / yMax) * plotH })))
 
   return (
     <div className="rounded-xl border bg-card p-2">
@@ -1541,16 +1584,15 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
           <path key={p.sessionId} d={p.d} fill="none" stroke="#94a3b8" strokeWidth={1} opacity={0.35} />
         ))}
 
-        {/* 缓存读份额（底部琥珀带）：曲线下沿到缓存份额的堆叠带 */}
-        {n >= 2 && (
-          <>
-            <path d={`${cacheD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill="#eab308" opacity={0.18} />
-            <path d={`${areaD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill={color} opacity={0.12} />
-            <path d={lineD} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          </>
-        )}
-        {n === 1 && (
-          <circle cx={xAt(0)} cy={yAt(yOf(turns[0]))} r={4} fill={color} />
+        {/* 缓存读份额（底部琥珀带）：曲线下沿到缓存份额的堆叠带（数据轮
+            ≥1 即有——出生锚也是轨迹的一部分） */}
+        <>
+          <path d={`${cacheD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill="#eab308" opacity={0.18} />
+          <path d={`${areaD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill={color} opacity={0.12} />
+          <path d={lineD} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        </>
+        {turns.length === 1 && (
+          <circle cx={xAt(dataAt)} cy={yAt(yOf(turns[0]))} r={4} fill={color} />
         )}
 
         {/* /compact 标记（纵虚线 + ⚡）与关键事件点 */}
@@ -1565,7 +1607,7 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
               </g>
             )
           }
-          const y = yAt(yOf(turns[m.i]))
+          const y = yAt(yOf(slots[m.i]))
           return <circle key={`mk-${i}`} cx={x} cy={y} r={m.evt.type === "peak" || m.evt.type === "warning" ? 3.5 : 2.5} fill={c} opacity={0.9} />
         })}
       </svg>
