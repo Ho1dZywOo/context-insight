@@ -1181,12 +1181,27 @@ describe('系统级观测：指标透镜 + Run Trace 时间轴', () => {
     expect(text).toContain('间隙 4%');
     expect(text).toContain('重试等待 12%');
 
-    // 泳道：build 两代各一条（g0 两次尝试两行，g1 一行）；执行条实心 + 验收条描边（ses_mini_b）
+    // 泳道：build 两代各一条（g0 两次尝试共线一行——顺序重试横向续写，g1 一行）；
+    // 执行条实心 + 验收条描边（ses_mini_b）
     expect(document.querySelectorAll('.trace-lane').length).toBe(2);
+    expect(document.querySelectorAll('.trace-row').length).toBe(2);
     expect(document.querySelectorAll('.trace-bar').length).toBe(4);
     expect(document.querySelectorAll('.trace-bar-verify').length).toBe(1);
     // 派发间隙显影：build g0 执行结束（02:01:00）→ 验收开始（02:01:10）一条点状线
     expect(document.querySelectorAll('.trace-gap').length).toBe(1);
+    // 重试等待显影：g0 第 1 次结束 → 第 2 次开始（30s 等待）一条等待虚线；
+    // 尝试徽标共线后仍在（第1次/第2次区分横向续写的尝试）
+    expect(document.querySelectorAll('.trace-wait').length).toBe(1);
+    const svgText = document.querySelector('.run-trace svg')?.textContent ?? '';
+    expect(svgText).toContain('第1次');
+    expect(svgText).toContain('第2次');
+    // 共线契约：g0 两次尝试的执行条同一行——同 y 基线（第1/第2次徽标所在
+    // rect 的 y 相等，此前按尝试叠行 y 差一个行高）
+    const ordRects = Array.from(document.querySelectorAll<SVGRectElement>('.run-trace svg g.trace-bar rect'))
+      .filter(r => r.getAttribute('height') === '8');
+    expect(ordRects.length).toBe(3);  // g0×2 + g1×1
+    const g0Pair = [0, 1].map(i => ordRects[i].getAttribute('y'));
+    expect(g0Pair[0]).toBe(g0Pair[1]);
 
     // 点击执行条 → 选中节点，侧栏从概览切到运行历史 + 时间四元构成块
     await act(async () => {

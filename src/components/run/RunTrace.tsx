@@ -10,7 +10,9 @@
 
 // Run Trace 时间轴（纯 SVG，禁图表库——仓库铁律）：把整个 Run 摊在真实时间
 // 轴上做系统级观测——每条成员会话是一根横条（x = 真实起止，颜色 = 尝试状态，
-// 执行条实心 / 验收条描边淡填充），按节点分泳道、按尝试叠行。顶部摘要栏回答
+// 执行条实心 / 验收条描边淡填充），按节点分泳道。同节点多次尝试共线铺开
+// 一行（重试在横向续写：失败条 → 重试等待虚线 → 重试条，纵向不再逐次叠
+// 行）；仅当尝试间时间真重叠（并行重试）才叠行避让。顶部摘要栏回答
 // 系统级问题：墙钟多少、Σ会话多少、平均并发多高、重试/验收开销占多大——
 // 「这次 Run 的两个小时花在哪」。泳道条可点击选中节点（与结构图、侧栏联动）。
 
@@ -22,7 +24,7 @@ import { compactTokens, formatDurationMs, runUsageOf } from "@/lib/run/run-metri
 const LABEL_W = 176;
 const MIN_TIME_W = 900;   // 时间区保底宽度（窄容器时横向滚动）
 const HEADER_H = 26;   // 时间刻度行
-const ROW_H = 16;      // 尝试行高（执行条 8px + 验收条 4.5px 叠行）
+const ROW_H = 16;      // 泳道行高（执行条 8px + 验收条 4.5px 叠行；重试共线后常态每泳道一行）
 const LANE_PAD_Y = 7;
 
 const TICK_STEPS = [
@@ -41,11 +43,25 @@ interface TraceBar {
   turns: number;
 }
 
+interface TraceGroup {
+  ordinal: number;      // 尝试序号（执行/验收共线一组）
+  bars: TraceBar[];
+  start: number;        // 组时间包络
+  end: number;
+}
+
+interface TraceRow {
+  spanStart: number;    // 行时间包络（装箱判重叠用）
+  spanEnd: number;
+  groups: TraceGroup[];
+}
+
 interface TraceLane {
   node: NodeInstance;
   bars: TraceBar[];
+  groups: TraceGroup[];
+  rows: TraceRow[];
   height: number;
-  rows: Array<{ ordinal: number; bars: TraceBar[] }>;
 }
 
 function truncate(text: string, max: number): string {
@@ -124,14 +140,33 @@ export function RunTrace({
     }
     if (bars.length === 0) continue;
     bars.sort((x, y) => x.start - y.start || x.attempt - y.attempt);
-    const rows: TraceLane["rows"] = [];
+    // 尝试分组（执行/验收共线一组），组包络 = 该次尝试的时间跨度
+    const groups: TraceGroup[] = [];
     for (const b of bars) {
-      const row = rows.find(r => r.ordinal === b.attempt);
-      if (row) row.bars.push(b);
-      else rows.push({ ordinal: b.attempt, bars: [b] });
+      let g = groups.find(x => x.ordinal === b.attempt);
+      if (!g) {
+        g = { ordinal: b.attempt, bars: [], start: b.start, end: b.end };
+        groups.push(g);
+      }
+      g.bars.push(b);
+      g.start = Math.min(g.start, b.start);
+      g.end = Math.max(g.end, b.end);
     }
-    rows.sort((x, y) => x.ordinal - y.ordinal);
-    lanes.push({ node, bars, rows, height: rows.length * ROW_H + 2 * LANE_PAD_Y });
+    groups.sort((x, y) => x.start - y.start || x.ordinal - y.ordinal);
+    // 同行铺开：贪心装箱——尝试组放第一条时间不重叠的行（顺序重试全共
+    // 线一行；时间重叠的并行重试才叠行避让）
+    const rows: TraceRow[] = [];
+    for (const g of groups) {
+      const row = rows.find(r => g.start >= r.spanEnd || g.end <= r.spanStart);
+      if (row) {
+        row.groups.push(g);
+        row.spanStart = Math.min(row.spanStart, g.start);
+        row.spanEnd = Math.max(row.spanEnd, g.end);
+      } else {
+        rows.push({ spanStart: g.start, spanEnd: g.end, groups: [g] });
+      }
+    }
+    lanes.push({ node, bars, groups, rows, height: rows.length * ROW_H + 2 * LANE_PAD_Y });
   }
   lanes.sort((a, b) => a.bars[0].start - b.bars[0].start);
 
@@ -225,10 +260,11 @@ export function RunTrace({
             </g>
           ))}
 
-          {/* 泳道：节点标签 + 逐尝试的执行/验收条 */}
+          {/* 泳道：节点标签 + 尝试共线的执行/验收条（顺序重试一行横向续写） */}
           {lanes.map((lane, li) => {
             const y = HEADER_H + lanes.slice(0, li).reduce((s, l) => s + l.height, 0);
             const selected = lane.node.key === selectedKey;
+            const multiAttempt = lane.groups.length > 1;
             return (
               <g key={lane.node.key} className="trace-lane">
                 {selected ? (
@@ -241,59 +277,80 @@ export function RunTrace({
                 </text>
                 {lane.rows.map((row, ri) => {
                   const rowY = y + LANE_PAD_Y + ri * ROW_H;
-                  const showOrdinal = lane.rows.length > 1;
-                  // 派发间隙显影：执行条结束 → 验收条开始之间的点状连接线
-                  //（编排等待在时间轴上直接可见）
-                  const execBar = row.bars.find(b => b.role === "execute");
-                  const verifyBar = row.bars.find(b => b.role === "verify");
-                  const gapLine = execBar && verifyBar && verifyBar.start > execBar.end ? (
-                    <line
-                      className="trace-gap"
-                      x1={xOf(execBar.end)}
-                      y1={rowY + 8.75}
-                      x2={xOf(verifyBar.start)}
-                      y2={rowY + 8.75}
-                      stroke={TIME_COMPOSE.gap}
-                      strokeWidth={1.2}
-                      strokeDasharray="2 2"
-                    />
-                  ) : null;
                   return (
-                    <g key={row.ordinal}>
-                      {gapLine}
-                      {row.bars.map(bar => {
-                    const bx = xOf(bar.start);
-                    const bw = Math.max(xOf(bar.end) - bx, 2);
-                    const c = statusColor(bar.status);
-                    const title = [
-                      `${lane.node.label} · 第 ${bar.attempt} 次 · ${bar.role === "execute" ? "执行" : "验收"}`,
-                      `${fullClock(bar.start)} → ${fullClock(bar.end)} · ${formatDurationMs(bar.end - bar.start)}`,
-                      `${bar.turns} turns · ${compactTokens(bar.tokens)} tokens`,
-                    ].join("\n");
-                    return bar.role === "execute" ? (
-                      <g
-                        key={bar.key}
-                        className="trace-bar cursor-pointer"
-                        onClick={() => onSelectNode(lane.node.key)}
-                      >
-                        <title>{title}</title>
-                        <rect x={bx} y={rowY} width={bw} height={8} rx={2} fill={c} fillOpacity={0.82} />
-                        {showOrdinal && bw > 34 ? (
-                          <text x={bx + 4} y={rowY + 6.5} fontSize={7.5} fill="#ffffff" fillOpacity={0.95}>
-                            {`第${bar.attempt}次`}
-                          </text>
-                        ) : null}
-                      </g>
-                    ) : (
-                      <g
-                        key={bar.key}
-                        className="trace-bar trace-bar-verify cursor-pointer"
-                        onClick={() => onSelectNode(lane.node.key)}
-                      >
-                        <title>{title}</title>
-                        <rect x={bx} y={rowY + 9.5} width={bw} height={4.5} rx={2} fill={c} fillOpacity={0.22} stroke={c} strokeWidth={0.8} strokeOpacity={0.85} />
-                      </g>
-                    );
+                    <g key={row.groups[0].ordinal} className="trace-row">
+                      {row.groups.map((group, gi) => {
+                        // 派发间隙显影：执行条结束 → 验收条开始之间的点状连接线
+                        //（编排等待在时间轴上直接可见）
+                        const execBar = group.bars.find(b => b.role === "execute");
+                        const verifyBar = group.bars.find(b => b.role === "verify");
+                        const gapLine = execBar && verifyBar && verifyBar.start > execBar.end ? (
+                          <line
+                            className="trace-gap"
+                            x1={xOf(execBar.end)}
+                            y1={rowY + 8.75}
+                            x2={xOf(verifyBar.start)}
+                            y2={rowY + 8.75}
+                            stroke={TIME_COMPOSE.gap}
+                            strokeWidth={1.2}
+                            strokeDasharray="2 2"
+                          />
+                        ) : null;
+                        // 重试等待显影：前次尝试结束 → 本次尝试开始（共线铺开后
+                        // 等待段在泳道内直接可读，与摘要「重试等待」同色同口径）
+                        const prev = row.groups[gi - 1];
+                        const waitLine = prev && group.start > prev.end ? (
+                          <line
+                            className="trace-wait"
+                            x1={xOf(prev.end)}
+                            y1={rowY + 4}
+                            x2={xOf(group.start)}
+                            y2={rowY + 4}
+                            stroke={TIME_COMPOSE.wait}
+                            strokeWidth={1.2}
+                            strokeDasharray="1.5 3"
+                          />
+                        ) : null;
+                        return (
+                          <g key={group.ordinal}>
+                            {waitLine}
+                            {gapLine}
+                            {group.bars.map(bar => {
+                              const bx = xOf(bar.start);
+                              const bw = Math.max(xOf(bar.end) - bx, 2);
+                              const c = statusColor(bar.status);
+                              const title = [
+                                `${lane.node.label} · 第 ${bar.attempt} 次 · ${bar.role === "execute" ? "执行" : "验收"}`,
+                                `${fullClock(bar.start)} → ${fullClock(bar.end)} · ${formatDurationMs(bar.end - bar.start)}`,
+                                `${bar.turns} turns · ${compactTokens(bar.tokens)} tokens`,
+                              ].join("\n");
+                              return bar.role === "execute" ? (
+                                <g
+                                  key={bar.key}
+                                  className="trace-bar cursor-pointer"
+                                  onClick={() => onSelectNode(lane.node.key)}
+                                >
+                                  <title>{title}</title>
+                                  <rect x={bx} y={rowY} width={bw} height={8} rx={2} fill={c} fillOpacity={0.82} />
+                                  {multiAttempt && bw > 34 ? (
+                                    <text x={bx + 4} y={rowY + 6.5} fontSize={7.5} fill="#ffffff" fillOpacity={0.95}>
+                                      {`第${bar.attempt}次`}
+                                    </text>
+                                  ) : null}
+                                </g>
+                              ) : (
+                                <g
+                                  key={bar.key}
+                                  className="trace-bar trace-bar-verify cursor-pointer"
+                                  onClick={() => onSelectNode(lane.node.key)}
+                                >
+                                  <title>{title}</title>
+                                  <rect x={bx} y={rowY + 9.5} width={bw} height={4.5} rx={2} fill={c} fillOpacity={0.22} stroke={c} strokeWidth={0.8} strokeOpacity={0.85} />
+                                </g>
+                              );
+                            })}
+                          </g>
+                        );
                       })}
                     </g>
                   );
