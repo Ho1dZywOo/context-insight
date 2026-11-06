@@ -400,6 +400,15 @@ const SVG_HEIGHT = 460
 const SVG_W = 1200
 const SVG_H = SVG_HEIGHT
 
+/** 大 run 自适应阈值：agent/图例组 ≤ INLINE_GROUPS_MAX 时全量平铺（单会
+ *  话/小 run 与既有行为零差异）；超出启用聚焦模式——曲线默认只画峰值
+ *  Top-K（百级成员的曲线墙既不可读也难渲染）、图例胶囊折叠区 + 搜索、
+ *  概览卡收敛（Top 行 + 展开全部） */
+const INLINE_GROUPS_MAX = 12
+const FOCUS_TOP_K = 8
+const COLLAPSED_PILLS = 16
+const INLINE_CARDS_MAX = 24
+
 function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onNavigateToTurn, onOpenReplay }: {
   agentStats: AgentStats[]
   contextWindowLimit: number
@@ -417,10 +426,13 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   const viewportRef = useRef<HTMLDivElement>(null)
   // 趋势图世界：跟随视口自适应（state 驱动几何重算）
   const [world, setWorld] = useState({ w: SVG_W, h: SVG_H })
-  // 默认全显（用户拍板）：子代理曲线不按阈值折叠，需要收窄时用 全部/仅 Root
-  // 分段控件或类型胶囊整组收起
+  // 大 run 聚焦模式：agent 数超阈值时默认只画峰值 Top-K（曲线墙不可读）；
+  // 小 run / 单会话保持全显（用户拍板的原语义——子代理不按阈值折叠）
+  const topKSessionIds = useMemo(() => new Set(
+    [...agentStats].sort((a, b) => b.peak - a.peak).slice(0, FOCUS_TOP_K).map(s => s.sessionId),
+  ), [agentStats])
   const [visibleSessions, setVisibleSessions] = useState<Set<string>>(
-    () => new Set(agentStats.map(s => s.sessionId)),
+    () => (agentStats.length <= INLINE_GROUPS_MAX ? new Set(agentStats.map(s => s.sessionId)) : new Set(topKSessionIds)),
   )
   const [hoveredPoint, setHoveredPoint] = useState<HoveredPoint | null>(null)
   const hoveredRef = useRef<HoveredPoint | null>(null)
@@ -430,6 +442,11 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   // 卡片不参与联动
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<"area" | "line">("area")
+  // 大 run 图例/概览治理：胶囊折叠区（预览前 N + 展开限高滚动）+ 前缀搜索
+  // （百级组里找任务是刚需）；概览卡同理收敛（Top 行 + 展开全部）
+  const [legendExpanded, setLegendExpanded] = useState(false)
+  const [legendQuery, setLegendQuery] = useState("")
+  const [cardsExpanded, setCardsExpanded] = useState(false)
   const [detailKey, setDetailKey] = useState<string | null>(null)
   const [detailSid, setDetailSid] = useState<string | null>(null)
   // 详情可见性契约：入口在画布旁（胶囊 chevron）或概览网格（卡片点击），
@@ -510,6 +527,30 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   }, [agentStats, visibleSessions, colorMap, displayLabel, actors])
 
   const activeHighlight = hoveredPoint?.groupKey ?? highlightKey ?? selectedKey
+
+  // ── 大 run 自适应（组数/卡数超阈值才生效，小 run/单会话零变化）──────────
+  // 图例展示序：可见组前置（折叠预览先回答「图上正画着谁」），组内保持规范
+  // 键序（配色分配同序不漂移）；小 run 保持纯规范序（行为零变化）
+  const legendBig = groups.length > INLINE_GROUPS_MAX
+  const orderedGroups = useMemo(() => {
+    if (!legendBig) return groups
+    const visible: typeof groups = []
+    const hidden: typeof groups = []
+    for (const g of groups) (g.visibleCount > 0 ? visible : hidden).push(g)
+    return [...visible, ...hidden]
+  }, [groups, legendBig])
+  const legendQueryLower = legendQuery.trim().toLowerCase()
+  const matchedGroups = legendQueryLower
+    ? orderedGroups.filter(g => g.label.toLowerCase().includes(legendQueryLower))
+    : orderedGroups
+  const legendShowAll = legendExpanded || legendQueryLower.length > 0
+  const shownGroups = legendShowAll ? matchedGroups : matchedGroups.slice(0, COLLAPSED_PILLS)
+  // 峰值 Top 快捷键激活判定（集合等值）；概览卡峰值序 + 折叠视图
+  const topKActive = visibleSessions.size === topKSessionIds.size
+    && [...topKSessionIds].every(id => visibleSessions.has(id))
+  const sortedStats = useMemo(() => [...agentStats].sort((a, b) => b.peak - a.peak), [agentStats])
+  const cardsBig = sortedStats.length > INLINE_CARDS_MAX
+  const shownStats = cardsBig && !cardsExpanded ? sortedStats.slice(0, INLINE_CARDS_MAX) : sortedStats
 
 
   const filteredStats = useMemo(() => agentStats.filter(s => visibleSessions.has(s.sessionId)), [agentStats, visibleSessions])
@@ -1204,6 +1245,21 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
           >
             仅 Root
           </button>
+          {agentStats.length > INLINE_GROUPS_MAX && (
+            <button
+              type="button"
+              data-quick-top
+              onClick={() => setVisibleSessions(new Set(topKSessionIds))}
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs transition-all duration-300",
+                topKActive
+                  ? "bg-background font-medium text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {`峰值 Top${FOCUS_TOP_K}`}
+            </button>
+          )}
         </div>
 
         {/* 玻璃工具条（Perf 同款浮层 chrome）：时间窗缩放/平移/适配全程 */}
@@ -1238,9 +1294,33 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
         </div>
 
         {/* 图例胶囊（纯图例职责）：色点/×N；点击整组显隐、悬停联动高亮、chevron
-            展开组详情——数字（峰值/平均/缓存/占比）归 Agent 概览表，曲线归形状 */}
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          {groups.map(g => {
+            展开组详情——数字（峰值/平均/缓存/占比）归 Agent 概览表，曲线归形状。
+            大 run（组数超阈值）：行首搜索（按名过滤）+ 折叠区（预览前 N，可见组
+            前置）+ 展开限高滚动 */}
+        <div className="flex shrink-0 flex-col gap-1.5">
+          {legendBig && (
+            <div className="flex items-center gap-2">
+              <input
+                data-legend-search
+                value={legendQuery}
+                onChange={e => setLegendQuery(e.target.value)}
+                placeholder="搜索成员 / 类型…"
+                className="h-7 w-44 shrink-0 rounded-full border border-border bg-background px-3 text-xs outline-none placeholder:text-muted-foreground/60 focus:ring-1 focus:ring-foreground/20"
+              />
+              {legendQueryLower && (
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{matchedGroups.length}/{groups.length}</span>
+              )}
+              {legendExpanded && !legendQueryLower && (
+                <button
+                  type="button"
+                  onClick={() => setLegendExpanded(false)}
+                  className="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                >收起</button>
+              )}
+            </div>
+          )}
+          <div className={cn("flex flex-wrap items-center gap-1.5", legendBig && legendShowAll && "max-h-40 overflow-y-auto run-scroll-fade")}>
+            {shownGroups.map(g => {
             const on = g.visibleCount > 0
             return (
               <span
@@ -1286,6 +1366,15 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
               </span>
             )
           })}
+            {legendBig && !legendShowAll && matchedGroups.length > COLLAPSED_PILLS && (
+              <button
+                type="button"
+                data-legend-expand
+                onClick={() => setLegendExpanded(true)}
+                className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >{`+${matchedGroups.length - COLLAPSED_PILLS}`}</button>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -1297,10 +1386,21 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       <CardContent className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between px-1">
             <span className="text-xs font-medium text-muted-foreground">Agent 概览</span>
-            <span className="text-xs text-muted-foreground/70">按峰值排序</span>
+            <span className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground/70">{`按峰值排序${cardsBig ? ` · ${sortedStats.length}` : ""}`}</span>
+              {cardsBig && (
+                <button
+                  type="button"
+                  data-cards-toggle
+                  onClick={() => setCardsExpanded(v => !v)}
+                  className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >{cardsExpanded ? "收起" : `显示全部 ${sortedStats.length}`}</button>
+              )}
+            </span>
           </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-1.5">
-            {[...agentStats].sort((a, b) => b.peak - a.peak).map(s => {
+          <div className={cn(cardsBig && cardsExpanded && "max-h-[560px] overflow-y-auto run-scroll-fade")}>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-1.5">
+              {shownStats.map(s => {
               const groupKey = contextLegendKeyOf(s)
               const actor = actors.get(s.sessionId)
               const winPct = s.maxContextWindowPct
@@ -1348,6 +1448,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                 </div>
               )
             })}
+            </div>
           </div>
 
         {/* 组详情（第四层：构成下钻）——两个入口一个面板：胶囊 chevron =

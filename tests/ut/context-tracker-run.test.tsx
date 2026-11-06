@@ -19,7 +19,9 @@
 // ⑤回放步进轴 = 合并时间序全局排名（各成员 turnIndex 空间互不相通，同 index
 //   撞步会把多成员轮混进同一帧）；
 // ⑥趋势图例按类型分组（root 一键一会话 + 类型条目 ×N，与泳道图例同构），
-//   整组显隐联动；默认全显（无阈值折叠），类型条目整组收起/展开；
+//   整组显隐联动；默认可见 = 阈值自适应（agent ≤ 12 全显，超出聚焦峰值
+//   Top-K——大 run 收敛口径见 context-tracker-scale.test.tsx），类型条目整组
+//   收起/展开；
 // ⑦曲线渲染管线：LTTB 降采样（千轮级会话收敛到像素级点数）+ Ctrl/⌘+滚轮
 //   时间窗缩放（原生 non-passive 监听，preventDefault 生效不被页面缩放劫持）；
 // ⑧悬浮弹窗 = HTML 层（恒定像素不随图缩放）：点位右侧放置、右缘自动翻左，
@@ -238,8 +240,11 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(circles()).toBe(0);
   });
 
-  it('子代理超阈值也默认全显：无折叠提示，类型条目整组收起/展开', async () => {
-    // 2 root（各 2 轮）+ 13 个同类型子代理（各 1 轮）——超旧 12 条折叠阈值
+  it('子代理实例也进聚焦口径：Top-K 按峰值全 agent 排名，类型条目仍整组收起/展开', async () => {
+    // 2 root（各 2 轮，35K/50K）+ 13 个同类型子代理（各 1 轮，1.5K 并列）=
+    // 15 agent 超阈值 → 聚焦模式：Top-8 = 2 root + 6 个子代理（并列取稳定序
+    // 前 6）；类型条目整组显隐联动不受影响（旧「无阈值全显」决策由大 run
+    // 聚焦模式取代——百级成员曲线墙不可读，「全部」仍是显式回全显的口）
     const foldTurns: TurnRowItem[] = [
       turn({ turnId: 'f-a0', turnIndex: 0, member: MEMBER_A, createdAt: '2026-10-13T04:00:00Z', totalTokens: 30000, inputMessagesTokens: 25000, contextWindowPct: 20 }),
       turn({ turnId: 'f-a1', turnIndex: 1, member: MEMBER_A, createdAt: '2026-10-13T04:00:40Z', totalTokens: 40000, inputMessagesTokens: 35000, contextWindowPct: 28 }),
@@ -264,14 +269,20 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
 
-    // 默认全显：root 曲线 2 条 + 13 个子代理在场点，无折叠提示
+    // 聚焦默认：root 曲线 2 条 + 6 个子代理在场点，无折叠提示
     expect(foldContainer.querySelectorAll('path[fill="none"]')).toHaveLength(2);
-    expect(foldContainer.querySelectorAll('svg[data-chart="growth"] circle')).toHaveLength(13);
+    expect(foldContainer.querySelectorAll('svg[data-chart="growth"] circle')).toHaveLength(6);
     expect(text(foldContainer)).not.toContain('已折叠');
     const researchChip = Array.from(foldContainer.querySelectorAll('[data-legend]'))
       .find(c => c.getAttribute('data-legend') === 'research');
     expect(researchChip).toBeTruthy();
     expect((researchChip!.querySelector('input') as HTMLInputElement).checked).toBe(true);
+
+    // 「全部」= 显式回全显：13 个在场点齐
+    const quickAll = Array.from(foldContainer.querySelectorAll('[data-quick-filter] button'))
+      .find(b => b.textContent === '全部') as HTMLButtonElement;
+    await act(async () => { quickAll.click() });
+    expect(foldContainer.querySelectorAll('svg[data-chart="growth"] circle')).toHaveLength(13);
 
     // 点 research 条目 → 整组收起（只剩 2 条 root 曲线，在场点清零）
     await act(async () => { (researchChip!.querySelector('input') as HTMLElement).click() });
