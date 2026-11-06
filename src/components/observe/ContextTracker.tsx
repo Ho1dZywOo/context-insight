@@ -97,8 +97,8 @@ interface AgentStats {
   cacheHitRate: number
   maxContextWindowPct: number
   events: ContextEvent[]
-  /** 出生轮（该 agent 的首个原始轮——常为 0-token 派发消息，不在 turns 里）：
-   *  增长曲线的原点锚——曲线从 0 生长到初始上下文；出生轮即首数据轮（无
+  /** 初始轮（该 agent 的首个原始轮——常为 0-token 派发消息，不在 turns 里）：
+   *  增长曲线的原点锚——曲线从 0 生长到初始上下文；初始轮即首数据轮（无
    *  0-token 轮）时锚与首数据点同 x（零宽 riser） */
   birth: TurnRowItem | null
 }
@@ -211,7 +211,7 @@ function detectCompactEvents(memberTurns: TurnRowItem[]): ContextEvent[] {
 
 function computeAgentStats(turns: TurnRowItem[], limitOf: (sid: string) => number): AgentStats[] {
   const sessionMap = new Map<string, TurnRowItem[]>()
-  // 出生轮（该 agent 键的首个原始轮——常为 0-token 派发消息，被统计过滤
+  // 初始轮（该 agent 键的首个原始轮——常为 0-token 派发消息，被统计过滤
   // 排除）：增长曲线的原点锚。context 从 0 生长，曲线须以「0 → 初始上下文」
   // 开局，而非从首个测量值起步
   const birthMap = new Map<string, TurnRowItem>()
@@ -409,9 +409,22 @@ type HoveredPoint = {
   sessionId: string; groupKey: string; turnIndex: number; x: number; y: number
   tokens: number; cacheRead: number; newInput: number; cacheWrite: number
   contextWindowPct: number | null; time: string; label: string; color: string; turn: TurnRowItem
+  /** 初始锚点（0-token 派发轮）：tooltip 走派发轮形态（消息摘要，无 token
+   *  计量段） */
+  isBirth?: boolean
   /** 悬浮命中时快照的视口坐标 + 视口尺寸（渲染期零 ref 访问——事件回调
    *  里算好入 state，React 渲染纯函数化） */
   screen: { x: number; y: number; vpW: number; vpH: number }
+}
+
+/** 命中域点（主图悬浮/点选）：数据轮 + 初始锚。初始锚是真实 user 轮——
+ *  可悬浮（tooltip 展示派发细节）、原地点击跳转该轮；零值不入统计口径 */
+type GrowthHitPoint = {
+  x: number; y: number
+  tokens: number; cacheRead: number; newInput: number; cacheWrite: number
+  contextWindowPct: number | null
+  turnIndex: number; time: string; turn: TurnRowItem
+  isBirth?: boolean
 }
 
 /** 趋势图几何缺省（viewBox 单位）：真实尺寸跟随视口自适应（ResizeObserver
@@ -569,7 +582,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       for (const t of s.turns) {
         pts.push({ turnIndex: t.turnIndex, timestamp: t.createdAt ? new Date(t.createdAt).getTime() : 0, inputTokens: t.inputMessagesTokens })
       }
-      // 出生轮入时间域：run 时间线自派发消息起算（曲线原点锚可及），但
+      // 初始轮入时间域：run 时间线自派发消息起算（曲线原点锚可及），但
       // 不占 y 量程（inputTokens=0）也不进命中/悬浮域（allPoints 只供
       // minTime/maxTime/globalMaxInput）
       if (s.birth?.createdAt) {
@@ -673,18 +686,31 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
         }))
       const peakInput = points.reduce((m, p) => Math.max(m, p.turn.inputMessagesTokens), 0)
       const ltp = lttb(points, RENDER_PT_TARGET)
-      // 出生锚点：曲线从 0 生长——锚在出生轮时刻（出生轮即首数据轮时与其
+      // 初始锚点：曲线从 0 生长——锚在初始轮时刻（初始轮即首数据轮时与其
       // 同 x，零宽 riser；monotonePath 零宽段直线跳转）；单轮 agent 不锚
-      // （保留在场点口径）。锚只进绘制序列（线 + 面积），不进命中点——
-      // 悬浮/点选仍只对真实轮次。x 取 min(birth, 首点)——序列保单调
-      //（原始轮序异常时不出回拐）
+      // （保留在场点口径）。锚只进绘制序列（线 + 面积）与命中域，统计口径
+      // 不动。x 取 min(birth, 首点)——序列保单调（原始轮序异常时不出回拐）
       const birthTs = s.birth?.createdAt ? new Date(s.birth.createdAt).getTime() : null
       const anchor = points.length >= 2
         ? { x: Math.min(birthTs != null ? toXFn(birthTs) : points[0].x, points[0].x), y: toYFn(0) }
         : null
+      // 命中负载：初始锚是真实原始轮（与首数据轮不同轮时）——可悬浮、可
+      // 原地点击跳转；初始轮即首数据轮（无 0-token 轮）时锚纯几何，该点
+      // 由数据点自身承载悬浮
+      const anchorHit: GrowthHitPoint | null = anchor && s.birth && !s.turns.includes(s.birth)
+        ? {
+            ...anchor,
+            tokens: 0, cacheRead: 0, newInput: 0, cacheWrite: 0, contextWindowPct: null,
+            turnIndex: s.birth.turnIndex,
+            time: formatTimestamp(s.birth.createdAt),
+            turn: s.birth,
+            isBirth: true,
+          }
+        : null
       const renderPoints = anchor ? [anchor, ...ltp] : ltp
       const areaPoints = anchor ? [anchor, ...points] : points
-      return { sessionId: s.sessionId, groupKey, color, label, isRoot, points, renderPoints, areaPoints, totalTurns: s.totalTurns, peakInput }
+      const hitPoints: GrowthHitPoint[] = anchorHit ? [anchorHit, ...points] : points
+      return { sessionId: s.sessionId, groupKey, color, label, isRoot, points, renderPoints, areaPoints, hitPoints, totalTurns: s.totalTurns, peakInput }
     })
 
     return {
@@ -730,7 +756,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     let bestPoint: typeof hoveredPoint | null = null
     const HIT_RADIUS_SQ = 2500
     for (const line of agentLines) {
-      for (const p of line.points) {
+      for (const p of line.hitPoints) {
         const dx = p.x - svgX
         const dy = p.y - svgY
         const dist = dx * dx + dy * dy
@@ -740,6 +766,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
             sessionId: line.sessionId, groupKey: line.groupKey, turnIndex: p.turnIndex, x: p.x, y: p.y,
             tokens: p.tokens, cacheRead: p.cacheRead, newInput: p.newInput, cacheWrite: p.cacheWrite,
             contextWindowPct: p.contextWindowPct, time: p.time, label: line.label, color: line.color, turn: p.turn,
+            isBirth: p.isBirth,
             screen: { x: 0, y: 0, vpW: 0, vpH: 0 },
           }
         }
@@ -1031,7 +1058,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
                 {/* Agent lines：root 主线粗、子代理细线弱透明；逐轮圆点退役（悬浮
                     定位环仍在 tooltip 层），单轮子代理保留一个点——在场可证。
-                    组带 plotClip：出生锚点可能在缩放窗左缘之外（出生早于窗口） */}
+                    组带 plotClip：初始锚点可能在缩放窗左缘之外（初始轮早于窗口） */}
                 {agentLines.map(line => {
                   const isActive = activeHighlight === line.groupKey
                   const isWeakened = activeHighlight != null && !isActive
@@ -1205,35 +1232,54 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                     <span className="shrink-0 text-[10px] text-muted-foreground">{tt.time}</span>
                   </div>
 
-                  <div className="pt-2">
-                    <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
-                      <div className="h-full bg-amber-500" style={{ width: `${cachePct}%` }} />
-                      <div className="h-full bg-blue-500" style={{ width: `${newInputPct}%` }} />
-                      {cacheWritePct > 0 && <div className="h-full bg-orange-500" style={{ width: `${cacheWritePct}%` }} />}
+                  {tt.isBirth ? (
+                    /* 初始轮（0-token 派发消息）：无 token 计量段——细节 =
+                       消息本体摘要；点击可跳转该 user 轮 */
+                    <div className="space-y-1.5 pt-2">
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium">初始轮</span>
+                        <span className="text-muted-foreground">上下文自此生长{tt.turn.role === "user" ? " · 派发消息" : ""}</span>
+                      </div>
+                      {tt.turn.contentSummary && (
+                        <p className="line-clamp-3 rounded-md border-l-2 border-border bg-muted/50 px-2 py-1 text-[10px] leading-relaxed text-muted-foreground">
+                          {tt.turn.contentSummary}
+                        </p>
+                      )}
+                      <p className="text-[10px] text-muted-foreground">此轮无 token 计量 · 消息全文见 Turns</p>
                     </div>
-                    <div className="flex items-center gap-3 pt-1 text-[10px]">
-                      <span className="text-amber-600 dark:text-amber-400">Cache {cachePct.toFixed(0)}%</span>
-                      <span className="text-blue-600 dark:text-blue-400">Input {newInputPct.toFixed(0)}%</span>
-                      {cacheWritePct > 0 && <span className="text-orange-600 dark:text-orange-400">CW {cacheWritePct.toFixed(0)}%</span>}
-                    </div>
-                  </div>
+                  ) : (
+                    <>
+                      <div className="pt-2">
+                        <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+                          <div className="h-full bg-amber-500" style={{ width: `${cachePct}%` }} />
+                          <div className="h-full bg-blue-500" style={{ width: `${newInputPct}%` }} />
+                          {cacheWritePct > 0 && <div className="h-full bg-orange-500" style={{ width: `${cacheWritePct}%` }} />}
+                        </div>
+                        <div className="flex items-center gap-3 pt-1 text-[10px]">
+                          <span className="text-amber-600 dark:text-amber-400">Cache {cachePct.toFixed(0)}%</span>
+                          <span className="text-blue-600 dark:text-blue-400">Input {newInputPct.toFixed(0)}%</span>
+                          {cacheWritePct > 0 && <span className="text-orange-600 dark:text-orange-400">CW {cacheWritePct.toFixed(0)}%</span>}
+                        </div>
+                      </div>
 
-                  <div className="pt-2">
-                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span>窗口占比（限 {formatTokenCount(agentLimit)}）</span>
-                      <span style={{ color: ctxBarColor }}>{ctxPctDisplay}</span>
-                    </div>
-                    <div className="mt-1 h-1.5 w-full rounded-full bg-muted">
-                      <div className="h-full rounded-full" style={{ width: `${ctxFillPct * 100}%`, backgroundColor: ctxBarColor }} />
-                    </div>
-                  </div>
+                      <div className="pt-2">
+                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span>窗口占比（限 {formatTokenCount(agentLimit)}）</span>
+                          <span style={{ color: ctxBarColor }}>{ctxPctDisplay}</span>
+                        </div>
+                        <div className="mt-1 h-1.5 w-full rounded-full bg-muted">
+                          <div className="h-full rounded-full" style={{ width: `${ctxFillPct * 100}%`, backgroundColor: ctxBarColor }} />
+                        </div>
+                      </div>
 
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-2 text-[11px] text-muted-foreground">
-                    <span>总量 <span className="font-medium text-foreground">{formatTokenCount(tt.tokens)}</span></span>
-                    <span>输入 <span className="font-medium text-foreground">{formatTokenCount(inputTotal)}</span></span>
-                    <span>新输入 <span className="font-medium text-foreground">{formatTokenCount(tt.newInput)}</span></span>
-                    <span>输出 <span className="font-medium text-foreground">{formatTokenCount(tt.turn.outputTokens)}</span></span>
-                  </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-2 text-[11px] text-muted-foreground">
+                        <span>总量 <span className="font-medium text-foreground">{formatTokenCount(tt.tokens)}</span></span>
+                        <span>输入 <span className="font-medium text-foreground">{formatTokenCount(inputTotal)}</span></span>
+                        <span>新输入 <span className="font-medium text-foreground">{formatTokenCount(tt.newInput)}</span></span>
+                        <span>输出 <span className="font-medium text-foreground">{formatTokenCount(tt.turn.outputTokens)}</span></span>
+                      </div>
+                    </>
+                  )}
 
                   <div className="pt-1.5 text-[10px] text-muted-foreground">
                     {tt.turn.model ?? "—"} · {tt.turn.role} · 点击图区跳转该轮
@@ -1426,8 +1472,8 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
 /** 详情弹窗内的独立增长趋势小图：逐轮轴（agent 自身轮序，非全局时间轴——
  *  单 agent 的增长故事按轮读最直观），y = 实际输入（含缓存读），底部琥珀
- *  带为缓存读份额；曲线自出生锚（0-token 派发轮）从 0 生长——出生轮占
- *  独立槽位，无独立出生轮时锚在首数据轮处（零宽 riser）；80%/100% 上下文
+ *  带为缓存读份额；曲线自初始锚（0-token 派发轮）从 0 生长——初始轮占
+ *  独立槽位，无独立初始轮时锚在首数据轮处（零宽 riser）；80%/100% 上下文
  *  窗口参考线 + /compact 标记 + 关键事件点；多实例组以灰线同框对比形态。
  *  静态图（无缩放——聚焦单 agent 不需要窗口操作，主图的窗口交互在趋势卡上） */
 const TREND_W = 560
@@ -1456,8 +1502,8 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
     })
     return arr.map(({ t }) => t)
   }, [stats])
-  // 出生锚点：context 从 0 生长——出生轮（0-token 派发消息，独立轮号/时刻）
-  // 在轴上占自己的槽位；出生轮即首数据轮（无 0-token 轮）时锚与首数据轮
+  // 初始锚点：context 从 0 生长——初始轮（0-token 派发消息，独立轮号/时刻）
+  // 在轴上占自己的槽位；初始轮即首数据轮（无 0-token 轮）时锚与首数据轮
   // 同 x——零宽 riser（monotonePath 零宽段直线跳转）。数据轮槽位统一后移
   const anchorTurn = stats.birth && !turns.includes(stats.birth) ? stats.birth : null
   const dataAt = anchorTurn ? 1 : 0
@@ -1471,7 +1517,7 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
   const xAt = (i: number) => TREND_PAD_L + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW)
   const yAt = (v: number) => TREND_PAD_T + plotH - (Math.min(v, yMax) / yMax) * plotH
 
-  // 渲染点：出生锚在槽 0（y=0 基线，缓存份额 0；真实出生轮 yOf 亦为 0）
+  // 渲染点：初始锚在槽 0（y=0 基线，缓存份额 0；真实初始轮 yOf 亦为 0）
   const points = [
     { x: xAt(0), y: yAt(0), cache: 0 },
     ...turns.map((t, i) => ({ x: xAt(i + dataAt), y: yAt(yOf(t)), cache: Math.min(t.cacheReadTokens ?? 0, yOf(t)) })),
@@ -1504,7 +1550,7 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
 
   // 事件点位：turnIndex 直配（start/growth/peak/warning/end 出自 stats 轮）；
   // /compact 命令轮常 0 token 不在 stats 轮里，回落时间序首个 ≥ 命令时刻的
-  // 轮。槽位 = 数据序 + 出生锚占位数（anchorTurn 时 dataAt=1）
+  // 轮。槽位 = 数据序 + 初始锚占位数（anchorTurn 时 dataAt=1）
   const posOfTurnIndex = new Map<number, number>()
   turns.forEach((t, i) => { if (!posOfTurnIndex.has(t.turnIndex)) posOfTurnIndex.set(t.turnIndex, i + dataAt) })
   const evtPos = (evt: ContextEvent): number | null => {
@@ -1526,7 +1572,7 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
   const cautionY = yAt(stats.contextLimit * 0.8)
   const showLimit = stats.contextLimit <= yMax * 1.05
 
-  // 对比实例（灰线）：同管线（时间序 + LTTB + 出生锚——灰线也从 0 生长），
+  // 对比实例（灰线）：同管线（时间序 + LTTB + 初始锚——灰线也从 0 生长），
   // 无标签无事件——形态对比；单轮实例画 riser（与选中实例口径一致）。
   // y 计算内联（yAt 是每渲染新建闭包，进依赖数组会击穿 memo；量程只随
   // stats/peers 变化）
@@ -1548,7 +1594,7 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
     return { sessionId: p.sessionId, d: monotonePath(pts.length > 161 ? lttb(pts, 140) : pts) }
   }).filter((x): x is { sessionId: string; d: string } => x != null), [peers, plotW, plotH, yMax])
 
-  // 数据轮 ≥ 1 即有轨迹（出生锚 + 数据点 ≥ 2 点）——riser 也是增长故事
+  // 数据轮 ≥ 1 即有轨迹（初始锚 + 数据点 ≥ 2 点）——riser 也是增长故事
   const lineD = monotonePath(renderPoints)
   const areaD = monotonePath(renderPoints)
   const cacheD = monotonePath(renderPoints.map(p => ({ x: p.x, y: TREND_PAD_T + plotH - (p.cache / yMax) * plotH })))
@@ -1585,7 +1631,7 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
         ))}
 
         {/* 缓存读份额（底部琥珀带）：曲线下沿到缓存份额的堆叠带（数据轮
-            ≥1 即有——出生锚也是轨迹的一部分） */}
+            ≥1 即有——初始锚也是轨迹的一部分） */}
         <>
           <path d={`${cacheD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill="#eab308" opacity={0.18} />
           <path d={`${areaD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill={color} opacity={0.12} />
