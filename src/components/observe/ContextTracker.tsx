@@ -9,6 +9,7 @@
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { Badge } from "@/components/ui/badge"
+import { ScrollFade } from "@/components/ui/scroll-fade"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ZoomInIcon, ZoomOutIcon, MaximizeIcon, ChevronRightIcon, PlayIcon } from "lucide-react"
@@ -1389,7 +1390,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
               )}
             </div>
           )}
-          <div className={cn("flex flex-wrap items-center gap-1.5", legendBig && legendShowAll && "max-h-40 overflow-y-auto run-scroll-fade")}>
+          <ScrollFade className={cn("flex flex-wrap items-center gap-1.5", legendBig && legendShowAll && "max-h-40 overflow-y-auto")}>
             {shownGroups.map(g => {
             const on = g.visibleCount > 0
             return (
@@ -1444,7 +1445,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                 className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >{`+${matchedGroups.length - COLLAPSED_PILLS}`}</button>
             )}
-          </div>
+          </ScrollFade>
         </div>
       </CardContent>
     </Card>
@@ -1712,7 +1713,7 @@ function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid,
     const riskEvents = sel.events.filter(e => e.type === "compact" || e.type === "warning")
 
     return (
-      <div className="run-scroll-fade flex-1 space-y-2.5 overflow-y-auto p-4 pt-9">
+      <ScrollFade className="flex-1 space-y-2.5 overflow-y-auto p-4 pt-9">
         {/* 头：身份一行——组名 + 归属徽标（root/subagent、派发出处）+ 轮次；
             Σ 摘要仅多实例组 */}
         <div className="flex flex-wrap items-center gap-1.5">
@@ -1859,7 +1860,7 @@ function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid,
             </Button>
           </div>
         )}
-      </div>
+      </ScrollFade>
     )
   })()
 

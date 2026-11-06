@@ -203,6 +203,9 @@ describe('P3 材质：样式契约（globals.css 单点）', () => {
   it('微交互：spring 缓动 + 按压 scale(0.98) + 滚动边缘 mask 渐隐', () => {
     expect(css).toMatch(/--run-spring:\s*cubic-bezier\(0\.32,\s*0\.72,\s*0,\s*1\)/)
     expect(css).toMatch(/\.run-tool-btn:active\s*{[^}]*transform:\s*scale\(0\.98\)/)
-    expect(css).toMatch(/\.run-scroll-fade\s*{[^}]*mask-image:\s*linear-gradient/)
+    // 滚动感知：mask 只挂在 data-fade 变体上（静止 none 无晕染；基类无
+    // 无条件 mask）
+    expect(css).toMatch(/\.run-scroll-fade\[data-fade="top-bottom"\]\s*{[^}]*mask-image:\s*linear-gradient/)
+    expect(css).not.toMatch(/\.run-scroll-fade\s*{[^}]*mask-image/)
   })
 })

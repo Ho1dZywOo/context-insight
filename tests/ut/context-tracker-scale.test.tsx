@@ -183,8 +183,17 @@ describe('ContextTracker 大 run 自适应（百级成员收敛）', () => {
     expect(expand?.textContent).toBe('+26');
 
     // 展开：42 组全出（限高滚动区），收起钮在
+    const zone = expand.closest('.run-scroll-fade') as HTMLElement;
     await act(async () => { expand.click() });
     expect(legendLabels(container)).toHaveLength(42);
+    // 滚动感知渐隐（晕染修复）：静止贴边首行完整显示——胶囊区 data-fade=none
+    //（此前无条件双向渐隐把展开区首行晕染掉）；真滚出视口后才亮对应侧渐隐
+    expect(zone?.getAttribute('data-fade')).toBe('none');
+    await act(async () => {
+      zone.scrollTop = 40;
+      zone.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    expect(zone.getAttribute('data-fade')).toBe('top');
     const collapse = Array.from(container.querySelectorAll('button'))
       .find(b => b.textContent === '收起') as HTMLButtonElement;
     expect(collapse).toBeTruthy();

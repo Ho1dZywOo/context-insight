@@ -270,8 +270,19 @@
   display: none;
 }
 
-/* 滚动边缘渐隐：内容滚到玻璃面板上下缘时用 mask 溶解，替代硬分割线 */
-.run-scroll-fade {
+/* 滚动边缘渐隐：内容滚到面板上下缘时用 mask 溶解，替代硬分割线。滚动
+   感知：data-fade 由 ScrollFade 组件按滚动位置驱动（ui/scroll-fade.tsx）
+   ——只在「该侧真有滚出视口的内容」时渐隐，静止贴边行完整显示（此前
+   无条件双向渐隐会把贴边首行晕染掉） */
+.run-scroll-fade[data-fade="top"] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 100%);
+}
+.run-scroll-fade[data-fade="bottom"] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 14px), transparent 100%);
+}
+.run-scroll-fade[data-fade="top-bottom"] {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
 }

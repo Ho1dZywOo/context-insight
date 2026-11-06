@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ScrollFade } from "@/components/ui/scroll-fade";
 import { RunNodeDetail } from "./RunNodeDetail";
 import { bandLabel } from "./run-theme";
 import { RunCanvas } from "./RunCanvas";
@@ -78,7 +79,7 @@ export function RunSubgraphDialog({
             />
           </div>
           {/* 历史侧栏：浮层玻璃面板，画布内容滑入下方被虚化，滚动经 mask 渐隐 */}
-          <aside className="run-glass run-scroll-fade absolute inset-y-2 right-2 z-10 w-[340px] shrink-0 overflow-y-auto rounded-xl">
+          <ScrollFade as="aside" className="run-glass absolute inset-y-2 right-2 z-10 w-[340px] shrink-0 overflow-y-auto rounded-xl">
             {selectedNode ? (
               <RunNodeDetail
                 node={selectedNode}
@@ -96,7 +97,7 @@ export function RunSubgraphDialog({
                 点击子图节点查看运行历史（逐次尝试、验收结论、成员会话与 turn 下钻）。
               </p>
             )}
-          </aside>
+          </ScrollFade>
         </div>
       </DialogContent>
     </Dialog>

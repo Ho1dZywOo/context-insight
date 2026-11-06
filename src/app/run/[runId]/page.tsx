@@ -52,6 +52,7 @@ import type { RunViewModel } from "@/lib/run/view-model";
 import { useRunView, type RunTabKey } from "@/app/run/[runId]/run-view";
 import { Loader2Icon, ArrowLeftIcon, UploadIcon, FileTextIcon, GlobeIcon, RefreshCwIcon, WifiIcon, AlertTriangleIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollFade } from "@/components/ui/scroll-fade";
 import Link from "next/link";
 
 interface RunDetailResponse {
@@ -1004,7 +1005,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
             {/* 概览/历史侧栏：浮层玻璃面板（平移画布时内容从面板下滑过被
                 虚化，替代硬边栏），滚动内容经 mask 在上下缘渐隐。右缘让出
                 28px——trace/台账模式的画布滚动条不被面板盖住 */}
-            <aside className="run-glass run-scroll-fade absolute inset-y-2 right-7 z-10 w-[360px] shrink-0 overflow-y-auto rounded-2xl">
+            <ScrollFade as="aside" className="run-glass absolute inset-y-2 right-7 z-10 w-[360px] shrink-0 overflow-y-auto rounded-2xl">
               {selectedNode ? (
                 <RunNodeDetail
                   node={selectedNode}
@@ -1017,7 +1018,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
               ) : (
                 <RunOverview viewModel={viewModel} />
               )}
-            </aside>
+            </ScrollFade>
           </div>
         </div>
         </RunDataEpochContext.Provider>
