@@ -1408,7 +1408,7 @@ const EVENT_CONFIG: Record<string, { icon: string; color: string }> = {
   end: { icon: "🔴", color: "text-gray-600 dark:text-gray-400" },
 }
 
-function AgentDetail({ stats, label, onNavigateToTurn }: { stats: AgentStats; label: string; onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void }) {
+function AgentDetail({ stats }: { stats: AgentStats }) {
   const peakTurn = stats.turns.reduce((max, t) => t.totalTokens > max.totalTokens ? t : max, stats.turns[0])
   const peakCacheRead = peakTurn.cacheReadTokens ?? 0
   const peakRealInput = peakTurn.inputTokens + peakTurn.cacheReadTokens + peakTurn.cacheWriteTokens
@@ -1418,24 +1418,10 @@ function AgentDetail({ stats, label, onNavigateToTurn }: { stats: AgentStats; la
   const totalSaved = stats.turns.reduce((s, t) => s + (t.cacheReadTokens ?? 0), 0)
   const totalInput = stats.turns.reduce((s, t) => s + t.totalTokens, 0)
 
+  // 身份/统计行不在此（概览卡单一源——同数据不双份）：本组件只承载
+  // 上下文组成 / 关键事件 / 缓存效率三块下钻数字
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge variant={stats.isRoot ? "blue" : "orange"} className="text-xs">{label}</Badge>
-        <Badge variant="outline" className="text-xs">{stats.isRoot ? "主agent" : "subagent"}</Badge>
-        <span className="text-xs text-muted-foreground">{stats.totalTurns} 轮 · 峰值 {formatTokenCount(stats.peak)} · 平均 {formatTokenCount(stats.average)}</span>
-        {onNavigateToTurn && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-5 text-xs"
-            onClick={() => onNavigateToTurn(stats.turns[0].turnId, stats.memberTaskId)}
-          >
-            → Turns
-          </Button>
-        )}
-      </div>
-
       <div className="grid gap-3 md:grid-cols-3">
         <div className="space-y-1.5">
           <span className="text-xs font-medium">上下文组成（第 #{peakTurn.turnIndex} 轮，峰值）</span>
@@ -1822,7 +1808,7 @@ function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid,
               </div>
             )}
 
-            <AgentDetail stats={sel} label={displayLabel(sel)} onNavigateToTurn={onNavigateToTurn} />
+            <AgentDetail stats={sel} />
           </div>
         )}
       </DialogContent>

@@ -589,10 +589,14 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     // 单 root：agentName 命名（export viewer 同款路径）
     expect(t).toContain('build');
     expect(t).not.toContain('成员A');
-    // 组详情（单实例组直开）：主agent 徽标在渐进披露层
+    // 组详情（单实例组直开）：卡名回落 agentName（build），身份/统计行归概览卡
+    // 单一源（AgentDetail 头部退役——同数据不双份）
     await act(async () => { detailBtnOf(container, 'build').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(text()).toContain('主agent');
+    const legacyCard = document.querySelector('[data-agent-detail] [data-agent-row]');
+    expect(legacyCard).toBeTruthy();
+    expect(legacyCard!.textContent).toContain('build');
+    expect(document.querySelector('[data-agent-detail]')!.textContent).not.toContain(' · 峰值 ');
     // member 缺省 → agentContextLimits 未给 → 回落 config fetch（session 模型）
     expect(fetchUrls.some(u => u.includes('/api/config/context-windows'))).toBe(true);
 

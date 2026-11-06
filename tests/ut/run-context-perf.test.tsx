@@ -228,18 +228,19 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     // 刀G：表头无成员选择模块（观测恒为全成员融合）；显隐快捷在画布内分段控件
     expect(tab!.querySelector('[data-quick-filter]')).toBeTruthy();
 
-    // 组详情渐进披露：成员A 胶囊 → 右侧弹窗（主agent 徽标；弹窗经 Portal 挂
-    // body；窗口占比 root 峰值 toFixed(1) 收编在弹窗概览卡）→ → Turns 跳转带
-    // member 归因（root 组 = 成员会话；turnId 首轮）
+    // 组详情渐进披露：成员A 胶囊 → 右侧弹窗（弹窗经 Portal 挂 body；去重契约：
+    // 身份/统计行归概览卡单一源——AgentDetail 头部退役，同数据不双份）→ 卡内
+    // → Turns 跳转带 member 归因（root 组 = 成员会话；turnId 首轮）
     const detailBtn = (tab!.querySelector('[data-legend="成员A"]') as HTMLElement)
       .parentElement!.querySelector('button') as HTMLElement;
     await act(async () => { detailBtn.click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
     const detail = document.querySelector('[data-agent-detail]');
     expect(detail).toBeTruthy();
-    expect(detail!.textContent).toContain('主agent');
+    expect(detail!.textContent).not.toContain(' · 峰值 ');
     const detailCard = detail!.querySelector('[data-agent-row]');
     expect(detailCard).toBeTruthy();
+    expect(detailCard!.textContent).toContain('成员A');
     expect(detailCard!.textContent).toContain('72.5%');
     const turnBtn = [...detail!.querySelectorAll('button')].find(b => b.textContent === '→ Turns');
     expect(turnBtn).toBeTruthy();
