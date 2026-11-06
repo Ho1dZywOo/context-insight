@@ -206,7 +206,7 @@ afterEach(() => {
 });
 
 describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
-  it('?tab=context 深链：恢复的 ContextTracker（成员 root 卡 + 子代理卡 + 增长曲线），跳 Turns 带成员归因', async () => {
+  it('?tab=context 深链：恢复的 ContextTracker（增长曲线 + 胶囊命名，卡片收编弹窗），跳 Turns 带成员归因', async () => {
     await renderPage('?tab=context');
 
     const tab = document.querySelector('[data-run-tab="context"]');
@@ -223,14 +223,14 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(text).not.toContain('rop-研究员');
     // 增长曲线：成员A/B root 时间线（平滑 path；子代理单点不画线，胶囊已证在场）
     expect(tab!.querySelectorAll('path[fill="none"]')).toHaveLength(2);
-    // 窗口占比（root 峰值，toFixed(1)）——概览表携带
-    expect(text).toContain('72.5%');
-    expect(text).toContain('40.0%');
+    // 概览面板退役：页面无卡片网格（数字全归弹窗，页面只留曲线形状）
+    expect(tab!.querySelectorAll('[data-agent-row]')).toHaveLength(0);
     // 刀G：表头无成员选择模块（观测恒为全成员融合）；显隐快捷在画布内分段控件
     expect(tab!.querySelector('[data-quick-filter]')).toBeTruthy();
 
     // 组详情渐进披露：成员A 胶囊 → 右侧弹窗（主agent 徽标；弹窗经 Portal 挂
-    // body）→ → Turns 跳转带 member 归因（root 组 = 成员会话；turnId 首轮）
+    // body；窗口占比 root 峰值 toFixed(1) 收编在弹窗概览卡）→ → Turns 跳转带
+    // member 归因（root 组 = 成员会话；turnId 首轮）
     const detailBtn = (tab!.querySelector('[data-legend="成员A"]') as HTMLElement)
       .parentElement!.querySelector('button') as HTMLElement;
     await act(async () => { detailBtn.click() });
@@ -238,6 +238,9 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     const detail = document.querySelector('[data-agent-detail]');
     expect(detail).toBeTruthy();
     expect(detail!.textContent).toContain('主agent');
+    const detailCard = detail!.querySelector('[data-agent-row]');
+    expect(detailCard).toBeTruthy();
+    expect(detailCard!.textContent).toContain('72.5%');
     const turnBtn = [...detail!.querySelectorAll('button')].find(b => b.textContent === '→ Turns');
     expect(turnBtn).toBeTruthy();
     await act(async () => { turnBtn!.click() });

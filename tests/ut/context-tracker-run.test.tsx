@@ -30,10 +30,10 @@
 //   恒定（无相机 transform——缩放只作用于时间轴，不整图放缩）、Ctrl/⌘+滚轮
 //   光标锚定缩放、拖拽平移窗口、玻璃工具条倍率读数、适配复位；原地点按
 //   命中点跳转该轮；
-// ⑩Agent 概览（自适应多列卡片）：峰值降序常驻（平均/缓存命中率回归首屏）、
-//   卡片点击直达组详情（带实例选中）、卡片常亮（不随图中显隐/选中变化）、
-//   卡内 → Turns 带 member 归因；
-//   卡片全名展示（含 #编号/派发步骤，不截断）。
+// ⑩Agent 概览面板退役：卡片收编进组详情弹窗（趋势小图下方的概览卡——峰值/
+//   窗口占比 + 平均/缓存命中 + → Turns 带 member 归因；卡片不随图中显隐变灰），
+//   页面只留曲线形状（数字全归弹窗），胶囊 chevron 是唯一入口；卡片全名展示
+//   （含 #编号/派发步骤，不截断）。
 // ⑪命名单一源（run-actor 目录）：成员/子代理统一身份建模——身份键、图例键、
 //   展示名（类型别名归一 + 同名编号 + 派发步骤回落）单点组合，卡片/图例/回放
 //   同源；无类型子代理（无桥归因）回落派发步骤并带「派发」徽标，不再与类型
@@ -169,10 +169,11 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(t).toContain('unique-编译器');
     expect(t).not.toContain('派发-调研');
     // 类型组详情（渐进披露）：同名类型 research 的实例编号 #1（A，先起）/#2（B）
+    //——弹窗经 Portal 挂 body，断言走 body 域
     await act(async () => { detailBtnOf(container, 'research').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(text(container)).toContain('research #1');
-    expect(text(container)).toContain('research #2');
+    expect(text()).toContain('research #1');
+    expect(text()).toContain('research #2');
     // agentContextLimits 已给 → 不再 fetch /api/config/context-windows
     expect(fetchUrls.filter(u => u.includes('/api/config/context-windows'))).toHaveLength(0);
   });
@@ -366,42 +367,39 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(['ses-ma', 'ses-mb']).toContain(memberTaskId);
   });
 
-  it('Agent 概览（多列卡片）：峰值降序常驻、卡片点击直达组详情、卡片常亮不随显隐变灰、卡内 → Turns 带归因', async () => {
+  it('Agent 概览面板退役：页面无概览网格，卡片收编进组详情弹窗（数字 + → Turns 带归因）', async () => {
     const onNavigateToTurn = vi.fn();
     const container = await render({ onNavigateToTurn });
 
-    const table = container.querySelector('[data-agent-table]') as HTMLElement | null;
-    expect(table).toBeTruthy();
-    const rows = () => Array.from(table!.querySelectorAll('[data-agent-row]')) as HTMLElement[];
-    expect(rows()).toHaveLength(5);
-    // 峰值降序：成员B（50K）→ 成员A（30K）→ research #1（5K）→ research #2 → unique
-    expect(rows()[0]!.textContent).toContain('成员B');
-    expect(rows()[1]!.textContent).toContain('成员A');
-    expect(rows()[2]!.textContent).toContain('research #1');
-    expect(rows()[3]!.textContent).toContain('research #2');
-    // root 徽标 + 双排次行携带平均/缓存命中（首屏常驻数字）
-    expect(rows()[0]!.textContent).toContain('root');
-    expect(rows()[0]!.textContent).toContain('平均');
-    expect(rows()[0]!.textContent).toContain('缓存命中');
+    // 面板退役：页面再无概览表/卡网格（数字全归弹窗，页面只留曲线形状）
+    expect(container.querySelector('[data-agent-table]')).toBeNull();
+    expect(container.querySelector('[data-agent-row]')).toBeNull();
 
-    // 行点击直达组详情（research #2 行 → 弹窗打开，选中该实例）
-    await act(async () => { rows()[3]!.click() });
+    // 卡片收编进弹窗：成员B 胶囊 chevron → 弹窗内概览卡（root 徽标 +
+    // 平均/缓存命中首屏数字）
+    await act(async () => { detailBtnOf(container, '成员B').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    const detail = document.querySelector('[data-agent-detail]');
-    expect(detail).toBeTruthy();
-    expect(detail!.textContent).toContain('research');
+    const dialog = document.querySelector('[data-agent-detail]') as HTMLElement | null;
+    expect(dialog).toBeTruthy();
+    const card = dialog!.querySelector('[data-agent-row]') as HTMLElement | null;
+    expect(card).toBeTruthy();
+    expect(card!.textContent).toContain('成员B');
+    expect(card!.textContent).toContain('root');
+    expect(card!.textContent).toContain('平均');
+    expect(card!.textContent).toContain('缓存命中');
 
-    // 卡片常亮：关掉成员B 胶囊（图中隐藏）→ 其卡片不变灰（概览恒定参照，
-    // 显隐语义只在图与胶囊表达）
+    // 常亮语义随面板平移：关成员B 胶囊（图中隐藏）→ 弹窗内卡片不变灰
+    //（弹窗数据不随图中显隐变化，显隐语义只在图与胶囊表达）
     const chipB = container.querySelector('[data-legend="成员B"]') as HTMLElement;
     await act(async () => { (chipB.querySelector('input') as HTMLElement).click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    const rowB = rows().find(r => r.textContent!.includes('成员B'));
-    expect(rowB).toBeTruthy();
-    expect(rowB!.className).not.toContain('opacity-45');
+    const cardAgain = document.querySelector('[data-agent-detail] [data-agent-row]') as HTMLElement | null;
+    expect(cardAgain).toBeTruthy();
+    expect(cardAgain!.className).not.toContain('opacity-45');
+    expect(cardAgain!.textContent).toContain('成员B');
 
-    // 行内 → Turns 带 member 归因（成员B 行，stopPropagation 不触发行点击）
-    const turnBtn = rowB!.querySelector('button') as HTMLElement | null;
+    // 卡内 → Turns 带 member 归因（成员B 组 = ses-mb，stopPropagation 不触发弹窗行为）
+    const turnBtn = cardAgain!.querySelector('button') as HTMLElement | null;
     expect(turnBtn).toBeTruthy();
     await act(async () => { turnBtn!.click() });
     expect(onNavigateToTurn).toHaveBeenCalled();
@@ -625,22 +623,34 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
 
-    const rows = () => Array.from(container.querySelectorAll('[data-agent-row]')) as HTMLElement[];
-    expect(rows()).toHaveLength(4);
-    const texts = rows().map(r => r.textContent ?? '');
-    // 类型名（别名归一）+ 同名编号；无类型回落派发步骤全名
-    expect(texts.some(t => t.includes('acme-arch #1'))).toBe(true);
-    expect(texts.some(t => t.includes('acme-arch #2'))).toBe(true);
-    expect(texts.some(t => t.includes('Task29 第三次修复精度'))).toBe(true);
-    expect(texts.some(t => t.includes('成员X'))).toBe(true);
-    // 「派发」徽标只在无类型回落卡上——命名出处显式，不与类型名裸混一列
-    const stepRows = rows().filter(r => r.textContent!.includes('派发'));
-    expect(stepRows).toHaveLength(1);
-    expect(stepRows[0]!.textContent).toContain('Task29');
-    // 图例胶囊与卡片同源：别名归一同步生效（此前胶囊不套别名）
+    // 页面无概览网格（面板退役）：命名经图例胶囊（组级）与组详情弹窗（实例级）验证
+    expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(0);
+
+    // 图例胶囊组级命名：别名归一同步生效（此前胶囊不套别名）
     expect(container.querySelector('[data-legend="acme-arch"]')).toBeTruthy();
-    // 全名单行展示：nowrap 不截断不换行（列宽调至 340px 容纳常规名）
-    const nameSpan = stepRows[0]!.querySelector('span.whitespace-nowrap');
+    expect(container.querySelector('[data-legend="成员X"]')).toBeTruthy();
+
+    // 实例级命名收进弹窗：acme-arch 组（2 实例）→ 实例清单行带 #1/#2 编号
+    await act(async () => { detailBtnOf(container, 'acme-arch').click() });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
+    let dialog = document.querySelector('[data-agent-detail]') as HTMLElement | null;
+    expect(dialog).toBeTruthy();
+    const instRows = Array.from(dialog!.querySelectorAll('[data-agent-instances] button')) as HTMLElement[];
+    expect(instRows).toHaveLength(2);
+    expect(instRows[0]!.textContent).toContain('acme-arch #1');
+    expect(instRows[1]!.textContent).toContain('acme-arch #2');
+
+    // 无类型子代理回落派发步骤全名 + 「派发」徽标只在无类型回落卡上（命名出处
+    // 显式，不与类型名裸混）；全名单行展示：nowrap 不截断不换行
+    await act(async () => { detailBtnOf(container, 'Task29 第三次修复精度').click() });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
+    dialog = document.querySelector('[data-agent-detail]') as HTMLElement | null;
+    const stepCard = dialog!.querySelector('[data-agent-row]') as HTMLElement | null;
+    expect(stepCard).toBeTruthy();
+    expect(stepCard!.textContent).toContain('Task29 第三次修复精度');
+    expect(stepCard!.textContent).toContain('派发');
+    expect(dialog!.textContent!.match(/派发/g)?.length).toBe(1);
+    const nameSpan = stepCard!.querySelector('span.whitespace-nowrap');
     expect(nameSpan).toBeTruthy();
     expect(nameSpan!.className).not.toContain('truncate');
     expect(nameSpan!.className).not.toContain('break-words');

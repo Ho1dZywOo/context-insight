@@ -414,12 +414,10 @@ const SVG_H = SVG_HEIGHT
 
 /** 大 run 自适应阈值：agent/图例组 ≤ INLINE_GROUPS_MAX 时全量平铺（单会
  *  话/小 run 与既有行为零差异）；超出启用聚焦模式——曲线默认只画峰值
- *  Top-K（百级成员的曲线墙既不可读也难渲染）、图例胶囊折叠区 + 搜索、
- *  概览卡收敛（Top 行 + 展开全部） */
+ *  Top-K（百级成员的曲线墙既不可读也难渲染）、图例胶囊折叠区 + 搜索 */
 const INLINE_GROUPS_MAX = 12
 const FOCUS_TOP_K = 8
 const COLLAPSED_PILLS = 16
-const INLINE_CARDS_MAX = 24
 
 function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onNavigateToTurn, onOpenReplay }: {
   agentStats: AgentStats[]
@@ -454,11 +452,10 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   // 卡片不参与联动
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<"area" | "line">("area")
-  // 大 run 图例/概览治理：胶囊折叠区（预览前 N + 展开限高滚动）+ 前缀搜索
-  // （百级组里找任务是刚需）；概览卡同理收敛（Top 行 + 展开全部）
+  // 大 run 图例治理：胶囊折叠区（预览前 N + 展开限高滚动）+ 前缀搜索
+  // （百级组里找任务是刚需）
   const [legendExpanded, setLegendExpanded] = useState(false)
   const [legendQuery, setLegendQuery] = useState("")
-  const [cardsExpanded, setCardsExpanded] = useState(false)
   const [detailKey, setDetailKey] = useState<string | null>(null)
   const [detailSid, setDetailSid] = useState<string | null>(null)
 
@@ -549,13 +546,9 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     : orderedGroups
   const legendShowAll = legendExpanded || legendQueryLower.length > 0
   const shownGroups = legendShowAll ? matchedGroups : matchedGroups.slice(0, COLLAPSED_PILLS)
-  // 峰值 Top 快捷键激活判定（集合等值）；概览卡峰值序 + 折叠视图
+  // 峰值 Top 快捷键激活判定（集合等值）
   const topKActive = visibleSessions.size === topKSessionIds.size
     && [...topKSessionIds].every(id => visibleSessions.has(id))
-  const sortedStats = useMemo(() => [...agentStats].sort((a, b) => b.peak - a.peak), [agentStats])
-  const cardsBig = sortedStats.length > INLINE_CARDS_MAX
-  const shownStats = cardsBig && !cardsExpanded ? sortedStats.slice(0, INLINE_CARDS_MAX) : sortedStats
-
 
   const filteredStats = useMemo(() => agentStats.filter(s => visibleSessions.has(s.sessionId)), [agentStats, visibleSessions])
   // 悬浮窗口占比回落用的每 agent 精确限（chart 单限是各 agent 最大值参考线）
@@ -1298,9 +1291,9 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
         </div>
 
         {/* 图例胶囊（纯图例职责）：色点/×N；点击整组显隐、悬停联动高亮、chevron
-            展开组详情——数字（峰值/平均/缓存/占比）归 Agent 概览表，曲线归形状。
-            大 run（组数超阈值）：行首搜索（按名过滤）+ 折叠区（预览前 N，可见组
-            前置）+ 展开限高滚动 */}
+            展开组详情弹窗——数字（趋势小图/概览卡/组成/事件/缓存）全归弹窗，
+            曲线归形状。大 run（组数超阈值）：行首搜索（按名过滤）+ 折叠区
+            （预览前 N，可见组前置）+ 展开限高滚动 */}
         <div className="flex shrink-0 flex-col gap-1.5">
           {legendBig && (
             <div className="flex items-center gap-2">
@@ -1383,49 +1376,12 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       </CardContent>
     </Card>
 
-    {/* Agent 概览：独立卡片（不嵌在趋势卡里——层级清晰；趋势卡 flex 链不再
-        裁内容，卡片网格全铺开无内滚，页面级滚动接管）；点卡直达组详情（带
-        实例选中），卡片常亮不随图中显隐/选中变化 */}
-    <Card size="sm" data-agent-table className="shrink-0">
-      <CardContent className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-medium text-muted-foreground">Agent 概览</span>
-            <span className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground/70">{`按峰值排序${cardsBig ? ` · ${sortedStats.length}` : ""}`}</span>
-              {cardsBig && (
-                <button
-                  type="button"
-                  data-cards-toggle
-                  onClick={() => setCardsExpanded(v => !v)}
-                  className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-                >{cardsExpanded ? "收起" : `显示全部 ${sortedStats.length}`}</button>
-              )}
-            </span>
-          </div>
-          <div className={cn(cardsBig && cardsExpanded && "max-h-[560px] overflow-y-auto run-scroll-fade")}>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-1.5">
-              {shownStats.map(s => (
-                <AgentOverviewCard
-                  key={s.sessionId}
-                  stats={s}
-                  color={colorMap.get(contextLegendKeyOf(s)) ?? "#94a3b8"}
-                  label={displayLabel(s)}
-                  actors={actors}
-                  onClick={() => { setDetailKey(contextLegendKeyOf(s)); setDetailSid(s.sessionId) }}
-                  onNavigateToTurn={onNavigateToTurn}
-                />
-              ))}
-            </div>
-          </div>
-
-        {/* 组详情（第四层：构成下钻）——右侧滑出抽屉（两个入口一个弹窗）：
-            胶囊 chevron = 组视角（这一类 agent 由哪些实例构成、各自贡献多少）；
-            概览卡片点击 = 实例视角（直达该实例）。抽屉内容自上而下：组头（Σ
-            摘要）→ 该 agent 独立增长趋势小图（逐轮轴 + 上下文窗口参考线 +
-            /compact 标记，多实例组灰色同框对比）→ 概览卡 → 实例清单（行即
-            切换器）→ 上下文组成/关键事件/缓存效率 */}
-      </CardContent>
-    </Card>
+    {/* 组详情（第四层：构成下钻）——右侧滑出弹窗，胶囊 chevron 是唯一入口
+        （组视角，默认选中峰值最高实例，实例清单行即切换器）。抽屉内容自上而
+        下：组头（Σ 摘要）→ 该 agent 独立增长趋势小图（逐轮轴 + 上下文窗口
+        参考线 + /compact 标记，多实例组灰色同框对比）→ 概览卡（原 Agent 概
+        览网格收编于此——数字面板退役，页面只留曲线形状）→ 实例清单 → 上下
+        文组成/关键事件/缓存效率 */}
 
     <AgentDetailDialog
       open={detailKey != null}

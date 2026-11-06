@@ -15,10 +15,10 @@
 // ②图例折叠区：组数超阈值时胶囊折叠为预览前 16（可见组前置——预览先回答
 //   「图上正画着谁」）+ +N 展开（限高滚动区）+ 行首搜索按名过滤（带命中
 //   计数）——百级组里找任务是刚需；
-// ③Agent 概览卡收敛：卡数超阈值（24）时默认 Top 行 + 显示全部/收起（展开
-//   后限高滚动区，DOM 有界）；
-// ④阈值以下（单会话/小 run）零变化：无搜索框/展开钮/收起钮，胶囊与卡片全量
-//   平铺、曲线默认全显——既有行为的回归锁。
+// ③Agent 概览面板退役：页面无卡片网格/收起控件，数字收编进组详情弹窗
+//  （弹窗内恰一张选中实例卡——页面只留曲线形状）；
+// ④阈值以下（单会话/小 run）零变化：无搜索框/展开钮，胶囊全量平铺、曲线默认
+//   全显——既有行为的回归锁。
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
@@ -204,32 +204,41 @@ describe('ContextTracker 大 run 自适应（百级成员收敛）', () => {
     expect(legendLabels(container)).toHaveLength(16);
   });
 
-  it('Agent 概览卡收敛：默认 Top-24 行 + 显示全部 45 ↔ 收起', async () => {
+  it('Agent 概览面板退役：页面无卡片网格/收起控件，卡片收编进组详情弹窗', async () => {
     const container = await render(bigTurns, bigLimits);
 
-    expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(24);
-    const toggle = container.querySelector('[data-cards-toggle]') as HTMLButtonElement;
-    expect(toggle?.textContent).toBe('显示全部 45');
-    await act(async () => { toggle.click() });
-    expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(45);
-    expect(container.querySelector('[data-cards-toggle]')?.textContent).toBe('收起');
-    await act(async () => { toggle.click() });
-    expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(24);
+    // 页面再无概览表/卡片网格/收起控件（数字全归弹窗，页面只留曲线形状）
+    expect(container.querySelector('[data-agent-table]')).toBeNull();
+    expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(0);
+    expect(container.querySelector('[data-cards-toggle]')).toBeNull();
+
+    // 卡片活在弹窗里：胶囊 chevron（唯一入口）→ 弹窗内恰一张选中实例卡
+    //（组 = 单实例 root：趋势小图 + 概览卡 + 下钻数字同屏）
+    const label = container.querySelector('[data-legend="mem-39"]') as HTMLElement;
+    expect(label).toBeTruthy();
+    const chevron = label.parentElement!.querySelector('button') as HTMLButtonElement;
+    await act(async () => { chevron.click() });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
+    const dialog = document.querySelector('[data-agent-detail]');
+    expect(dialog).toBeTruthy();
+    expect(dialog!.querySelectorAll('[data-agent-row]')).toHaveLength(1);
+    expect(dialog!.querySelector('[data-agent-row]')!.textContent).toContain('mem-39');
   });
 
-  it('阈值以下（小 run/单会话）零变化：全显、无搜索/折叠/收起控件，卡片全量平铺', async () => {
+  it('阈值以下（小 run/单会话）零变化：全显、无搜索/折叠/峰值 Top 控件、概览面板同口径退役', async () => {
     const container = await render(smallTurns, smallLimits);
 
     // 4 agent ≤ 12：曲线默认全显（root 3 条——成员C 单轮走 circle 分支无 stroke）
     expect(checkedPills(container)).toHaveLength(4);
     expect(curvePaths(container)).toHaveLength(2);
-    // 无大 run 控件：搜索框/图例展开/卡收起/峰值 Top 快捷键
+    // 无大 run 控件：搜索框/图例展开/峰值 Top 快捷键
     expect(container.querySelector('[data-legend-search]')).toBeNull();
     expect(container.querySelector('[data-legend-expand]')).toBeNull();
-    expect(container.querySelector('[data-cards-toggle]')).toBeNull();
     expect(container.querySelector('[data-quick-top]')).toBeNull();
-    // 胶囊与卡片全量平铺（4 组 / 4 卡）
+    // 概览面板退役对小 run 同口径：页面无卡片网格
+    expect(container.querySelector('[data-agent-table]')).toBeNull();
+    expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(0);
+    // 胶囊全量平铺（4 组）
     expect(legendLabels(container)).toHaveLength(4);
-    expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(4);
   });
 });
