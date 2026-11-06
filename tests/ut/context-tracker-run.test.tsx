@@ -30,20 +30,20 @@
 //   恒定（无相机 transform——缩放只作用于时间轴，不整图放缩）、Ctrl/⌘+滚轮
 //   光标锚定缩放、拖拽平移窗口、玻璃工具条倍率读数、适配复位；原地点按
 //   命中点跳转该轮；
-// ⑩Agent 概览面板退役：卡片收编进组详情弹窗（趋势小图下方的概览卡——峰值/
-//   窗口占比 + 平均/缓存命中 + → Turns 带 member 归因；卡片不随图中显隐变灰），
-//   页面只留曲线形状（数字全归弹窗），胶囊 chevron 是唯一入口；卡片全名展示
-//   （含 #编号/派发步骤，不截断）。
+// ⑩Agent 档案弹窗（概览面板退役后数字的唯一载体）：页面只留曲线形状，胶
+//   囊 chevron 是唯一入口；档案自上而下 = 身份行（组名 + root/subagent/派发
+//   徽标 + 轮次，多实例组附 Σ 与实例清单）→ 关键四数（峰值/窗口水位/增速/
+//   缓存命中——水位 >80 红 / >50 琥珀着色）→ 趋势小图 → 风险胶囊（仅
+//   /compact 落差与越限警告，无则整节隐去）→ 缓存效率卡（峰值轮构成 + 命中/
+//   节省/无缓存倍数）→ → Turns 带 member 归因；数字不随图中显隐变灰。
 // ⑪命名单一源（run-actor 目录）：成员/子代理统一身份建模——身份键、图例键、
-//   展示名（类型别名归一 + 同名编号 + 派发步骤回落）单点组合，卡片/图例/回放
+//   展示名（类型别名归一 + 同名编号 + 派发步骤回落）单点组合，弹窗/图例/回放
 //   同源；无类型子代理（无桥归因）回落派发步骤并带「派发」徽标，不再与类型
 //   名裸混一列。
-// ⑬组构成下钻（第四层）：右侧滑出弹窗（胶囊 chevron = 组视角 / 概览卡点击
-//   = 实例视角，两个入口一个弹窗）——组头 Σ 摘要 + 该 agent 独立增长趋势小图
-//   （逐轮轴、缓存读份额带、80/100% 窗口参考线、/compact 标记、多实例组灰
-//   线同框）+ 概览卡 + 实例排行（峰值降序、带成员归因徽标，行即实例切换
-//   器）+ 上下文组成/关键事件/缓存效率；单实例组直开详情；弹窗替代旧内联
-//   面板的「打开即滚动定位」契约——入口与详情再无距离问题。
+// ⑬组构成下钻（第四层）：右侧滑出档案弹窗，胶囊 chevron 唯一入口——实例排
+//   行（峰值降序、带成员归因徽标，行即实例切换器）承载构成；趋势小图（逐轮
+//   轴、缓存读份额带、80/100% 窗口参考线、/compact 标记、多实例组灰线同框）
+//   承载形状；单实例组直开档案。
 // ⑫图内点选聚焦：原地点击曲线选中该组（其余变灰、选中加亮），再点同线或点
 //   空白取消；与悬浮/胶囊 hover 的瞬时高亮叠加（hover 优先）。图选只在图内
 //   表达——胶囊行/概览卡均不随图亮起；隐藏组淡出仅存于胶囊（显隐语义），
@@ -188,10 +188,10 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     // 入口与详情再无距离问题）；弹窗经 Portal 挂 body，断言走 body 域
     const dialog = document.querySelector('[data-agent-detail]');
     expect(dialog).toBeTruthy();
-    // 弹窗内容三件套：独立增长趋势小图 + 概览卡 + 下钻数字
+    // 档案三件套：关键四数（峰值/水位/增速/缓存命中）+ 增长趋势小图 + 缓存效率卡
+    expect(dialog!.querySelector('[data-agent-stats]')!.textContent).toContain('窗口水位');
     expect(dialog!.querySelector('svg[data-chart="agent-trend"]')).toBeTruthy();
-    expect(dialog!.querySelector('[data-agent-row]')).toBeTruthy();
-    expect(dialog!.querySelector('.px-2.py-1.rounded.border')).toBeTruthy();
+    expect(dialog!.querySelector('[data-cache-card]')).toBeTruthy();
 
     // 组级 Σ 摘要（2 实例：sub-a 5000 + sub-b 3000）
     const t = text();
@@ -248,8 +248,17 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(texts.includes('⚡')).toBe(true);
     // 关键事件点（start/peak 圆点）落在曲线上
     expect(svg!.querySelectorAll('circle').length).toBeGreaterThanOrEqual(2);
-    // 弹窗头部 = 组视角（成员A 单实例组）
-    expect(text(document.querySelector('[data-agent-detail]')!)).toContain('上下文详情');
+    // 风险时刻胶囊：/compact 落差（pre→post ↓%——成员A 30K→10K 即 -67%）
+    const compactChip = document.querySelector('[data-agent-event="compact"]');
+    expect(compactChip).toBeTruthy();
+    expect(compactChip!.textContent).toContain('↓-67%');
+    // 弹窗档案：身份行 root 徽标 + 关键四数骨架（峰值/窗口水位/增速/缓存命中）
+    const detailText = text(document.querySelector('[data-agent-detail]')!);
+    expect(detailText).toContain('root');
+    expect(detailText).toContain('峰值');
+    expect(detailText).toContain('窗口水位');
+    expect(detailText).toContain('增速');
+    expect(detailText).toContain('缓存命中');
   });
 
   it('图例按类型分组（root 一键 + 类型条目 ×N），类型整组显隐联动 + 仅 Root 快捷', async () => {
@@ -333,23 +342,23 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(foldContainer.querySelectorAll('svg[data-chart="growth"] circle')).toHaveLength(13);
   });
 
-  it('/compact 逐成员独立归因：A 卡详情 -67%、B 卡详情 -17%（pre/post 不跨成员错配）', async () => {
+  it('/compact 逐成员独立归因：A 档案 -67%、B 档案 -17%（pre/post 不跨成员错配）', async () => {
     const container = await render();
 
-    const eventRows = () => Array.from(document.querySelectorAll('.px-2.py-1.rounded.border'))
+    const compactChips = () => Array.from(document.querySelectorAll('[data-agent-event="compact"]'))
       .map(r => r.textContent ?? '');
 
     await act(async () => { detailBtnOf(container, '成员A').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    // A 详情事件行：自己的 -67%，无 B 的 -17%
-    expect(eventRows().some(r => r.includes('↓-67%'))).toBe(true);
-    expect(eventRows().some(r => r.includes('↓-17%'))).toBe(false);
+    // A 档案风险胶囊：自己的 ↓-67%，无 B 的 ↓-17%
+    expect(compactChips().some(r => r.includes('↓-67%'))).toBe(true);
+    expect(compactChips().some(r => r.includes('↓-17%'))).toBe(false);
 
     await act(async () => { detailBtnOf(container, '成员B').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    // B 详情事件行：自己的 -17%，无 A 的 -67%（若压缩检测跨成员错配即失守）
-    expect(eventRows().some(r => r.includes('↓-17%'))).toBe(true);
-    expect(eventRows().some(r => r.includes('↓-67%'))).toBe(false);
+    // B 档案风险胶囊：自己的 ↓-17%，无 A 的 ↓-67%（若压缩检测跨成员错配即失守）
+    expect(compactChips().some(r => r.includes('↓-17%'))).toBe(true);
+    expect(compactChips().some(r => r.includes('↓-67%'))).toBe(false);
   });
 
   it('→ Turns 跳转带 member 归因（组详情面板 = 成员会话）', async () => {
@@ -367,39 +376,45 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(['ses-ma', 'ses-mb']).toContain(memberTaskId);
   });
 
-  it('Agent 概览面板退役：页面无概览网格，卡片收编进组详情弹窗（数字 + → Turns 带归因）', async () => {
+  it('Agent 档案弹窗：关键四数一次扫读（峰值/水位/增速/缓存命中）+ 缓存效率卡 + → Turns 带归因，不随图中显隐变灰', async () => {
     const onNavigateToTurn = vi.fn();
     const container = await render({ onNavigateToTurn });
 
     // 面板退役：页面再无概览表/卡网格（数字全归弹窗，页面只留曲线形状）
     expect(container.querySelector('[data-agent-table]')).toBeNull();
-    expect(container.querySelector('[data-agent-row]')).toBeNull();
+    expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(0);
 
-    // 卡片收编进弹窗：成员B 胶囊 chevron → 弹窗内概览卡（root 徽标 +
-    // 平均/缓存命中首屏数字）
+    // 成员B 胶囊 chevron → 档案弹窗：身份行（成员B + root 徽标 + 轮次）+
+    // 关键四数一次扫读（峰值/窗口水位/增速/缓存命中）
     await act(async () => { detailBtnOf(container, '成员B').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
     const dialog = document.querySelector('[data-agent-detail]') as HTMLElement | null;
     expect(dialog).toBeTruthy();
-    const card = dialog!.querySelector('[data-agent-row]') as HTMLElement | null;
-    expect(card).toBeTruthy();
-    expect(card!.textContent).toContain('成员B');
-    expect(card!.textContent).toContain('root');
-    expect(card!.textContent).toContain('平均');
-    expect(card!.textContent).toContain('缓存命中');
+    const statsText = dialog!.querySelector('[data-agent-stats]')!.textContent ?? '';
+    expect(statsText).toContain('峰值');
+    expect(statsText).toContain('窗口水位');
+    expect(statsText).toContain('增速');
+    expect(statsText).toContain('缓存命中');
+    expect(dialog!.textContent).toContain('成员B');
+    expect(dialog!.textContent).toContain('root');
+    // 缓存效率卡：峰值轮构成 + 命中/节省/无缓存倍数
+    const cacheText = dialog!.querySelector('[data-cache-card]')!.textContent ?? '';
+    expect(cacheText).toContain('缓存读');
+    expect(cacheText).toContain('新输入');
+    expect(cacheText).toContain('无缓存消耗');
 
-    // 常亮语义随面板平移：关成员B 胶囊（图中隐藏）→ 弹窗内卡片不变灰
-    //（弹窗数据不随图中显隐变化，显隐语义只在图与胶囊表达）
+    // 常亮语义：关成员B 胶囊（图中隐藏）→ 弹窗内容不变（数字不随显隐变灰）
     const chipB = container.querySelector('[data-legend="成员B"]') as HTMLElement;
     await act(async () => { (chipB.querySelector('input') as HTMLElement).click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    const cardAgain = document.querySelector('[data-agent-detail] [data-agent-row]') as HTMLElement | null;
-    expect(cardAgain).toBeTruthy();
-    expect(cardAgain!.className).not.toContain('opacity-45');
-    expect(cardAgain!.textContent).toContain('成员B');
+    const statsAgain = document.querySelector('[data-agent-detail] [data-agent-stats]') as HTMLElement | null;
+    expect(statsAgain).toBeTruthy();
+    expect(statsAgain!.className).not.toContain('opacity-45');
+    expect(statsAgain!.textContent).toContain('缓存命中');
 
-    // 卡内 → Turns 带 member 归因（成员B 组 = ses-mb，stopPropagation 不触发弹窗行为）
-    const turnBtn = cardAgain!.querySelector('button') as HTMLElement | null;
+    // → Turns 带 member 归因（成员B 组 = ses-mb）
+    const turnBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-agent-detail] button'))
+      .find(b => b.textContent === '→ Turns');
     expect(turnBtn).toBeTruthy();
     await act(async () => { turnBtn!.click() });
     expect(onNavigateToTurn).toHaveBeenCalled();
@@ -589,14 +604,15 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     // 单 root：agentName 命名（export viewer 同款路径）
     expect(t).toContain('build');
     expect(t).not.toContain('成员A');
-    // 组详情（单实例组直开）：卡名回落 agentName（build），身份/统计行归概览卡
-    // 单一源（AgentDetail 头部退役——同数据不双份）
+    // 组详情（单实例组直开）：档案身份行回落 agentName（build），统计行归
+    // 关键四数（无重复身份块）
     await act(async () => { detailBtnOf(container, 'build').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    const legacyCard = document.querySelector('[data-agent-detail] [data-agent-row]');
-    expect(legacyCard).toBeTruthy();
-    expect(legacyCard!.textContent).toContain('build');
-    expect(document.querySelector('[data-agent-detail]')!.textContent).not.toContain(' · 峰值 ');
+    const legacyDetail = document.querySelector('[data-agent-detail]');
+    expect(legacyDetail).toBeTruthy();
+    expect(legacyDetail!.textContent).toContain('build');
+    expect(legacyDetail!.querySelector('[data-agent-stats]')).toBeTruthy();
+    expect(legacyDetail!.textContent).not.toContain(' · 峰值 ');
     // member 缺省 → agentContextLimits 未给 → 回落 config fetch（session 模型）
     expect(fetchUrls.some(u => u.includes('/api/config/context-windows'))).toBe(true);
 
@@ -644,20 +660,15 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(instRows[0]!.textContent).toContain('acme-arch #1');
     expect(instRows[1]!.textContent).toContain('acme-arch #2');
 
-    // 无类型子代理回落派发步骤全名 + 「派发」徽标只在无类型回落卡上（命名出处
-    // 显式，不与类型名裸混）；全名单行展示：nowrap 不截断不换行
+    // 无类型子代理回落派发步骤全名 + 「派发」徽标只在档案身份行（命名出处
+    // 显式，不与类型名裸混）
     await act(async () => { detailBtnOf(container, 'Task29 第三次修复精度').click() });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
     dialog = document.querySelector('[data-agent-detail]') as HTMLElement | null;
-    const stepCard = dialog!.querySelector('[data-agent-row]') as HTMLElement | null;
-    expect(stepCard).toBeTruthy();
-    expect(stepCard!.textContent).toContain('Task29 第三次修复精度');
-    expect(stepCard!.textContent).toContain('派发');
+    expect(dialog).toBeTruthy();
+    expect(dialog!.textContent).toContain('Task29 第三次修复精度');
+    expect(dialog!.textContent).toContain('派发');
     expect(dialog!.textContent!.match(/派发/g)?.length).toBe(1);
-    const nameSpan = stepCard!.querySelector('span.whitespace-nowrap');
-    expect(nameSpan).toBeTruthy();
-    expect(nameSpan!.className).not.toContain('truncate');
-    expect(nameSpan!.className).not.toContain('break-words');
   });
 
   it('图内点选聚焦：原地点击曲线选中（其余变灰、选中加亮），再点同线或点空白取消', async () => {

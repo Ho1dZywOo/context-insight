@@ -1376,12 +1376,11 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       </CardContent>
     </Card>
 
-    {/* 组详情（第四层：构成下钻）——右侧滑出弹窗，胶囊 chevron 是唯一入口
-        （组视角，默认选中峰值最高实例，实例清单行即切换器）。抽屉内容自上而
-        下：组头（Σ 摘要）→ 该 agent 独立增长趋势小图（逐轮轴 + 上下文窗口
-        参考线 + /compact 标记，多实例组灰色同框对比）→ 概览卡（原 Agent 概
-        览网格收编于此——数字面板退役，页面只留曲线形状）→ 实例清单 → 上下
-        文组成/关键事件/缓存效率 */}
+    {/* 组详情（第四层）——右侧滑出弹窗 = 该 agent 的上下文档案：胶囊
+        chevron 是唯一入口（默认选中峰值最高实例，实例清单行即切换器）。
+        档案结构：身份行 → 关键四数（峰值/水位/增速/缓存命中）→ 增长趋势
+        小图 → 风险时刻（/compact 落差 + 越限警告，无则隐去）→ 缓存效率
+        （峰值轮构成 + 命中/节省/倍数）→ → Turns */}
 
     <AgentDetailDialog
       open={detailKey != null}
@@ -1392,145 +1391,9 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       onSelectSid={setDetailSid}
       displayLabel={displayLabel}
       actors={actors}
-      colorMap={colorMap}
       onNavigateToTurn={onNavigateToTurn}
     />
     </>
-  )
-}
-
-const EVENT_CONFIG: Record<string, { icon: string; color: string }> = {
-  start: { icon: "🟢", color: "text-green-600 dark:text-green-400" },
-  growth: { icon: "📈", color: "text-blue-600 dark:text-blue-400" },
-  peak: { icon: "⭐", color: "text-yellow-600 dark:text-yellow-400" },
-  warning: { icon: "⚠️", color: "text-red-600 dark:text-red-400" },
-  compact: { icon: "⚡", color: "text-purple-600 dark:text-purple-400" },
-  end: { icon: "🔴", color: "text-gray-600 dark:text-gray-400" },
-}
-
-function AgentDetail({ stats }: { stats: AgentStats }) {
-  const peakTurn = stats.turns.reduce((max, t) => t.totalTokens > max.totalTokens ? t : max, stats.turns[0])
-  const peakCacheRead = peakTurn.cacheReadTokens ?? 0
-  const peakRealInput = peakTurn.inputTokens + peakTurn.cacheReadTokens + peakTurn.cacheWriteTokens
-  const peakNewInput = peakTurn.inputTokens
-  const peakCachePct = peakRealInput > 0 ? (peakCacheRead / peakRealInput * 100) : 0
-
-  const totalSaved = stats.turns.reduce((s, t) => s + (t.cacheReadTokens ?? 0), 0)
-  const totalInput = stats.turns.reduce((s, t) => s + t.totalTokens, 0)
-
-  // 身份/统计行不在此（概览卡单一源——同数据不双份）：本组件只承载
-  // 上下文组成 / 关键事件 / 缓存效率三块下钻数字
-  return (
-    <div className="space-y-3">
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="space-y-1.5">
-          <span className="text-xs font-medium">上下文组成（第 #{peakTurn.turnIndex} 轮，峰值）</span>
-          <div className="flex h-3 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-l-full bg-yellow-500" style={{ width: `${peakCachePct}%` }} />
-            <div className="h-full rounded-r-full bg-blue-500" style={{ width: `${100 - peakCachePct}%`, minWidth: peakCachePct < 100 ? "2px" : "0" }} />
-          </div>
-          <div className="space-y-0.5 text-xs">
-            <div className="flex items-center justify-between"><span className="text-yellow-600 dark:text-yellow-400">Cache Read</span><span className="tabular-nums">{formatTokenCount(peakCacheRead)}（{peakCachePct.toFixed(0)}%）</span></div>
-            <div className="flex items-center justify-between"><span className="text-blue-600 dark:text-blue-400">New Input</span><span className="tabular-nums">{formatTokenCount(Math.max(peakNewInput, 0))}（{(100 - peakCachePct).toFixed(0)}%）</span></div>
-            <div className="flex items-center justify-between"><span className="text-muted-foreground">Total</span><span className="tabular-nums">{formatTokenCount(peakRealInput)}</span></div>
-          </div>
-        </div>
-
-        <div className="space-y-1">
-          <span className="text-xs font-medium">关键事件</span>
-          <div className="run-scroll-fade max-h-44 space-y-1 overflow-y-auto pr-1">
-            {stats.events.map((evt, i) => {
-              const cfg = EVENT_CONFIG[evt.type] ?? EVENT_CONFIG.start
-              return (
-                <div key={i} className="flex items-center gap-2 rounded border px-2 py-1 text-xs">
-                  <span className={cfg.color}>{cfg.icon}</span>
-                  <span className="font-mono text-muted-foreground">#{evt.turnIndex}</span>
-                  <span className="text-muted-foreground">{formatTimestamp(evt.timestamp)}</span>
-                  <span className="tabular-nums">{formatTokenCount(evt.contextSize)}</span>
-                  <span className="flex-1 truncate">{evt.note ?? evt.type}</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        <div className="space-y-1">
-          <span className="text-xs font-medium">缓存效率</span>
-          <div className="grid grid-cols-3 gap-2 text-xs">
-            <div className="rounded-lg bg-muted/50 p-2 text-center">
-              <div className="text-muted-foreground">命中率</div>
-              <div className="font-medium tabular-nums">{(stats.cacheHitRate * 100).toFixed(0)}%</div>
-            </div>
-            <div className="rounded-lg bg-muted/50 p-2 text-center">
-              <div className="text-muted-foreground">节省</div>
-              <div className="font-medium tabular-nums">{formatTokenCount(totalSaved)}</div>
-            </div>
-            <div className="rounded-lg bg-muted/50 p-2 text-center">
-              <div className="text-muted-foreground">总消耗</div>
-              <div className="font-medium tabular-nums">{formatTokenCount(totalInput)}</div>
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            如无缓存，总消耗将增加约 {totalInput > 0 ? ((totalSaved + totalInput) / totalInput).toFixed(1) : "1"} 倍
-          </p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** 概览卡（单一源）：趋势卡网格与详情弹窗同款卡片——常亮不随图中显隐/
- *  选中变化（显隐语义归图与胶囊，概览是恒定参照面板）；onClick 缺省 =
- *  弹窗内嵌形态（无指针语义、铺 muted 底与图区分） */
-function AgentOverviewCard({ stats, color, label, actors, onClick, onNavigateToTurn }: {
-  stats: AgentStats
-  color: string
-  label: string
-  actors: Map<string, RunActor>
-  onClick?: () => void
-  onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void
-}) {
-  const actor = actors.get(stats.sessionId)
-  const winPct = stats.maxContextWindowPct
-  const barColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : "#22c55e"
-  return (
-    <div
-      data-agent-row
-      className={cn("rounded-lg border px-3 py-1.5 transition-colors", onClick ? "cursor-pointer hover:bg-accent/40" : "bg-muted/30")}
-      onClick={onClick}
-    >
-      {/* 名字单行全显：nowrap 不截断（列宽 340px 起容纳常规名），超长名把
-          右侧指标挤到次行——名字永远完整 */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
-        <span className="whitespace-nowrap text-xs font-medium">{label}</span>
-        {stats.isRoot && <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px]">root</Badge>}
-        {!stats.isRoot && actor?.nameSource === "step" && (
-          <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px] text-muted-foreground">派发</Badge>
-        )}
-        <span className="ml-auto shrink-0 text-xs font-medium tabular-nums">{formatTokenCount(stats.peak)}</span>
-        <span className="flex shrink-0 items-center gap-1.5">
-          <span className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
-            <span className="block h-full rounded-full" style={{ width: `${Math.min(winPct, 100)}%`, backgroundColor: barColor }} />
-          </span>
-          <span className="w-13 text-right text-xs tabular-nums">{winPct > 0 ? `${winPct.toFixed(1)}%` : "—"}</span>
-        </span>
-      </div>
-      <div className="mt-0.5 flex items-center gap-3 pl-3.5 text-[11px] tabular-nums text-muted-foreground">
-        <span>{stats.totalTurns} 轮</span>
-        <span>平均 {formatTokenCount(stats.average)}</span>
-        <span>缓存命中 {(stats.cacheHitRate * 100).toFixed(0)}%</span>
-        {onNavigateToTurn && (
-          <button
-            type="button"
-            className="ml-auto shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            onClick={e => { e.stopPropagation(); onNavigateToTurn(stats.turns[0].turnId, stats.memberTaskId) }}
-          >
-            → Turns
-          </button>
-        )}
-      </div>
-    </div>
   )
 }
 
@@ -1715,12 +1578,14 @@ function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: st
   )
 }
 
-/** 组详情弹窗（右侧滑出抽屉）：两个入口一个弹窗——胶囊 chevron = 组视角、
- *  概览卡点击 = 实例视角。内容自上而下：组头（Σ 摘要）→ 独立增长趋势小图
- *  → 概览卡 → 实例清单（多实例组，行即切换器）→ 上下文组成/关键事件/缓存
- *  效率。抽屉替代旧内联面板的「打开即滚动定位」契约——入口与详情再无
- *  距离问题 */
-function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid, onSelectSid, displayLabel, actors, colorMap, onNavigateToTurn }: {
+/** 组详情弹窗（右侧滑出抽屉）= 该 agent 的上下文档案：胶囊 chevron 是唯一
+ *  入口。自上而下：身份行（组名 + root/subagent/派发徽标 + 轮次；多实例组
+ *  附 Σ 摘要与实例清单——行即切换器）→ 关键四数（峰值 / 窗口水位 / 增速 /
+ *  缓存命中——一次扫读拿全档案骨架）→ 增长趋势小图（逐轮轴 + 缓存份额带 +
+ *  窗口参考线 + /compact 标记，多实例组灰线同框）→ 风险时刻胶囊（只留
+ *  /compact 落差与越限警告——背景事件曲线已表达，无风险整节隐去）→ 缓存
+ *  效率卡（峰值轮构成 = 命中率的解释面 + 命中/节省/无缓存倍数）→ → Turns */
+function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid, onSelectSid, displayLabel, actors, onNavigateToTurn }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   group: LegendGroup | null
@@ -1729,7 +1594,6 @@ function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid,
   onSelectSid: (sid: string) => void
   displayLabel: (s: AgentStats) => string
   actors: Map<string, RunActor>
-  colorMap: Map<string, string>
   onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void
 }) {
   const members = useMemo(
@@ -1741,76 +1605,182 @@ function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid,
   const sumPeak = members.reduce((s, m) => s + m.peak, 0)
   const sumSaved = members.reduce((s, m) => s + m.turns.reduce((x, t) => x + (t.cacheReadTokens ?? 0), 0), 0)
 
+  const body = (() => {
+    if (!group || !sel) return null
+    const actor = actors.get(sel.sessionId)
+    const winPct = sel.maxContextWindowPct
+    const winColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : undefined
+
+    const peakTurn = sel.turns.reduce((max, t) => t.totalTokens > max.totalTokens ? t : max, sel.turns[0])
+    const peakCacheRead = peakTurn.cacheReadTokens ?? 0
+    const peakRealInput = peakTurn.inputTokens + peakTurn.cacheReadTokens + peakTurn.cacheWriteTokens
+    const peakNewInput = peakTurn.inputTokens
+    const peakCachePct = peakRealInput > 0 ? (peakCacheRead / peakRealInput * 100) : 0
+    const totalSaved = sel.turns.reduce((s, t) => s + (t.cacheReadTokens ?? 0), 0)
+    const totalInput = sel.turns.reduce((s, t) => s + t.totalTokens, 0)
+
+    // 风险时刻只留可操作项（/compact 落差 + 越限警告）；start/growth/peak/end
+    // 是背景信息（曲线已表达），不占阅读带宽
+    const riskEvents = sel.events.filter(e => e.type === "compact" || e.type === "warning")
+
+    return (
+      <div className="run-scroll-fade flex-1 space-y-2.5 overflow-y-auto p-4 pt-9">
+        {/* 头：身份一行——组名 + 归属徽标（root/subagent、派发出处）+ 轮次；
+            Σ 摘要仅多实例组 */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
+          <span className="text-sm font-semibold">{group.label}</span>
+          <Badge variant="outline" className="text-[10px]">{sel.isRoot ? "root" : "subagent"}</Badge>
+          {!sel.isRoot && actor?.nameSource === "step" && (
+            <Badge variant="outline" className="text-[10px] text-muted-foreground">派发</Badge>
+          )}
+          {members.length > 1 && <Badge variant="outline" className="text-[10px]">{members.length} 个实例</Badge>}
+          <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">{sel.totalTurns} 轮</span>
+        </div>
+        {members.length > 1 && (
+          <div className="text-xs text-muted-foreground">Σ {sumTurns} 轮 · Σ 峰值 {formatTokenCount(sumPeak)} · Σ 缓存节省 {formatTokenCount(sumSaved)}</div>
+        )}
+
+        {/* 实例清单（多实例组）：行即切换器——先选实例，再看档案 */}
+        {members.length > 1 && (
+          <div data-agent-instances className="space-y-1">
+            {members.map(m => {
+              const mWinPct = m.maxContextWindowPct
+              const mBarColor = mWinPct > 80 ? "#ef4444" : mWinPct > 50 ? "#eab308" : "#22c55e"
+              return (
+                <button
+                  key={m.sessionId} type="button"
+                  onClick={() => onSelectSid(m.sessionId)}
+                  className={cn(
+                    "flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-left text-xs transition-colors",
+                    m.sessionId === sel.sessionId ? "border-foreground/25 bg-accent/50" : "hover:bg-accent/40",
+                  )}
+                >
+                  <span className="font-medium whitespace-nowrap">{displayLabel(m)}</span>
+                  {m.memberTaskId && <Badge variant="slate" className="text-xs">{m.memberLabel ?? m.memberTaskId}</Badge>}
+                  <span className="text-muted-foreground tabular-nums">{m.totalTurns} 轮</span>
+                  <span className="text-muted-foreground tabular-nums">峰值 {formatTokenCount(m.peak)}</span>
+                  <span className="ml-auto flex items-center gap-1.5">
+                    <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                      <span className="block h-full rounded-full" style={{ width: `${Math.min(100, Math.max(2, mWinPct))}%`, backgroundColor: mBarColor }} />
+                    </span>
+                    <span className="w-9 text-right tabular-nums text-muted-foreground">{mWinPct.toFixed(0)}%</span>
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {/* 关键四数：峰值 / 窗口水位（Context 风险主指标，水位着色）/ 增速
+            （逼近窗口的速度）/ 缓存命中 */}
+        <div data-agent-stats className="grid grid-cols-4 divide-x divide-border rounded-lg border bg-muted/30 text-center">
+          <div className="px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">峰值</div>
+            <div className="text-sm font-semibold tabular-nums">{formatTokenCount(sel.peak)}</div>
+          </div>
+          <div className="px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">窗口水位</div>
+            <div className="text-sm font-semibold tabular-nums" style={winColor ? { color: winColor } : undefined}>
+              {winPct > 0 ? `${winPct.toFixed(1)}%` : "—"}
+            </div>
+          </div>
+          <div className="px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">增速</div>
+            <div className="text-sm font-semibold tabular-nums">
+              {formatTokenCount(sel.avgGrowthPerTurn)}<span className="text-[10px] font-normal text-muted-foreground">/轮</span>
+            </div>
+          </div>
+          <div className="px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">缓存命中</div>
+            <div className="text-sm font-semibold tabular-nums">{(sel.cacheHitRate * 100).toFixed(0)}%</div>
+          </div>
+        </div>
+
+        {/* 增长趋势（逐轮） */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>增长趋势（逐轮）</span>
+            {members.length > 1 && <span>灰线 = 组内其他实例</span>}
+          </div>
+          <AgentTrendChart stats={sel} color={group.color} peers={members.filter(m => m.sessionId !== sel.sessionId)} />
+        </div>
+
+        {/* 风险时刻：/compact 落差（pre→post ↓%）与越限警告；无风险即整节隐去 */}
+        {riskEvents.length > 0 && (
+          <div data-agent-events className="flex flex-wrap gap-1.5">
+            {riskEvents.map((evt, i) => {
+              if (evt.type === "compact") {
+                const pre = evt.preCompactTokens ?? 0
+                const post = evt.postCompactTokens ?? 0
+                const drop = pre > 0 && post > 0 ? Math.round((1 - post / pre) * 100) : 0
+                return (
+                  <span
+                    key={i} data-agent-event="compact" title={evt.note}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-2 py-1 text-xs tabular-nums text-purple-600 dark:text-purple-400"
+                  >
+                    <span>⚡</span>
+                    <span className="font-mono text-[10px]">#{evt.turnIndex}</span>
+                    <span>{pre > 0 && post > 0 ? `${formatTokenCount(pre)}→${formatTokenCount(post)} ↓-${drop}%` : "/compact"}</span>
+                  </span>
+                )
+              }
+              return (
+                <span
+                  key={i} data-agent-event="warning"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs tabular-nums text-red-600 dark:text-red-400"
+                >
+                  <span>⚠️</span>
+                  <span className="font-mono text-[10px]">#{evt.turnIndex}</span>
+                  <span>{evt.note}</span>
+                </span>
+              )
+            })}
+          </div>
+        )}
+
+        {/* 缓存效率：峰值轮构成（缓存读 vs 新输入——命中率的解释面）+ 全程三数 */}
+        <div data-cache-card className="space-y-1.5 rounded-lg border p-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium">缓存效率</span>
+            <span className="text-[10px] text-muted-foreground">峰值轮 #{peakTurn.turnIndex} 构成</span>
+          </div>
+          <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
+            <div className="h-full bg-yellow-500" style={{ width: `${peakCachePct}%` }} />
+            <div className="h-full bg-blue-500" style={{ width: `${100 - peakCachePct}%`, minWidth: peakCachePct < 100 ? "2px" : "0" }} />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs tabular-nums">
+            <span className="text-yellow-600 dark:text-yellow-400">缓存读 {formatTokenCount(peakCacheRead)}（{peakCachePct.toFixed(0)}%）</span>
+            <span className="text-blue-600 dark:text-blue-400">新输入 {formatTokenCount(Math.max(peakNewInput, 0))}（{(100 - peakCachePct).toFixed(0)}%）</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t pt-1.5 text-xs tabular-nums text-muted-foreground">
+            <span>命中 <span className="font-medium text-foreground">{(sel.cacheHitRate * 100).toFixed(0)}%</span></span>
+            <span>节省 <span className="font-medium text-foreground">{formatTokenCount(totalSaved)}</span></span>
+            <span>无缓存消耗 <span className="font-medium text-foreground">×{totalInput > 0 ? ((totalSaved + totalInput) / totalInput).toFixed(1) : "1"}</span></span>
+          </div>
+        </div>
+
+        {/* 动作：跳转该 agent 的 Turns */}
+        {onNavigateToTurn && (
+          <div className="flex justify-end">
+            <Button
+              variant="outline" size="sm" className="h-6 text-xs"
+              onClick={() => onNavigateToTurn(sel.turns[0].turnId, sel.memberTaskId)}
+            >
+              → Turns
+            </Button>
+          </div>
+        )}
+      </div>
+    )
+  })()
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent side="right" data-agent-detail className="flex max-w-full flex-col gap-0 p-0 sm:max-w-[620px]">
-        <DialogTitle className="sr-only">Agent 上下文详情</DialogTitle>
-        <DialogDescription className="sr-only">上下文增长趋势与用量统计</DialogDescription>
-        {group && sel && (
-          <div className="run-scroll-fade flex-1 space-y-3 overflow-y-auto p-4 pt-9">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
-              <span className="text-sm font-semibold">{group.label}</span>
-              <Badge variant="outline" className="text-[10px]">{sel.isRoot ? "root" : "subagent"}</Badge>
-              {members.length > 1 ? (
-                <>
-                  <Badge variant="outline" className="text-[10px]">{members.length} 个实例</Badge>
-                  <span className="text-xs text-muted-foreground">Σ {sumTurns} 轮 · Σ 峰值 {formatTokenCount(sumPeak)} · Σ 缓存节省 {formatTokenCount(sumSaved)}</span>
-                </>
-              ) : (
-                <span className="text-xs text-muted-foreground">上下文详情</span>
-              )}
-            </div>
-
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium">上下文增长趋势（逐轮）</span>
-                {members.length > 1 && <span className="text-[10px] text-muted-foreground">灰线 = 组内其他实例</span>}
-              </div>
-              <AgentTrendChart stats={sel} color={group.color} peers={members.filter(m => m.sessionId !== sel.sessionId)} />
-            </div>
-
-            <AgentOverviewCard
-              stats={sel}
-              color={colorMap.get(group.key) ?? group.color}
-              label={displayLabel(sel)}
-              actors={actors}
-              onNavigateToTurn={onNavigateToTurn}
-            />
-
-            {members.length > 1 && (
-              <div data-agent-instances className="space-y-1">
-                {members.map(m => {
-                  const winPct = m.maxContextWindowPct
-                  const barColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : "#22c55e"
-                  return (
-                    <button
-                      key={m.sessionId} type="button"
-                      onClick={() => onSelectSid(m.sessionId)}
-                      className={cn(
-                        "flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-left text-xs transition-colors",
-                        m.sessionId === sel.sessionId ? "border-foreground/25 bg-accent/50" : "hover:bg-accent/40",
-                      )}
-                    >
-                      <span className="font-medium whitespace-nowrap">{displayLabel(m)}</span>
-                      {m.memberTaskId && <Badge variant="slate" className="text-xs">{m.memberLabel ?? m.memberTaskId}</Badge>}
-                      <span className="text-muted-foreground tabular-nums">{m.totalTurns} 轮</span>
-                      <span className="text-muted-foreground tabular-nums">峰值 {formatTokenCount(m.peak)}</span>
-                      <span className="ml-auto flex items-center gap-1.5">
-                        <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
-                          <span className="block h-full rounded-full" style={{ width: `${Math.min(100, Math.max(2, winPct))}%`, backgroundColor: barColor }} />
-                        </span>
-                        <span className="w-9 text-right tabular-nums text-muted-foreground">{winPct.toFixed(0)}%</span>
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-
-            <AgentDetail stats={sel} />
-          </div>
-        )}
+        <DialogTitle className="sr-only">Agent 上下文档案</DialogTitle>
+        <DialogDescription className="sr-only">增长趋势、窗口水位与缓存效率</DialogDescription>
+        {body}
       </DialogContent>
     </Dialog>
   )

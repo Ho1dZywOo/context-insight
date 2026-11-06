@@ -212,8 +212,8 @@ describe('ContextTracker 大 run 自适应（百级成员收敛）', () => {
     expect(container.querySelectorAll('[data-agent-row]')).toHaveLength(0);
     expect(container.querySelector('[data-cards-toggle]')).toBeNull();
 
-    // 卡片活在弹窗里：胶囊 chevron（唯一入口）→ 弹窗内恰一张选中实例卡
-    //（组 = 单实例 root：趋势小图 + 概览卡 + 下钻数字同屏）
+    // 卡片活在弹窗里：胶囊 chevron（唯一入口）→ 档案弹窗（身份行 + 关键四数）
+    //（组 = 单实例 root：趋势小图 + 四数 + 缓存效率卡同屏）
     const label = container.querySelector('[data-legend="mem-39"]') as HTMLElement;
     expect(label).toBeTruthy();
     const chevron = label.parentElement!.querySelector('button') as HTMLButtonElement;
@@ -221,8 +221,9 @@ describe('ContextTracker 大 run 自适应（百级成员收敛）', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
     const dialog = document.querySelector('[data-agent-detail]');
     expect(dialog).toBeTruthy();
-    expect(dialog!.querySelectorAll('[data-agent-row]')).toHaveLength(1);
-    expect(dialog!.querySelector('[data-agent-row]')!.textContent).toContain('mem-39');
+    expect(dialog!.textContent).toContain('mem-39');
+    expect(dialog!.querySelector('[data-agent-stats]')).toBeTruthy();
+    expect(dialog!.querySelector('[data-cache-card]')).toBeTruthy();
   });
 
   it('阈值以下（小 run/单会话）零变化：全显、无搜索/折叠/峰值 Top 控件、概览面板同口径退役', async () => {
