@@ -21,11 +21,13 @@
 // ⑥趋势图例按类型分组（root 一键一会话 + 类型条目 ×N，与泳道图例同构），
 //   整组显隐联动；默认全显（无阈值折叠），类型条目整组收起/展开；
 // ⑦曲线渲染管线：LTTB 降采样（千轮级会话收敛到像素级点数）+ Ctrl/⌘+滚轮
-//   只缩放图表（原生 non-passive 监听，preventDefault 生效不被页面缩放劫持）；
+//   时间窗缩放（原生 non-passive 监听，preventDefault 生效不被页面缩放劫持）；
 // ⑧悬浮弹窗 = HTML 层（恒定像素不随图缩放）：点位右侧放置、右缘自动翻左，
 //   不遮被检曲线与数据点；
-// ⑨画布相机模型（Graph 同款）：viewport overflow-hidden 零滚动条、拖拽平移、
-//   Ctrl/⌘+滚轮光标锚定缩放、玻璃工具条、适配复位；原地点按命中点跳转该轮；
+// ⑨时间窗缩放（Perf 效率分布同款）：viewport overflow-hidden 零滚动条、图框
+//   恒定（无相机 transform——缩放只作用于时间轴，不整图放缩）、Ctrl/⌘+滚轮
+//   光标锚定缩放、拖拽平移窗口、玻璃工具条倍率读数、适配复位；原地点按
+//   命中点跳转该轮；
 // ⑩Agent 概览（自适应多列卡片）：峰值降序常驻（平均/缓存命中率回归首屏）、
 //   卡片点击直达组详情（带实例选中）、卡片常亮（不随图中显隐/选中变化）、
 //   卡内 → Turns 带 member 归因；
@@ -397,21 +399,33 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(segCount).toBeGreaterThan(100);
   });
 
-  it('画布相机模型：零滚动条 + Ctrl+滚轮光标锚定缩放 + 拖拽平移 + 适配复位', async () => {
+  it('时间窗缩放（Perf 同款）：图框恒定 + Ctrl+滚轮光标锚定缩放 + 拖拽平移窗口 + 适配复位', async () => {
     const container = await render();
 
     const vp = container.querySelector('[data-viewport="growth"]') as HTMLElement | null;
-    const camEl = container.querySelector('[data-camera="growth"]') as HTMLElement | null;
+    const svg = container.querySelector('svg[data-chart="growth"]') as SVGSVGElement | null;
     const zoomLabel = () => (container.querySelector('[data-zoom-label]') as HTMLElement | null)?.textContent ?? '';
+    // x 轴刻度标签（y = baselineY + 16）：时间窗起点/跨度的可观测投影
+    const tickTexts = () => Array.from(svg!.querySelectorAll('text'))
+      .filter(t => t.getAttribute('y') === '436')
+      .map(t => t.textContent)
+      .join('|');
     expect(vp).toBeTruthy();
-    expect(camEl).toBeTruthy();
-    // viewport = 画布相机（overflow-hidden + contain 隔离，永不出现滚动条）
+    expect(svg).toBeTruthy();
+    // 相机退役：无 transform 载体——缩放不再整图放缩，只作用于时间轴
+    expect(container.querySelector('[data-camera="growth"]')).toBeNull();
+    // viewport 恒定（overflow-hidden 零滚动条），svg 图框恒定（happy-dom 无
+    // 布局 → 缺省世界 1200×460）
     expect(vp!.className).toContain('run-viewport');
     expect(vp!.className).toContain('overflow-hidden');
+    expect(svg!.getAttribute('width')).toBe('1200');
     expect(zoomLabel()).toBe('100%');
+    const fullTicks = tickTexts();
+    expect(fullTicks).toBeTruthy();
 
     // Ctrl + 滚轮上（deltaY<0 放大）：事件被取消（preventDefault 生效，不被
-    // 浏览器页面缩放劫持）+ 档位上调 + 相机 transform 生效（光标锚定缩放）
+    // 浏览器页面缩放劫持）+ 时间窗收窄（倍率 112%）+ 图框不动（width 仍
+    // 1200——与相机模型的整图 scale 是本质区别）
     //（happy-dom 的 WheelEvent init 不透传 ctrlKey/clientX，defineProperty 直塞）
     let canceled = true;
     await act(async () => {
@@ -423,10 +437,12 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     });
     expect(canceled).toBe(false);
     expect(zoomLabel()).toBe('112%');
-    expect(camEl!.style.transform).toContain('scale');
-    expect(camEl!.style.transform).not.toContain('NaN');
+    expect(svg!.getAttribute('width')).toBe('1200');
+    // 窗口收窄 → 刻度变细（fixture 全程 80s < 10min，秒级格式始终在场；
+    // 窗口起点推进是平移的回归锚点）
+    expect(tickTexts()).not.toBe(fullTicks);
 
-    // 普通滚轮：不缩放、不吞事件（画布内是平移手势，不是滚动）
+    // 普通滚轮：不缩放、不吞事件（画布内是拖拽手势域，不是滚动）
     let plainCanceled = false;
     await act(async () => {
       const evt = new WheelEvent('wheel', { deltaY: 120, cancelable: true });
@@ -434,27 +450,28 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     });
     expect(plainCanceled).toBe(false);
     expect(zoomLabel()).toBe('112%');
+    const zoomedTicks = tickTexts();
 
-    // 拖拽平移：pointerdown → pointermove（>4px 死区）→ 相机 translate 生效
-    const beforePan = camEl!.style.transform;
+    // 拖拽平移：窗口整体平移（倍率/窗宽不变），窗口起点推进 → 刻度推进
     await act(async () => {
       vp!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 400, clientY: 200, button: 0 }));
     });
     await act(async () => {
       window.dispatchEvent(new MouseEvent('pointermove', { clientX: 450, clientY: 220 }));
     });
-    expect(camEl!.style.transform).not.toBe(beforePan);
-    expect(camEl!.style.transform).not.toContain('NaN');
-    expect(camEl!.style.transform).toContain('translate(');
     await act(async () => {
       window.dispatchEvent(new MouseEvent('pointerup', {}));
     });
+    expect(zoomLabel()).toBe('112%');
+    expect(tickTexts()).not.toBe(zoomedTicks);
+    expect(svg!.getAttribute('width')).toBe('1200');
 
-    // 适配画布：happy-dom 无布局（clientWidth=0）→ 回落重置相机
+    // 适配全程：窗口复位（倍率 100%），刻度回到全程视图
     await act(async () => {
       (container.querySelector('[data-zoom-fit]') as HTMLElement).click();
     });
     expect(zoomLabel()).toBe('100%');
+    expect(tickTexts()).toBe(fullTicks);
   });
 
   it('悬浮弹窗为 HTML 层：点右侧放置、右缘自动翻左；原地点按命中点跳转该轮', async () => {

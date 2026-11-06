@@ -7,7 +7,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
+import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -388,14 +388,14 @@ type HoveredPoint = {
   sessionId: string; groupKey: string; turnIndex: number; x: number; y: number
   tokens: number; cacheRead: number; newInput: number; cacheWrite: number
   contextWindowPct: number | null; time: string; label: string; color: string; turn: TurnRowItem
-  /** 悬浮命中时快照的视口坐标 + 视口尺寸（渲染期零 ref 访问——相机值在
-   *  事件回调里算好入 state，React 渲染纯函数化） */
+  /** 悬浮命中时快照的视口坐标 + 视口尺寸（渲染期零 ref 访问——事件回调
+   *  里算好入 state，React 渲染纯函数化） */
   screen: { x: number; y: number; vpW: number; vpH: number }
 }
 
-/** 趋势图世界尺寸缺省（viewBox 单位）：真实世界跟随视口自适应（fit 时
- *  world = viewport、恒等相机——绘图区铺满全宽，宽屏无两侧留白）；无布局
- *  环境（happy-dom/SSR）保持该缺省，测试坐标可解析推演 */
+/** 趋势图几何缺省（viewBox 单位）：真实尺寸跟随视口自适应（ResizeObserver
+ *  直写 world——绘图区铺满全宽，宽屏无两侧留白）；无布局环境（happy-dom/
+ *  SSR）保持该缺省，测试坐标可解析推演 */
 const SVG_HEIGHT = 460
 const SVG_W = 1200
 const SVG_H = SVG_HEIGHT
@@ -415,13 +415,8 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   const PADDING_RIGHT = 40
 
   const viewportRef = useRef<HTMLDivElement>(null)
-  const cameraRef = useRef<HTMLDivElement>(null)
-  const zoomLabelRef = useRef<HTMLButtonElement>(null)
-  const svgRef = useRef<SVGSVGElement>(null)
-  // 趋势图矢量世界：跟随视口自适应（state 驱动几何重算，ref 供命令式回调
-  // 即时读取——commitCamera 不等渲染）
+  // 趋势图世界：跟随视口自适应（state 驱动几何重算）
   const [world, setWorld] = useState({ w: SVG_W, h: SVG_H })
-  const worldRef = useRef({ w: SVG_W, h: SVG_H })
   // 默认全显（用户拍板）：子代理曲线不按阈值折叠，需要收窄时用 全部/仅 Root
   // 分段控件或类型胶囊整组收起
   const [visibleSessions, setVisibleSessions] = useState<Set<string>>(
@@ -446,104 +441,35 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     detailRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" })
   }, [detailKey])
 
-  // ── 相机模型（Graph 画布同款）：viewport（overflow-hidden + contain 隔离，
-  // 永不出现滚动条）× camera（单元素 transform，GPU 合成平移/缩放）× 手势
-  // 落定矢量重栅格（静止态任意档位文字线条高清）。缩放百分比命令式直更
-  // textContent（不经 React），缩放过程零曲线重渲染
-  const camera = useRef({ x: 0, y: 0, z: 1 })
-  /** SVG 最近一次矢量重栅格时的缩放档位（CSS scale 相对它做手势期拉伸） */
-  const rasterZRef = useRef(1)
+  // ── 时间窗模型（Perf 效率分布同款）：图框恒定（SVG 随视口满铺，缩放绝不
+  // 作用于图框本身），缩放/平移只改时间轴——窗口内重新采样（LTTB）+ 刻度
+  // 随窗进位 + y 量程随窗口自适应（可见范围即分析范围；80/100% 参考线随
+  // 窗口量程进出画面）。窗口状态携带数据源身份：失配即视为全程（切数据
+  // 自动复位，无需副作用链）
+  const [winState, setWinState] = useState<{ src: AgentStats[]; range: [number, number] | null }>({ src: agentStats, range: null })
+  const win = winState.src === agentStats ? winState.range : null
+  const setWin = useCallback((range: [number, number] | null) => setWinState({ src: agentStats, range }), [agentStats])
+  // 缩放回调经 ref 透传给一次性挂载的原生滚轮监听（恒取最新渲染闭包，
+  // 免重挂监听）
+  const zoomAtRef = useRef<(factor: number, vx?: number) => void>(() => {})
+  // 缩放落定后的悬浮重算请求（窗口几何在渲染提交后才就绪——立即算会用旧几何）
+  const pendingHoverRef = useRef<{ x: number; y: number } | null>(null)
   const panMovedRef = useRef(false)
   const panningRef = useRef(false)
-  const gestureTimerRef = useRef<number | null>(null)
 
-  const toDomPrecision = (v: number) => Math.round(v * 1e4) / 1e4
-  const clampZoom = (z: number) => Math.min(Math.max(z, 0.3), 3)
-
-  const applyCamera = useCallback(() => {
-    const { x, y, z } = camera.current
-    const s = z / rasterZRef.current
-    const el = cameraRef.current
-    if (el) {
-      el.style.transform =
-        `translate(${toDomPrecision(x)}px, ${toDomPrecision(y)}px)` +
-        (Math.abs(s - 1) > 1e-4 ? ` scale(${toDomPrecision(s)})` : "")
-    }
-    if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(z * 100)}%`
-  }, [])
-
-  /** 相机落定：SVG 尺寸对齐逻辑缩放 → 矢量重栅格，CSS scale 归 1 */
-  const commitCamera = useCallback(() => {
-    rasterZRef.current = camera.current.z
-    const svg = svgRef.current
-    if (svg) {
-      svg.setAttribute("width", String(toDomPrecision(worldRef.current.w * camera.current.z)))
-      svg.setAttribute("height", String(toDomPrecision(worldRef.current.h * camera.current.z)))
-    }
-    applyCamera()
-  }, [applyCamera])
-
-  const zoomAt = useCallback((factor: number, cx?: number, cy?: number, immediate = false) => {
-    const vp = viewportRef.current
-    if (!vp) return
-    const { x, y, z } = camera.current
-    const next = clampZoom(z * factor)
-    if (next === z) return
-    const px = cx ?? vp.clientWidth / 2
-    const py = cy ?? vp.clientHeight / 2
-    // 光标锚点：缩放后保持视口点 (px, py) 下的内容点不动
-    camera.current = {
-      x: px - (px - x) * (next / z),
-      y: py - (py - y) * (next / z),
-      z: next,
-    }
-    // 离散操作（工具条按钮）立即矢量重栅格；连击手势（滚轮）先 GPU 拉伸，
-    // 静默 160ms 后落定重栅格
-    if (immediate) commitCamera()
-    else applyCamera()
-    if (gestureTimerRef.current !== null) window.clearTimeout(gestureTimerRef.current)
-    gestureTimerRef.current = window.setTimeout(() => {
-      commitCamera()
-      gestureTimerRef.current = null
-    }, 160)
-  }, [applyCamera, commitCamera])
-
-  const resetCamera = useCallback(() => {
-    camera.current = { x: 0, y: 0, z: 1 }
-    commitCamera()
-  }, [commitCamera])
-
-  const fitChart = useCallback(() => {
-    const vp = viewportRef.current
-    if (!vp) return
-    const w = vp.clientWidth
-    const h = vp.clientHeight
-    if (w <= 0 || h <= 0) {
-      // 无布局环境（happy-dom/SSR）：保持缺省世界 + 恒等相机
-      resetCamera()
-      return
-    }
-    // 世界尺寸 = 视口尺寸（z=1 恒等相机）：绘图区铺满全宽全高，零信箱留白；
-    // 缩放/平移在其上叠加（矢量世界随 resize 重建，几何按新世界重算）
-    worldRef.current = { w, h }
-    setWorld({ w, h })
-    camera.current = { x: 0, y: 0, z: 1 }
-    rasterZRef.current = 1
-    commitCamera()
-  }, [commitCamera, resetCamera])
-
-  // 挂载即适配（无布局环境回落恒等相机，测试可解析推演）；视口尺寸变化
-  // 重适配（响应式——浏览器 resize 后图表始终完整可见）
-  useLayoutEffect(() => { fitChart() }, [fitChart])
+  // 视口尺寸自适应（图框随视口重建，时间窗几何按新框重算）；无布局环境
+  //（happy-dom/SSR）保持缺省世界（测试坐标可解析推演）
   useEffect(() => {
     const vp = viewportRef.current
     if (!vp || typeof ResizeObserver === "undefined") return
-    const ro = new ResizeObserver(() => fitChart())
+    const ro = new ResizeObserver(entries => {
+      const w = Math.round(entries[0].contentRect.width)
+      const h = Math.round(entries[0].contentRect.height)
+      if (w <= 0 || h <= 0) return
+      setWorld(prev => (Math.abs(prev.w - w) < 4 && Math.abs(prev.h - h) < 4 ? prev : { w, h }))
+    })
     ro.observe(vp)
     return () => ro.disconnect()
-  }, [fitChart])
-  useEffect(() => () => {
-    if (gestureTimerRef.current !== null) window.clearTimeout(gestureTimerRef.current)
   }, [])
 
   // 类型配色（黄金角度序列）：全量 agents 计算而非可见集——显隐切换不改色，
@@ -586,7 +512,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   const activeHighlight = hoveredPoint?.groupKey ?? highlightKey ?? selectedKey
 
 
-  const filteredStats = agentStats.filter(s => visibleSessions.has(s.sessionId))
+  const filteredStats = useMemo(() => agentStats.filter(s => visibleSessions.has(s.sessionId)), [agentStats, visibleSessions])
   // 悬浮窗口占比回落用的每 agent 精确限（chart 单限是各 agent 最大值参考线）
   const limitBySid = useMemo(() => new Map(agentStats.map(s => [s.sessionId, s.contextLimit])), [agentStats])
 
@@ -600,89 +526,139 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     return pts
   }, [filteredStats])
 
-  const minTime = allPoints.length > 0 ? Math.min(...allPoints.map(p => p.timestamp)) : 0
-  const maxTime = allPoints.length > 0 ? Math.max(...allPoints.map(p => p.timestamp)) : 0
-  const timeRange = maxTime - minTime || 1
+  const geo = useMemo(() => {
+    const minTime = allPoints.length > 0 ? Math.min(...allPoints.map(p => p.timestamp)) : 0
+    const maxTime = allPoints.length > 0 ? Math.max(...allPoints.map(p => p.timestamp)) : 0
+    const fullSpan = maxTime - minTime
+    const v0 = win ? Math.max(win[0], minTime) : minTime
+    const v1 = win ? Math.min(win[1], maxTime) : maxTime
+    const tSpan = Math.max(v1 - v0, 0)
 
-  const maxInput = Math.max(...allPoints.map(p => p.inputTokens), 1)
-  const yMax = Math.min(Math.ceil(maxInput * 1.15 / 10000) * 10000, contextWindowLimit * 1.1)
+    const chartWidth = world.w
+    const plotWidth = chartWidth - PADDING_LEFT - PADDING_RIGHT
+    const plotHeight = world.h - PADDING_TOP - PADDING_BOTTOM
+    const baselineY = world.h - PADDING_BOTTOM
 
-  const chartWidth = world.w
-  const plotWidth = chartWidth - PADDING_LEFT - PADDING_RIGHT
-  const plotHeight = world.h - PADDING_TOP - PADDING_BOTTOM
-  const baselineY = world.h - PADDING_BOTTOM
-
-  function toXFn(ts: number): number { return PADDING_LEFT + ((ts - minTime) / timeRange) * plotWidth }
-  function toYFn(tokens: number): number { return PADDING_TOP + plotHeight - (tokens / yMax) * plotHeight }
-
-  // Y 轴：nice step（1/2/2.5/5×10^n，~5 条刻度），替代死档位
-  const yTicks: Array<{ value: number; y: number; label: string }> = (() => {
-    const raw = yMax / 5
-    const mag = Math.pow(10, Math.floor(Math.log10(raw)))
-    const norm = raw / mag
-    const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag
-    const ticks: Array<{ value: number; y: number; label: string }> = []
-    for (let v = 0; v <= yMax; v += step) ticks.push({ value: v, y: toYFn(v), label: formatTokenCount(v) })
-    return ticks
-  })()
-
-  // X 轴：等分 ~5 刻度，量程自适应格式（<24h 仅时分，<3d 月/日+时分，更长仅月/日）
-  const timeTicks: Array<{ x: number; label: string }> = (() => {
-    const rangeHours = timeRange / 3600000
-    const target = 5
-    const stepMs = timeRange / target
-    const ticks: Array<{ x: number; label: string }> = []
-    for (let i = 0; i <= target; i++) {
-      const ts = minTime + stepMs * i
-      const d = new Date(ts)
-      const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
-      const label = rangeHours < 24 ? hm : rangeHours < 72 ? `${d.getMonth() + 1}/${d.getDate()} ${hm}` : `${d.getMonth() + 1}/${d.getDate()}`
-      ticks.push({ x: toXFn(ts), label })
+    // y 量程随窗口：可见峰值整步上取（1.15 余量），仍钳在窗口上限 1.1 倍内
+    //（逼近限制时 100% 参考线可及）；空窗回落全程峰值（网格结构不塌）
+    const globalMaxInput = Math.max(...allPoints.map(p => p.inputTokens), 1)
+    const winTurns: TurnRowItem[] = []
+    for (const s of filteredStats) {
+      for (const t of s.turns) {
+        const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0
+        if (ts >= v0 && ts <= v1) winTurns.push(t)
+      }
     }
-    return ticks
-  })()
+    const winMaxInput = winTurns.length > 0 ? Math.max(...winTurns.map(t => t.inputMessagesTokens), 1) : globalMaxInput
+    const yMax = Math.min(Math.ceil(winMaxInput * 1.15 / 10000) * 10000, contextWindowLimit * 1.1)
 
-  const cautionY = PADDING_TOP + plotHeight - (contextWindowLimit * 0.8 / yMax) * plotHeight
-  const limitY = PADDING_TOP + plotHeight - (contextWindowLimit / yMax) * plotHeight
+    const toXFn = (ts: number) => PADDING_LEFT + ((ts - v0) / (tSpan || 1)) * plotWidth
+    const toYFn = (tokens: number) => PADDING_TOP + plotHeight - (tokens / yMax) * plotHeight
 
-  const pctMarkers = useMemo(() => {
-    const markers: Array<{ pct: number; y: number; label: string; color: string }> = []
-    if (cautionY >= PADDING_TOP && cautionY <= baselineY) markers.push({ pct: 80, y: cautionY, label: "80%", color: "#eab308" })
-    if (limitY >= PADDING_TOP && limitY <= baselineY) markers.push({ pct: 100, y: limitY, label: "100%", color: "#ef4444" })
-    return markers
-  }, [cautionY, limitY, PADDING_TOP, baselineY])
+    // Y 轴：nice step（1/2/2.5/5×10^n，~5 条刻度），替代死档位
+    const yTicks: Array<{ value: number; y: number; label: string }> = (() => {
+      const raw = yMax / 5
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)))
+      const norm = raw / mag
+      const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag
+      const ticks: Array<{ value: number; y: number; label: string }> = []
+      for (let v = 0; v <= yMax; v += step) ticks.push({ value: v, y: toYFn(v), label: formatTokenCount(v) })
+      return ticks
+    })()
 
-  // 渲染降采样目标：~1 点/2px（LTTB）——悬浮命中/tooltip 仍走全量点，精度无损
-  const RENDER_PT_TARGET = Math.max(120, Math.floor(plotWidth / 2))
+    // X 轴：等分 ~5 刻度，格式随窗口跨度进位（<10min 秒级，<24h 仅时分，
+    // <3d 月/日+时分，更长仅月/日）——放大后刻度才会变细
+    const timeTicks: Array<{ x: number; label: string }> = (() => {
+      const spanHours = tSpan / 3600000
+      const target = 5
+      const stepMs = (tSpan || 1) / target
+      const ticks: Array<{ x: number; label: string }> = []
+      for (let i = 0; i <= target; i++) {
+        const ts = v0 + stepMs * i
+        const d = new Date(ts)
+        const two = (x: number) => String(x).padStart(2, "0")
+        const hm = `${two(d.getHours())}:${two(d.getMinutes())}`
+        const label = spanHours < 1 / 6
+          ? `${hm}:${two(d.getSeconds())}`
+          : spanHours < 24 ? hm : spanHours < 72 ? `${d.getMonth() + 1}/${d.getDate()} ${hm}` : `${d.getMonth() + 1}/${d.getDate()}`
+        ticks.push({ x: toXFn(ts), label })
+      }
+      return ticks
+    })()
+
+    const cautionY = PADDING_TOP + plotHeight - (contextWindowLimit * 0.8 / yMax) * plotHeight
+    const limitY = PADDING_TOP + plotHeight - (contextWindowLimit / yMax) * plotHeight
+
+    const pctMarkers: Array<{ pct: number; y: number; label: string; color: string }> = []
+    if (cautionY >= PADDING_TOP && cautionY <= baselineY) pctMarkers.push({ pct: 80, y: cautionY, label: "80%", color: "#eab308" })
+    if (limitY >= PADDING_TOP && limitY <= baselineY) pctMarkers.push({ pct: 100, y: limitY, label: "100%", color: "#ef4444" })
+
+    // 渲染降采样目标：~1 点/2px（LTTB）——悬浮命中/tooltip 仍走全量点，精度无损
+    const RENDER_PT_TARGET = Math.max(120, Math.floor(plotWidth / 2))
+
+    const agentLines = filteredStats.map(s => {
+      const groupKey = contextLegendKeyOf(s)
+      const color = colorMap.get(groupKey) ?? "#94a3b8"
+      const label = displayLabel(s)
+      const isRoot = s.isRoot
+      const points = s.turns
+        .filter(t => {
+          const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0
+          return ts >= v0 && ts <= v1
+        })
+        .map(t => ({
+          x: toXFn(t.createdAt ? new Date(t.createdAt).getTime() : 0),
+          y: toYFn(t.inputMessagesTokens),
+          tokens: t.totalTokens,
+          cacheRead: t.cacheReadTokens,
+          newInput: t.inputTokens,
+          cacheWrite: t.cacheWriteTokens,
+          contextWindowPct: t.contextWindowPct,
+          turnIndex: t.turnIndex,
+          time: formatTimestamp(t.createdAt),
+          turn: t,
+        }))
+      const peakInput = points.reduce((m, p) => Math.max(m, p.turn.inputMessagesTokens), 0)
+      const renderPoints = lttb(points, RENDER_PT_TARGET)
+      return { sessionId: s.sessionId, groupKey, color, label, isRoot, points, renderPoints, totalTurns: s.totalTurns, peakInput }
+    })
+
+    return {
+      minTime, maxTime, fullSpan, v0, v1, tSpan,
+      chartWidth, plotWidth, plotHeight, baselineY, yMax,
+      toXFn, toYFn, yTicks, timeTicks, cautionY, limitY, pctMarkers, agentLines,
+      emptyWin: win != null && winTurns.length === 0,
+    }
+  }, [allPoints, filteredStats, win, world, contextWindowLimit, colorMap, displayLabel, PADDING_TOP, PADDING_BOTTOM, PADDING_LEFT, PADDING_RIGHT])
+
+  const { minTime, maxTime, fullSpan, v0, v1, chartWidth, plotWidth, plotHeight, baselineY, yMax, toXFn, toYFn, yTicks, timeTicks, cautionY, limitY, pctMarkers, agentLines, emptyWin } = geo
+
+  // 时间窗缩放：光标时刻锚定（缩放后该时刻的屏幕位置不动），窗口钳制在
+  // 全程内；窗宽下限防退化，放大到全程即复位
+  const zoomAt = (factor: number, vxRaw?: number) => {
+    if (fullSpan <= 0) return
+    const vx = Math.min(chartWidth - PADDING_RIGHT, Math.max(PADDING_LEFT, vxRaw ?? (PADDING_LEFT + plotWidth / 2)))
+    const w0 = win ? win[0] : minTime
+    const w1 = win ? win[1] : maxTime
+    const span = w1 - w0
+    const next = Math.min(fullSpan, Math.max(Math.max(1000, fullSpan / 240), span / factor))
+    if (next >= fullSpan - 1) { setWin(null); return }
+    if (Math.abs(next - span) < 1) return
+    const ta = w0 + ((vx - PADDING_LEFT) / plotWidth) * span
+    let n0 = ta - ((ta - w0) / span) * next
+    let n1 = n0 + next
+    if (n0 < minTime) { n0 = minTime; n1 = n0 + next }
+    if (n1 > maxTime) { n1 = maxTime; n0 = n1 - next }
+    setWin([n0, n1])
+  }
+  useEffect(() => { zoomAtRef.current = zoomAt })
 
   function areaPathStr(pts: Array<{ x: number; y: number }>): string {
     if (pts.length < 2) return ""
     return `${monotonePath(pts)} L ${pts[pts.length - 1].x},${baselineY} L ${pts[0].x},${baselineY} Z`
   }
 
-  const agentLines = filteredStats.map(s => {
-    const groupKey = contextLegendKeyOf(s)
-    const color = colorMap.get(groupKey) ?? "#94a3b8"
-    const label = displayLabel(s)
-    const isRoot = s.isRoot
-    const points = s.turns.map(t => ({
-      x: toXFn(t.createdAt ? new Date(t.createdAt).getTime() : 0),
-      y: toYFn(t.inputMessagesTokens),
-      tokens: t.totalTokens,
-      cacheRead: t.cacheReadTokens,
-      newInput: t.inputTokens,
-      cacheWrite: t.cacheWriteTokens,
-      contextWindowPct: t.contextWindowPct,
-      turnIndex: t.turnIndex,
-      time: formatTimestamp(t.createdAt),
-      turn: t,
-    }))
-    const peakInput = points.reduce((m, p) => Math.max(m, p.turn.inputMessagesTokens), 0)
-    const renderPoints = lttb(points, RENDER_PT_TARGET)
-    return { sessionId: s.sessionId, groupKey, color, label, isRoot, points, renderPoints, totalTurns: s.totalTurns, peakInput }
-  })
-
-  // 悬浮命中：client → 视口 → 相机逆变换 → svg 用户坐标（手动数学，不依赖
+  // 悬浮命中：client → 视口 → svg 用户坐标（图框恒定 1:1，手动数学，不依赖
   // getScreenCTM——测试环境无 CTM 也可精确推演）。ref 持有最新闭包：滚轮/
   // 拖拽等原生监听不因渲染抖动重挂
   function findNearestPoint(svgX: number, svgY: number) {
@@ -709,7 +685,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   }
 
   // 曲线命中（点选聚焦用）：各可见线在该 x 处的线性插值 y，取最小 |dy|，
-  // 阈值 14 世界单位（z=1 即 14px；monotone 路径与线性插值近似贴合）
+  // 阈值 14px（monotone 路径与线性插值近似贴合）
   function findNearestCurve(svgX: number, svgY: number): string | null {
     let bestKey: string | null = null
     let bestDy = 14
@@ -741,18 +717,15 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       const vp = viewportRef.current
       if (!vp) return
       const rect = vp.getBoundingClientRect()
-      const cam = camera.current
-      const nearest = findNearestPoint(
-        (clientX - rect.left - cam.x) / cam.z,
-        (clientY - rect.top - cam.y) / cam.z,
-      )
+      const nearest = findNearestPoint(clientX - rect.left, clientY - rect.top)
       if (nearest) {
-        // 屏幕坐标快照入 state：tooltip 渲染期零 ref 访问
+        // 视口坐标快照入 state：tooltip 渲染期零 ref 访问（图框恒定，svg
+        // 用户坐标即视口像素坐标）
         nearest.screen = {
-          x: cam.x + nearest.x * cam.z,
-          y: cam.y + nearest.y * cam.z,
-          vpW: vp.clientWidth || worldRef.current.w * cam.z,
-          vpH: vp.clientHeight || worldRef.current.h * cam.z,
+          x: nearest.x,
+          y: nearest.y,
+          vpW: vp.clientWidth || world.w,
+          vpH: vp.clientHeight || world.h,
         }
       }
       setHoveredPoint(nearest)
@@ -763,8 +736,9 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
 
   // Ctrl/⌘+滚轮光标锚定缩放：原生 non-passive 监听（React 的 onWheel 挂
-  // passive 通道，preventDefault() 无效，手势会被浏览器页面缩放劫持）；
-  // 缩放后即时重算悬浮（tooltip 跟随新点位，不闪不漂）
+  // passive 通道，preventDefault() 无效，手势会被浏览器页面缩放劫持）。
+  // 缩放落定后按新几何重算悬浮（tooltip 跟随新点位，不闪不漂）——窗口
+  // 几何在渲染提交后才就绪，经 pendingHover 在提交后权威重算一次
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
@@ -772,24 +746,30 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const rect = el.getBoundingClientRect()
-      zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - rect.left, e.clientY - rect.top)
-      updateHoverRef.current(e.clientX, e.clientY)
+      zoomAtRef.current(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - rect.left)
+      pendingHoverRef.current = { x: e.clientX, y: e.clientY }
     }
     el.addEventListener("wheel", onWheel, { passive: false })
     return () => el.removeEventListener("wheel", onWheel)
-  }, [zoomAt])
+  }, [])
+  useEffect(() => {
+    if (!pendingHoverRef.current || panningRef.current) return
+    const { x, y } = pendingHoverRef.current
+    pendingHoverRef.current = null
+    updateHoverRef.current(x, y)
+  })
 
-  // 拖拽平移（Graph 同款 4px 死区）：手势中隐藏 tooltip；原地点击且命中
-  // 数据点 → 跳转该轮（与拖拽互斥，不误触）
+  // 拖拽平移（时间窗整体推移，钳制在全程内；全程视图无平移域——内容已铺
+  // 满窗口）：手势中隐藏 tooltip；原地点击且命中数据点 → 跳转该轮（与拖拽
+  // 互斥，不误触）
   const onViewportPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
-    const start = { x: e.clientX, y: e.clientY }
-    const startCam = { ...camera.current }
+    const startX = e.clientX
+    const startWin = win && fullSpan > 0 ? { v0: win[0], v1: win[1] } : null
     panMovedRef.current = false
     const onMove = (ev: PointerEvent) => {
-      const dx = ev.clientX - start.x
-      const dy = ev.clientY - start.y
-      if (!panMovedRef.current && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+      const dx = ev.clientX - startX
+      if (!panMovedRef.current && Math.abs(dx) > 4 && startWin) {
         panMovedRef.current = true
         panningRef.current = true
         viewportRef.current?.classList.add("run-gesture")
@@ -797,10 +777,10 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
         hoveredRef.current = null
         setHighlightKey(null)
       }
-      if (panMovedRef.current) {
-        camera.current.x = startCam.x + dx
-        camera.current.y = startCam.y + dy
-        applyCamera()
+      if (panMovedRef.current && startWin) {
+        const span = startWin.v1 - startWin.v0
+        const n0 = Math.min(Math.max(startWin.v0 - (dx / plotWidth) * span, minTime), maxTime - span)
+        setWin([n0, n0 + span])
       }
     }
     const onUp = (ev: PointerEvent) => {
@@ -813,15 +793,11 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
         onNavigateToTurn(hoveredRef.current.turn.turnId, hoveredRef.current.turn.member?.taskId ?? null)
       } else {
         // 原地点击未命中数据点：曲线命中 → 点选聚焦（由灰变亮，再点同线取
-        // 消）；空白 → 清除选择。相机逆变换与悬浮命中同款数学
+        // 消）；空白 → 清除选择
         const vp = viewportRef.current
         if (vp) {
           const rect = vp.getBoundingClientRect()
-          const cam = camera.current
-          const key = findNearestCurve(
-            (ev.clientX - rect.left - cam.x) / cam.z,
-            (ev.clientY - rect.top - cam.y) / cam.z,
-          )
+          const key = findNearestCurve(ev.clientX - rect.left, ev.clientY - rect.top)
           setSelectedKey(prev => (key == null ? null : prev === key ? null : key))
         }
       }
@@ -881,6 +857,9 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     return { totalTurns, peakAgent, cachePct: cacheTotal > 0 ? Math.round((cacheHit / cacheTotal) * 100) : 0 }
   })()
 
+  // 当前窗宽相对全程的倍率（工具条读数；全程恒 100%）
+  const ratio = win && fullSpan > 0 ? Math.round(fullSpan / Math.max(win[1] - win[0], 1) * 100) : 100
+
   return (
     <>
     <Card size="sm" className="flex min-h-0 flex-1 flex-col">
@@ -929,8 +908,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
             onMouseMove={e => updateHoverRef.current(e.clientX, e.clientY)}
             onMouseLeave={() => { setHoveredPoint(null); hoveredRef.current = null; setHighlightKey(null) }}
           >
-            <div ref={cameraRef} data-camera="growth" className="run-camera" style={{ transformOrigin: "0 0" }}>
-              <svg ref={svgRef} data-chart="growth" width={world.w} height={world.h} viewBox={`0 0 ${world.w} ${world.h}`} className="block">
+              <svg data-chart="growth" width={world.w} height={world.h} viewBox={`0 0 ${world.w} ${world.h}`} className="block">
                 <defs>
                   {agentLines.map(line => (
                     <linearGradient key={line.sessionId} id={`areaGrad-${line.sessionId}`} x1="0" y1="0" x2="0" y2="1">
@@ -1037,8 +1015,15 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
                 {/* Compact event markers with context drop annotation */}
                 {(() => {
-                  // run 视图多 root：各成员的 /compact 标记全画（纵向错位防叠）——仅可见 root
-                  const compactEvts = agentStats.filter(s => s.isRoot && visibleSessions.has(s.sessionId)).flatMap(s => s.events.filter(e => e.type === "compact"))
+                  // run 视图多 root：各成员的 /compact 标记全画（纵向错位防叠）——仅可见 root，
+                  // 且落在当前时间窗内（窗外事件随窗口进出画面）
+                  const compactEvts = agentStats
+                    .filter(s => s.isRoot && visibleSessions.has(s.sessionId))
+                    .flatMap(s => s.events.filter(e => e.type === "compact"))
+                    .filter(e => {
+                      const ts = e.timestamp ? new Date(e.timestamp).getTime() : 0
+                      return ts >= v0 && ts <= v1
+                    })
                   if (compactEvts.length === 0) return null
                   const ICON_Y = PADDING_TOP + 5
                   const LABEL_Y = ICON_Y + 16
@@ -1099,7 +1084,12 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                   }).filter(Boolean)
                 })()}
 
-                {/* Crosshair + 悬浮点定位环（tooltip 本体是 HTML 层——不随图缩放） */}
+                {/* 空窗提示（缩放/平移到无轮次的时间段） */}
+                {emptyWin && (
+                  <text x={PADDING_LEFT + plotWidth / 2} y={PADDING_TOP + plotHeight / 2} textAnchor="middle" fontSize={10} style={{ fill: "var(--ctx-tick)" }}>该时间窗内无轮次</text>
+                )}
+
+                {/* Crosshair + 悬浮点定位环（tooltip 本体是 HTML 层） */}
                 {hoveredPoint && (
                   <g style={{ pointerEvents: "none" }}>
                     <line x1={hoveredPoint.x} y1={PADDING_TOP} x2={hoveredPoint.x} y2={baselineY} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" opacity={0.5} clipPath="url(#plotClip)" />
@@ -1111,11 +1101,10 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
 
               </svg>
-            </div>
 
-            {/* HTML 悬浮层：恒定像素尺寸（不随图缩放——SVG 内嵌 tooltip 在 3x 缩放
-                时会放大到遮挡整片图区）、点位右侧 + 右缘自动翻左（不遮被检曲线）、
-                主题化卡片样式（Grafana/Recharts 同款交互形态） */}
+            {/* HTML 悬浮层：恒定像素尺寸（图框恒定，此处为 HTML 覆盖层的天然
+                语义）、点位右侧 + 右缘自动翻左（不遮被检曲线）、主题化卡片样式
+                （Grafana/Recharts 同款交互形态） */}
             {hoveredPoint && (() => {
               const tt = hoveredPoint
               const inputTotal = tt.turn.inputTokens + tt.turn.cacheReadTokens + tt.turn.cacheWriteTokens
@@ -1217,32 +1206,30 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
           </button>
         </div>
 
-        {/* 玻璃工具条（Graph 同款浮层 chrome）：缩放/适配全程命令式更新，零重渲染 */}
+        {/* 玻璃工具条（Perf 同款浮层 chrome）：时间窗缩放/平移/适配全程 */}
           <div className="run-glass absolute right-3 bottom-3 flex items-center rounded-xl">
             <button
               type="button" title="缩小（Ctrl + 滚轮）" aria-label="缩小"
-              onClick={() => zoomAt(1 / 1.15, undefined, undefined, true)}
+              onClick={() => zoomAt(1 / 1.15)}
               className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
             >
               <ZoomOutIcon className="size-3.5" />
             </button>
-            <button
-              type="button" title="重置缩放" aria-label="重置缩放" data-zoom-label
-              ref={zoomLabelRef}
-              onClick={resetCamera}
-              className="run-tool-btn w-11 text-center text-[11px] tabular-nums text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
-            />
+            <span
+              data-zoom-label title="当前时间窗倍率"
+              className="w-11 text-center text-[11px] tabular-nums text-[#57606a]"
+            >{ratio}%</span>
             <button
               type="button" title="放大（Ctrl + 滚轮）" aria-label="放大"
-              onClick={() => zoomAt(1.15, undefined, undefined, true)}
+              onClick={() => zoomAt(1.15)}
               className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
             >
               <ZoomInIcon className="size-3.5" />
             </button>
             <span className="h-3.5 w-px bg-black/10" aria-hidden />
             <button
-              type="button" title="适配画布" aria-label="适配画布" data-zoom-fit
-              onClick={fitChart}
+              type="button" title="适配全程" aria-label="适配全程" data-zoom-fit
+              onClick={() => setWin(null)}
               className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
             >
               <MaximizeIcon className="size-3.5" />

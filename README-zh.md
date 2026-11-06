@@ -9,7 +9,7 @@ LLM 编码 Agent 的 Session 级可观测工具：导入 agent 会话日志，�
 导入 SQLite（opencode.db）或 JSONL（Claude 原生 / Codex 原生 `rollout-*.jsonl` / DSH 原生 `session.v4.jsonl`（含 `.zstd`）/ cpx proxy 捕获，明文与 `.jsonl.7z`、存量 `.jsonl.gz` 均可，`cpx-` 前缀自动处理），进入 run 统一工作台的分析 Tab——会话即 solo run，与 Opsbot 工作流 run 共用同一详情面。JSONL 是单一「JSONL (auto)」入口，按文件内容自动识别 Claude / Codex / DSH，无需按框架选择：
 
 - **Token 与费用** — 每轮 token 五项拆解，按模型上下文窗口显示占比，估算费用
-- **上下文增长** — Graph 同款画布（拖拽平移、光标锚定缩放、视口自适应铺满全宽、曲线点选聚焦、零滚动条）承载逐 agent 上下文增长曲线，画布内快捷显隐分段控件，图例胶囊司显隐高亮、Agent 概览多列卡片司数字（全名不截断，命名出自 run-actor 参与者目录单一源），动画回放与 `/compact` 压缩点标注
+- **上下文增长** — 恒定满铺画布承载逐 agent 上下文增长曲线，缩放为 Perf 同款时间窗语义（Ctrl/⌘+滚轮光标锚定、拖拽平移只作用于时间轴——图框永不整体放缩，刻度与 y 量程随窗口自适应、窗口内曲线重采样，曲线点选聚焦），画布内快捷显隐分段控件，图例胶囊司显隐高亮、Agent 概览多列卡片司数字（全名不截断，命名出自 run-actor 参与者目录单一源），动画回放与 `/compact` 压缩点标注
 - **活跃 / 墙钟** — 会话详情 Wall Clock 拆分（活跃 + 非活跃 = 墙钟）与首页 Active / Wall 列：事件聚类口径（间隔 >5min 计非活跃、API 调用进行中计活跃）
 - **上下文治理** — 查看每轮 LLM 输入构成：可见消息 + 稳定 System 开销
 - **Subagent 追踪** — 识别子代理会话与 dispatch→response 链路，时间线内联展示
