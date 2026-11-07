@@ -15,9 +15,11 @@
 //（p95 刻度靠右）／哪个不可靠（错误计数红字）／谁在用（矩阵列强度）。
 // 诚实口径：无计时调用（源缺时间且无 wire）计入 untimed 摘要不进分位；
 // Task/agent 派发行灰条带「派发」标（窗口 = 子代理整段执行，不进 Σ 工具
-// 执行头部口径）。下钻唯一出口 = Turns 搜索语法深链（工具行 → tool:X，
-// 矩阵格 → tool:X member:Y）——Turns 命中索引即调用清单，叙事舞台已渲染
-// 工具调用块（参数/结果/错误/时长），零新清单面。
+// 执行头部口径）；skill 族元调用行（skill / load_skill / 技能派发型——提示
+// 词注入而非可执行工具，isSkillRelated 由采集侧 tool-conventions 单源判
+// 定）紫字带「技能」标，悬停解释耗时语义。下钻唯一出口 = Turns 搜索语法
+// 深链（工具行 → tool:X，矩阵格 → tool:X member:Y）——Turns 命中索引即调用
+// 清单，叙事舞台已渲染工具调用块（参数/结果/错误/时长），零新清单面。
 
 import { useMemo } from "react";
 import {
@@ -31,6 +33,7 @@ import type { RunToolStats } from "@/lib/observe/collectors/tool-stats";
 
 const BAR_COLOR = "#2563eb";        // 与 Perf 泳道 agent 蓝同源
 const DISPATCH_COLOR = "#8c959f";   // 与时间构成「重试等待」灰同源
+const SKILL_COLOR = "#8b5cf6";      // 与 Token 构成「推理」紫同源（技能 = 提示词注入，语义相邻）
 const ROW_H = 26;
 const NAME_W = 210;                 // 工具名 + 调用计数列
 const STATS_W = 92;                 // Σ/p95 数字列
@@ -158,7 +161,7 @@ export function PerfToolTime({
                     onClick={onOpenSearch ? () => onOpenSearch(`tool:${t.toolName}`) : undefined}
                   >
                     <title>{[
-                      `${t.toolName}${t.isDispatch ? "（派发——窗口为子代理整段执行，另计不入 Σ 工具执行）" : ""}`,
+                      `${t.toolName}${t.isDispatch ? "（派发——窗口为子代理整段执行，另计不入 Σ 工具执行）" : t.isSkillRelated ? "（技能加载/调用——提示词注入类元调用，耗时不代表工具执行）" : ""}`,
                       `${t.calls} 次 · 错误 ${t.errors}${t.errors > 0 ? `（${Math.round(errRate * 100)}%）` : ""}`,
                       `Σ ${fmtMs(t.totalMs)} · 均值 ${fmtMs(t.avgMs)} · p50 ${fmtMs(t.p50Ms)} · p95 ${fmtMs(t.p95Ms)} · 最慢 ${fmtMs(t.maxMs)}`,
                       ...(t.timedCalls > 0 ? [] : ["无计时（源缺时间且无 wire）"]),
@@ -170,6 +173,11 @@ export function PerfToolTime({
                     </text>
                     {t.isDispatch && (
                       <text x={NAME_W - 26} y={y + 12} fontSize={8} fill={DISPATCH_COLOR}>派发</text>
+                    )}
+                    {/* skill 族元调用标（与派发互斥显示——技能派发型 task/agent 行
+                        归派发语义优先） */}
+                    {!t.isDispatch && t.isSkillRelated && (
+                      <text x={NAME_W - 26} y={y + 12} fontSize={8} fill={SKILL_COLOR}>技能</text>
                     )}
                     <text x={NAME_W + STATS_W + BAR_W + 8} y={y + 12} fontSize={9} fill={errRate > 0 ? PERF_COLORS.danger : PERF_COLORS.axis} textAnchor="end">
                       {`${t.calls} 次${t.errors > 0 ? ` · 错 ${t.errors}` : ""}`}

@@ -101,9 +101,14 @@ beforeAll(async () => {
 
   // 成员 B（claude-format + wire）：
   // Grep wire 回填 2500（durationMs=0）· Grep 真实 1500 · Task 派发 3500
+  // · skill 元调用 40（提示词注入类，isSkillRelated 透传断言用）
   await mkCall(tb1.id, { toolCallId: 'ts-wireu-1', toolName: 'Grep', durationMs: 0 });
   await mkCall(tb2.id, { toolCallId: 'ts-tc-grep-2', toolName: 'Grep', durationMs: 1500 });
   await mkCall(tb2.id, { toolCallId: 'ts-tc-task-1', toolName: 'Task', durationMs: 3500 });
+  await mkCall(tb1.id, {
+    toolCallId: 'ts-tc-skill-1', toolName: 'skill', durationMs: 40, isSkillRelated: true,
+    argsJson: '{"name":"demo-skill","summary":"Loaded skill: demo-skill"}',
+  });
 });
 
 afterAll(async () => {
@@ -127,8 +132,8 @@ describe('run tool-stats（工具维度耗时统计，API 层）', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     const names = (body.tools as Array<{ toolName: string }>).map(t => t.toolName);
-    // Bash 9000 > Grep 4000 > Task 3500（派发）> Edit 500 > Read 0（无计时）
-    expect(names).toEqual(['Bash', 'Grep', 'Task', 'Edit', 'Read']);
+    // Bash 9000 > Grep 4000 > Task 3500（派发）> Edit 500 > skill 40（元调用）> Read 0（无计时）
+    expect(names).toEqual(['Bash', 'Grep', 'Task', 'Edit', 'skill', 'Read']);
 
     const bash = body.tools.find((t: { toolName: string }) => t.toolName === 'Bash');
     expect(bash.calls).toBe(3);
@@ -162,10 +167,10 @@ describe('run tool-stats（工具维度耗时统计，API 层）', () => {
 
     expect(body.meta.wireDerivedCalls).toBe(1);
     expect(body.meta.untimedCalls).toBe(1);
-    expect(body.meta.timedCalls).toBe(7);
-    expect(body.meta.totalCalls).toBe(8);
-    // Σ 工具执行 = Bash 9000 + Grep 4000 + Edit 500（Task 派发另计）
-    expect(body.meta.totalToolMs).toBe(13500);
+    expect(body.meta.timedCalls).toBe(8);
+    expect(body.meta.totalCalls).toBe(9);
+    // Σ 工具执行 = Bash 9000 + Grep 4000 + Edit 500 + skill 40（Task 派发另计）
+    expect(body.meta.totalToolMs).toBe(13540);
     expect(body.meta.dispatchMs).toBe(3500);
   });
 
@@ -199,6 +204,19 @@ describe('run tool-stats（工具维度耗时统计，API 层）', () => {
 
     // Bash 只在成员 A：B 列无格
     expect(body.matrix.Bash[MEM_B]).toBeUndefined();
+  });
+
+  it('skill 族元调用：isSkillRelated 透传采集侧单一源（提示词注入类——计时如实、不派发）', async () => {
+    const body = await (await getStats(RUN_ID)).json();
+    const skill = body.tools.find((t: { toolName: string }) => t.toolName === 'skill');
+    expect(skill.isSkillRelated).toBe(true);
+    expect(skill.isDispatch).toBe(false);
+    expect(skill.calls).toBe(1);
+    expect(skill.totalMs).toBe(40);       // DB 原值优先照常（非派发 → 进 Σ）
+    expect(skill.errors).toBe(0);
+    // 普通工具不带标（flag 只标元调用族）
+    const bash = body.tools.find((t: { toolName: string }) => t.toolName === 'Bash');
+    expect(bash.isSkillRelated).toBe(false);
   });
 
   it('run 不存在 → 404', async () => {

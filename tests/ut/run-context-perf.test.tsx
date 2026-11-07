@@ -159,11 +159,13 @@ const perfSubTurn = {
 const fetchCalls: string[] = [];
 
 // 工具耗时卡夹具（Perf「成员 × 工具」双维度的工具侧）：Read（含错误与
-// p95 刻度）> Task（派发）> Grep（无计时）——排行序/诚实标注/矩阵格下钻断言用
+// p95 刻度）> Task（派发）> skill（技能加载元调用——提示词注入类，wire 回填
+// 毫秒级）> Grep（无计时）——排行序/诚实标注/徽标/矩阵格下钻断言用
 const perfToolStats = {
   tools: [
     { toolName: 'Read', calls: 3, errors: 1, totalMs: 9000, timedCalls: 3, untimedCalls: 0, wireDerived: 1, minMs: 1000, p50Ms: 3000, p95Ms: 5000, maxMs: 5000, avgMs: 3000, isDispatch: false, isSkillRelated: false, errorTypes: [{ type: 'timeout', count: 1 }] },
     { toolName: 'Task', calls: 1, errors: 0, totalMs: 3500, timedCalls: 1, untimedCalls: 0, wireDerived: 0, minMs: 3500, p50Ms: 3500, p95Ms: 3500, maxMs: 3500, avgMs: 3500, isDispatch: true, isSkillRelated: false, errorTypes: [] },
+    { toolName: 'skill', calls: 2, errors: 0, totalMs: 500, timedCalls: 2, untimedCalls: 0, wireDerived: 2, minMs: 1, p50Ms: 4, p95Ms: 13, maxMs: 41, avgMs: 5, isDispatch: false, isSkillRelated: true, errorTypes: [] },
     { toolName: 'Grep', calls: 1, errors: 0, totalMs: 0, timedCalls: 0, untimedCalls: 1, wireDerived: 0, minMs: 0, p50Ms: 0, p95Ms: 0, maxMs: 0, avgMs: 0, isDispatch: false, isSkillRelated: false, errorTypes: [] },
   ],
   matrix: {
@@ -172,6 +174,7 @@ const perfToolStats = {
       ses_mini_b: { calls: 1, totalMs: 2000, errors: 0, firstTurnId: 'rop-ctx-b0' },
     },
     Task: { ses_mini_b: { calls: 1, totalMs: 3500, errors: 0, firstTurnId: 'rop-ctx-b0' } },
+    skill: { ses_mini_a: { calls: 2, totalMs: 500, errors: 0, firstTurnId: 'rop-ctx-a0' } },
     Grep: { ses_mini_b: { calls: 1, totalMs: 0, errors: 0, firstTurnId: 'rop-ctx-b0' } },
   },
   members: [
@@ -392,9 +395,9 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     const card = perf.querySelector('[data-testid="perf-tool-time"]');
     expect(card).toBeTruthy();
 
-    // 排行序 = totalMs 降序（Read 9000 > Task 3500 > Grep 0）
+    // 排行序 = totalMs 降序（Read 9000 > Task 3500 > skill 500 > Grep 0）
     const rows = [...card!.querySelectorAll('[data-tool-row]')].map(g => g.getAttribute('data-tool-row'));
-    expect(rows).toEqual(['Read', 'Task', 'Grep']);
+    expect(rows).toEqual(['Read', 'Task', 'skill', 'Grep']);
 
     // 诚实标注：无计时不进分位 + wire 回填计数 + 派发徽标 + Σ 与派发另计
     const cardText = card!.textContent ?? '';
@@ -402,6 +405,15 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(cardText).toContain('wire 回填 2');
     expect(cardText).toContain('派发');
     expect(cardText).toContain('派发 3.5s 另计');
+
+    // skill 族元调用徽标：紫字「技能」+ 悬停解释耗时语义（提示词注入非可
+    // 执行工具）；普通工具（Read）无徽标——与派发标同门反馈语法
+    const skillRow = card!.querySelector('[data-tool-row="skill"]')!;
+    const badgeTexts = [...skillRow.querySelectorAll('text')].map(t => t.textContent);
+    expect(badgeTexts).toContain('技能');
+    expect(skillRow.querySelector('title')?.textContent).toContain('技能加载/调用——提示词注入类元调用，耗时不代表工具执行');
+    const readRow = card!.querySelector('[data-tool-row="Read"]')!;
+    expect([...readRow.querySelectorAll('text')].map(t => t.textContent)).not.toContain('技能');
     // 成员轴命名与泳道同源（member.label）
     expect(cardText).toContain('成员A');
     expect(cardText).toContain('成员B');
