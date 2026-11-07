@@ -7,7 +7,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-# smart-agent 端口选择器（start.sh 调用，tests/e2e/start-sh-agent-port.test.ts 独立行为测试）。
+# smart-agent 端口选择器（start.sh 调用，tests/pipeline/start-sh-agent-port.test.ts 独立行为测试）。
 # 用法：pick-smart-agent-port.sh <BASE_PORT> <NEXT_PORT> [INSIGHT_ROOT] [MODE]；
 # stdout 输出选中的端口（无可用则空）。
 #

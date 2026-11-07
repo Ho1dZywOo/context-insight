@@ -55,6 +55,11 @@ prisma/test.db
 prisma/test.db-journal
 prisma/test.db-wal
 prisma/test.db-shm
+# playwright E2E 库（e2e/boot/boot-server.sh 每次 migrations 重建）
+prisma/e2e.db
+prisma/e2e.db-journal
+prisma/e2e.db-wal
+prisma/e2e.db-shm
 /dev.db
 /dev.db-journal
 /dev.db-wal
@@ -109,6 +114,10 @@ data/scoring/
 
 # vitest generated reports (junit/html)
 test-report/
+
+# playwright artifacts (trace/截图/录像 + html report)
+test-results/
+playwright-report/
 
 # CLI bundle (npm prepack artifact, esbuild → dist/cli.mjs)
 dist/

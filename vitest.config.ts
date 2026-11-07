@@ -34,7 +34,7 @@ export default defineConfig({
         resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
         test: {
           name: "insight",
-          include: ["tests/ut/**/*.test.ts", "tests/ut/**/*.test.tsx", "tests/e2e/**/*.test.ts", "tests/e2e/**/*.test.tsx"],
+          include: ["tests/ut/**/*.test.ts", "tests/ut/**/*.test.tsx", "tests/pipeline/**/*.test.ts", "tests/pipeline/**/*.test.tsx"],
           setupFiles: ["./tests/setup.ts"],
           // upload/git 类 IT 在全量并行的资源竞争下偶发超 5s 默认预算（隔离跑 <2s），
           // 统一放宽到 30s：慢机器/满并行都有余量，不拖慢正常通过

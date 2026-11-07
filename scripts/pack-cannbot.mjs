@@ -28,7 +28,7 @@
 // 的等路径守卫直接返回，cannbot 老用户目录原地不动、无需迁移。
 //
 // 每条规则带 minHits（防漂移哨兵）：源码重构后若必命中的规则命中 0 次，打包报错，
-// 提示同步更新规则表。tests/e2e/cannbot-pack.test.ts 对产物做品牌泄漏扫描。
+// 提示同步更新规则表。tests/pipeline/cannbot-pack.test.ts 对产物做品牌泄漏扫描。
 
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
