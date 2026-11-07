@@ -237,7 +237,9 @@ export function TurnSearchField({ state, hitCount, onSearch, onExit, onJumpIndex
 
   // 驻留关键词同步进输入框（改词重搜后回显最新词）；退出清空并复位提示
   const dockedKw = state?.keyword ?? null;
-  const [prevDocked, setPrevDocked] = useState(dockedKw);
+  // 初始 null：挂载时驻留关键词已就位（深链直开/预填消费先于胶囊渲染）同样
+  // 视为「新驻留」回显——否则输入框空但搜索已执行
+  const [prevDocked, setPrevDocked] = useState<string | null>(null);
   if (prevDocked !== dockedKw) {
     setPrevDocked(dockedKw);
     setValue(dockedKw ?? "");

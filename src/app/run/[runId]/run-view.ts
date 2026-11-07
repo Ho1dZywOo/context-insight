@@ -62,7 +62,7 @@ function normalizeTabParam(v: string | null): RunTabKey | null {
   return isKnownRunTab(v) ? v : null;
 }
 
-/** 视图状态。tab / member / turn 进 URL 镜像（?tab= / ?member= / ?turn=） */
+/** 视图状态。tab / member / turn / q 进 URL 镜像（?tab= / ?member= / ?turn= / ?q=） */
 export type RunView = {
   tab: RunTabKey
   /** 成员钻取态（刀G：观测 tab 恒为全成员融合无过滤，member 仅 Audit 的
@@ -70,20 +70,26 @@ export type RunView = {
   member: string | null
   /** 选中轮次（TurnDetail 深钻；URL ?turn= 的镜像源，turnId 全局唯一） */
   turnId: string | null
+  /** Turns 搜索预填（一次性深链令牌：Perf 工具耗时卡等下钻入口用搜索语法
+   *  直达命中索引——Turns 消费即驻留自身搜索态，view.q 保留原值仅作 URL
+   *  ?q= 的镜像源，刷新/分享重开同链重放；URL ?q= 镜像源） */
+  q: string | null
 }
 
-/** 跳转补丁：「去某处看」。tab/member/turnId 写 URL 镜像（replace）。
+/** 跳转补丁：「去某处看」。tab/member/turnId/q 写 URL 镜像（replace）。
  *  字段语义：undefined = 不动；显式 null = 清态 */
 export type RunNavigatePatch = {
   tab?: RunTabKey
   member?: string | null
   turnId?: string | null
+  q?: string | null
 }
 
 /** 选中补丁：「tab 内调整」。纯 state，URL 不动 */
 export type RunSelectPatch = {
   member?: string | null
   turnId?: string | null
+  q?: string | null
 }
 
 export type RunViewHandle = {
@@ -103,11 +109,13 @@ export function useRunView(): RunViewHandle {
   const tabParam = searchParams.get("tab")
   const memberParam = searchParams.get("member")
   const turnParam = searchParams.get("turn")
+  const qParam = searchParams.get("q")
 
   const [view, setView] = useState<RunView>(() => ({
     tab: normalizeTabParam(tabParam) ?? DEFAULT_RUN_TAB,
     member: memberParam ?? null,
     turnId: turnParam ?? null,
+    q: qParam ?? null,
   }))
 
   // 工作台回退栈（navigate 前值入栈；内存态，刷新/深链重开即重置）与
@@ -126,9 +134,10 @@ export function useRunView(): RunViewHandle {
       tab: patch.tab ?? cur.tab,
       member: patch.member !== undefined ? patch.member : cur.member,
       turnId: patch.turnId !== undefined ? patch.turnId : cur.turnId,
+      q: patch.q !== undefined ? patch.q : cur.q,
     }
     // 视图态真变了才入回退栈（同值跳转是 no-op，不入栈）
-    if (next.tab !== cur.tab || next.member !== cur.member || next.turnId !== cur.turnId) {
+    if (next.tab !== cur.tab || next.member !== cur.member || next.turnId !== cur.turnId || next.q !== cur.q) {
       backStack.current.push(cur)
       setCanBack(true)
     }
@@ -144,6 +153,10 @@ export function useRunView(): RunViewHandle {
       if (patch.turnId == null) p.delete("turn")
       else p.set("turn", patch.turnId)
     }
+    if (patch.q !== undefined) {
+      if (patch.q == null) p.delete("q")
+      else p.set("q", patch.q)
+    }
     router.replace(`?${p.toString()}`, { scroll: false })
   }, [router, searchParams])
 
@@ -153,6 +166,7 @@ export function useRunView(): RunViewHandle {
       ...v,
       member: patch.member !== undefined ? patch.member : v.member,
       turnId: patch.turnId !== undefined ? patch.turnId : v.turnId,
+      q: patch.q !== undefined ? patch.q : v.q,
     }))
   }, [])
 
@@ -169,6 +183,8 @@ export function useRunView(): RunViewHandle {
     else p.set("member", prev.member)
     if (prev.turnId == null) p.delete("turn")
     else p.set("turn", prev.turnId)
+    if (prev.q == null) p.delete("q")
+    else p.set("q", prev.q)
     router.replace(`?${p.toString()}`, { scroll: false })
     return true
   }, [router, searchParams])
@@ -192,6 +208,11 @@ export function useRunView(): RunViewHandle {
   if (turnParam !== prevTurnParam) {
     setPrevTurnParam(turnParam)
     setView(v => (v.turnId === turnParam ? v : { ...v, turnId: turnParam ?? null }))
+  }
+  const [prevQParam, setPrevQParam] = useState(qParam)
+  if (qParam !== prevQParam) {
+    setPrevQParam(qParam)
+    setView(v => (v.q === qParam ? v : { ...v, q: qParam ?? null }))
   }
 
   return { view, navigate, select, goBack, canBack }

@@ -740,6 +740,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
               viewModel={viewModel}
               turnId={view.turnId}
               onSelectTurn={id => select({ turnId: id })}
+              searchQuery={view.q}
             />
           </div>
         ) : null}
@@ -767,7 +768,12 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
 
         {visitedTabs.has("perf") ? (
           <div data-run-tab="perf" className={tabPanelClass("perf")}>
-            <RunPerfTab key={identityEpoch} runId={run.runId} onOpenTurn={turnId => navigate({ tab: "turns", turnId })} />
+            <RunPerfTab
+              key={identityEpoch}
+              runId={run.runId}
+              onOpenTurn={turnId => navigate({ tab: "turns", turnId })}
+              onOpenSearch={q => navigate({ tab: "turns", q })}
+            />
           </div>
         ) : null}
 

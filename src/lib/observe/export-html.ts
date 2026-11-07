@@ -95,6 +95,7 @@ export async function gatherRunExportData(runId: string): Promise<RunExportPaylo
     archiveIfOk(`${base}/bridges`),
     archiveIfOk(`${base}/context`),
     archiveIfOk(`${base}/lanes`),
+    archiveIfOk(`${base}/tool-stats`),
     archiveIfOk(fileReadsUrl),
   ])
 
