@@ -159,19 +159,22 @@ const perfSubTurn = {
 const fetchCalls: string[] = [];
 
 // 工具耗时卡夹具（Perf「成员 × 工具」双维度的工具侧）：Read（含错误与
-// p95 刻度）> Task（派发）> skill（技能加载元调用——提示词注入类，wire 回填
-// 毫秒级）> Grep（无计时）——排行序/诚实标注/徽标/矩阵格下钻断言用
+// p95 刻度，4 成员格——Top-3 堆叠段 + 「其他」段覆盖）> Task（派发）>
+// skill（技能加载元调用——提示词注入类，wire 回填毫秒级）> Grep（无计时）
+// ——排行序/诚实标注/徽标/堆叠段与成员分解清单下钻断言用
 const perfToolStats = {
   tools: [
-    { toolName: 'Read', calls: 3, errors: 1, totalMs: 9000, timedCalls: 3, untimedCalls: 0, wireDerived: 1, minMs: 1000, p50Ms: 3000, p95Ms: 5000, maxMs: 5000, avgMs: 3000, isDispatch: false, isSkillRelated: false, errorTypes: [{ type: 'timeout', count: 1 }] },
+    { toolName: 'Read', calls: 6, errors: 1, totalMs: 9000, timedCalls: 6, untimedCalls: 0, wireDerived: 1, minMs: 500, p50Ms: 3000, p95Ms: 5000, maxMs: 5000, avgMs: 1500, isDispatch: false, isSkillRelated: false, errorTypes: [{ type: 'timeout', count: 1 }] },
     { toolName: 'Task', calls: 1, errors: 0, totalMs: 3500, timedCalls: 1, untimedCalls: 0, wireDerived: 0, minMs: 3500, p50Ms: 3500, p95Ms: 3500, maxMs: 3500, avgMs: 3500, isDispatch: true, isSkillRelated: false, errorTypes: [] },
     { toolName: 'skill', calls: 2, errors: 0, totalMs: 500, timedCalls: 2, untimedCalls: 0, wireDerived: 2, minMs: 1, p50Ms: 4, p95Ms: 13, maxMs: 41, avgMs: 5, isDispatch: false, isSkillRelated: true, errorTypes: [] },
     { toolName: 'Grep', calls: 1, errors: 0, totalMs: 0, timedCalls: 0, untimedCalls: 1, wireDerived: 0, minMs: 0, p50Ms: 0, p95Ms: 0, maxMs: 0, avgMs: 0, isDispatch: false, isSkillRelated: false, errorTypes: [] },
   ],
   matrix: {
     Read: {
-      ses_mini_a: { calls: 3, totalMs: 9000, errors: 1, firstTurnId: 'rop-t-a0' },
+      ses_mini_a: { calls: 3, totalMs: 6000, errors: 1, firstTurnId: 'rop-t-a0' },
       ses_mini_b: { calls: 1, totalMs: 2000, errors: 0, firstTurnId: 'rop-ctx-b0' },
+      'ts-m3': { calls: 1, totalMs: 500, errors: 0, firstTurnId: 'rop-t-a0' },
+      'ts-m4': { calls: 1, totalMs: 500, errors: 0, firstTurnId: 'rop-ctx-a0' },
     },
     Task: { ses_mini_b: { calls: 1, totalMs: 3500, errors: 0, firstTurnId: 'rop-ctx-b0' } },
     skill: { ses_mini_a: { calls: 2, totalMs: 500, errors: 0, firstTurnId: 'rop-ctx-a0' } },
@@ -182,7 +185,7 @@ const perfToolStats = {
     'ts-m3', 'ts-m4', 'ts-m5', 'ts-m6', 'ts-m7', 'ts-m8',
     'ts-m9', 'ts-m10', 'ts-m11', 'ts-m12', 'ts-m13', 'ts-m14',
   ],
-  meta: { totalCalls: 5, totalToolMs: 11000, dispatchMs: 3500, timedCalls: 4, untimedCalls: 1, wireDerivedCalls: 2 },
+  meta: { totalCalls: 10, totalToolMs: 13000, dispatchMs: 3500, timedCalls: 9, untimedCalls: 1, wireDerivedCalls: 3 },
 };
 
 vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -402,7 +405,7 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     // 诚实标注：无计时不进分位 + wire 回填计数 + 派发徽标 + Σ 与派发另计
     const cardText = card!.textContent ?? '';
     expect(cardText).toContain('无计时 1（不进分位）');
-    expect(cardText).toContain('wire 回填 2');
+    expect(cardText).toContain('wire 回填 3');
     expect(cardText).toContain('派发');
     expect(cardText).toContain('派发 3.5s 另计');
 
@@ -418,18 +421,23 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(cardText).toContain('成员A');
     expect(cardText).toContain('成员B');
 
-    // 大 run 矩阵列收敛：14 成员只画 Top-12 列，「+2」诚实标注其余成员
-    //（无计时的零 Σ 成员列被收敛；行点击仍全成员下钻）
-    const moreMark = card!.querySelector('[data-tool-matrix-more] > text');
-    expect(moreMark?.textContent).toBe('+2');
-    expect(card!.querySelector('[data-tool-cell="Read·ts-m14"]')).toBeNull();
+    // 条内成员构成堆叠（矩阵退役后的交叉热力形态）：Top-3 成员段 + 灰「其
+    // 他」段（聚合不可点）；Top-3 外成员无独立段；宽段内嵌显示名
+    const segA = card!.querySelector('[data-tool-seg="Read·ses_mini_a"]');
+    expect(segA).toBeTruthy();
+    expect(segA!.querySelector('title')?.textContent).toContain('成员A · 3 次 · 6.0s');
+    expect(segA!.querySelector('text')?.textContent).toBe('成员A');
+    expect(card!.querySelector('[data-tool-seg="Read·ts-m4"]')).toBeNull();
+    const otherSeg = card!.querySelector('[data-tool-seg="Read·other"]');
+    expect(otherSeg).toBeTruthy();
+    expect(otherSeg!.querySelector('title')?.textContent).toContain('其他 1 成员 · Σ 0.5s');
 
-    // 矩阵格下钻：Read × 成员B → Turns 搜索深链（q 语法直达调用清单）
-    const cell = card!.querySelector('[data-tool-cell="Read·ses_mini_b"]');
-    expect(cell).toBeTruthy();
+    // 段下钻：Read × 成员B → Turns 搜索深链（q 语法直达调用清单）
+    const segB = card!.querySelector('[data-tool-seg="Read·ses_mini_b"]');
+    expect(segB).toBeTruthy();
     ensurePushSpy().mockClear();
     await act(async () => {
-      cell!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      segB!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     const navUrl = String(ensurePushSpy().mock.calls[0]?.[2]);
     expect(navUrl).toContain('tab=turns');
@@ -443,6 +451,50 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(fetchCalls.some(u => u.startsWith('/api/observe/run/minidemo01/turns/search?keyword='))).toBe(true);
     const input = turnsTab!.querySelector<HTMLInputElement>('input[data-turns-search-input]');
     expect(input?.value).toBe('tool:Read member:ses_mini_b');
+
+    // 成员分解清单（矩阵退役后的全量成员入口）：chevron 展开 → 全量成员
+    // 按 Σ 降序（含无显示名成员回落原始 taskId），行点击 = 同款深链
+    const chev = card!.querySelector('[data-tool-expand="Read"]');
+    expect(chev).toBeTruthy();
+    await act(async () => {
+      chev!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const panel = card!.querySelector('[data-tool-breakdown]');
+    expect(panel).toBeTruthy();
+    expect(panel!.textContent).toContain('Read · 成员分解');
+    expect(panel!.textContent).toContain('4/4 成员');
+    const memberRows = [...panel!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row'));
+    expect(memberRows).toEqual(['Read·ses_mini_a', 'Read·ses_mini_b', 'Read·ts-m3', 'Read·ts-m4']);
+    ensurePushSpy().mockClear();
+    await act(async () => {
+      panel!.querySelector('[data-member-row="Read·ts-m3"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('q=tool%3ARead+member%3Ats-m3');
+
+    // 搜索框双匹配：显示名（成员B）与原始 ID（ts-m3）皆命中——大 run 定位
+    // 特定成员的正路；手风琴单开：切展开 Grep → Read 面板收起且搜索态清空
+    const search = panel!.querySelector<HTMLInputElement>('input[data-tool-member-search]');
+    const setNative = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setNative.call(search!, '成员B');
+      search!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect([...panel!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row')))
+      .toEqual(['Read·ses_mini_b']);
+    await act(async () => {
+      setNative.call(search!, 'ts-m3');
+      search!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect([...panel!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row')))
+      .toEqual(['Read·ts-m3']);
+    await act(async () => {
+      card!.querySelector('[data-tool-expand="Grep"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const panel2 = card!.querySelector('[data-tool-breakdown]');
+    expect(panel2).toBeTruthy();
+    expect(panel2!.textContent).toContain('Grep · 成员分解');
+    expect([...panel2!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row')))
+      .toEqual(['Grep·ses_mini_b']);
 
     // 工具行下钻（无 member 归因）：行名点击 → tool:Grep 全成员搜索——q 换值
     // 重放的连续下钻路径（perf tab 常驻挂载仅隐藏，行仍在 DOM）
