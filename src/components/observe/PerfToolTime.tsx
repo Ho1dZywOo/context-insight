@@ -25,10 +25,11 @@
 // Task/agent 派发行灰条带「派发」胶囊标（窗口 = 子代理整段执行，不进 Σ
 // 工具执行头部口径）；skill 族元调用行（skill / load_skill / 技能派发型
 // ——提示词注入而非可执行工具，isSkillRelated 由采集侧 tool-conventions
-// 单源判定）带「技能」胶囊标，悬停解释耗时语义。下钻唯一出口 = Turns
-// 搜索语法深链（幽灵角标 → tool:X 全成员，分解行 →
-// tool:X member:Y）——Turns 命中索引即调用清单，叙事舞台已渲染工具调用
-// 块（参数/结果/错误/时长），零新清单面。
+// 单源判定）带「技能」胶囊标，悬停解释耗时语义。下钻三级：工具行 →
+// 成员分解（master-detail）→ 成员行展开逐轮调用（同轮多调用聚合一行，
+// Σ 降序找慢轮）→ 轮次行跳转该轮（TurnDetail 深钻，?turn= 深链）；工
+// 具行幽灵角标 = Turns 搜索语法深链（tool:X 全成员）——命中索引即调用
+// 清单，叙事舞台已渲染工具调用块（参数/结果/错误/时长），零新清单面。
 
 import { useState } from "react";
 import { ChevronRightIcon, SearchIcon } from "lucide-react";
@@ -39,13 +40,14 @@ import {
   PERF_CARD_SM,
 } from "@/components/observe/perf-shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { RunToolStats } from "@/lib/observe/collectors/tool-stats";
+import type { RunToolStats, ToolCellTurn } from "@/lib/observe/collectors/tool-stats";
 
 const SEG_COLORS = ["#2563eb", "#16a34a", "#d97706"]; // 右栏成员分解行条色（单色用量——条色不编码成员身份，识别靠清单文字）
 const DISPATCH_COLOR = "#8c959f"; // 与时间构成「重试等待」灰同源
 const SKILL_COLOR = "#8b5cf6";   // 与 Token 构成「推理」紫同源（技能 = 提示词注入，语义相邻）
 const TOOL_FOLD = 15;            // 工具行折叠阈值（超限折叠 +「展开全部」）
 const MEMBER_FOLD = 12;          // 分解面板成员折叠阈值（同上）
+const TURN_FOLD = 8;             // 成员行展开的逐轮清单折叠阈值（同上）
 
 interface MemberCell {
   taskId: string;
@@ -53,12 +55,15 @@ interface MemberCell {
   calls: number;
   totalMs: number;
   errors: number;
+  /** 逐轮调用行（矩阵格单一源直传；展示序 = Σ 降序） */
+  turns: ToolCellTurn[];
 }
 
 export function PerfToolTime({
   stats,
   members,
   totalNonLlmMs,
+  onOpenTurn,
   onOpenSearch,
 }: {
   stats: RunToolStats;
@@ -66,7 +71,9 @@ export function PerfToolTime({
   members: Array<{ taskId: string; label: string | null }>;
   /** Perf 画像的非 LLM 时间（墙钟 − LLM）：占比分母，null = 画像缺席则只显绝对值 */
   totalNonLlmMs?: number | null;
-  /** 下钻出口：Turns 搜索语法深链（唯一出口——命中索引即调用清单） */
+  /** 三级下钻末跳：逐轮行点击 → Turns 该轮深钻（?turn= 深链） */
+  onOpenTurn?: (turnId: string) => void;
+  /** 下钻出口：Turns 搜索语法深链（工具行角标 → 全员调用清单） */
   onOpenSearch?: (q: string) => void;
 }) {
   const tools = stats.tools;
@@ -75,6 +82,8 @@ export function PerfToolTime({
   const [memberQuery, setMemberQuery] = useState("");
   const [showAllTools, setShowAllTools] = useState(false);
   const [showAllMembers, setShowAllMembers] = useState<Set<string>>(new Set());
+  const [expandedMembers, setExpandedMembers] = useState<Set<string>>(new Set());
+  const [showAllTurns, setShowAllTurns] = useState<Set<string>>(new Set());
 
   // 每工具的成员格全量清单（Σ 降序）：堆叠段与成员分解面板共用单一源；
   // 显示名走 Perf 泳道同源（member.label ?? taskId），无 label 回落原始 ID
@@ -89,6 +98,7 @@ export function PerfToolTime({
           calls: cell.calls,
           totalMs: cell.totalMs,
           errors: cell.errors,
+          turns: cell.turns,
         }))
         .sort(
           (a, b) =>
@@ -99,9 +109,11 @@ export function PerfToolTime({
 
   const toolShare = totalNonLlmMs != null && totalNonLlmMs > 0 ? meta.totalToolMs / totalNonLlmMs : null;
 
-  // 选中即换工具清搜索（再点同行收起给占位空态）
+  // 选中即换工具清搜索与展开态（再点同行收起给占位空态）
   const toggle = (toolName: string) => {
     setMemberQuery("");
+    setExpandedMembers(new Set());
+    setShowAllTurns(new Set());
     setSelected(prev => (prev === toolName ? null : toolName));
   };
 
@@ -110,6 +122,21 @@ export function PerfToolTime({
     if (next.has(id)) next.delete(id);
     else next.add(id);
     return next;
+  };
+
+  // 成员行点击 = 展开该成员该工具的逐轮调用清单（再点收起；连带清该行
+  // 的「展开全部」残留态）
+  const toggleMember = (taskId: string) => {
+    setExpandedMembers(prev => toggleSet(prev, taskId));
+    setShowAllTurns(prev => (prev.has(taskId) ? toggleSet(prev, taskId) : prev));
+  };
+
+  /** 逐轮行时间（MM-DD HH:mm:ss，源缺时间戳回落「—」） */
+  const fmtTurnTs = (ts: number) => {
+    if (!(ts > 0)) return "—";
+    const d = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   };
 
   const visibleTools = showAllTools ? tools : tools.slice(0, TOOL_FOLD);
@@ -313,51 +340,108 @@ export function PerfToolTime({
                         {q ? `${filtered.length}/${cells.length}` : `成员 · ${cells.length}`}
                       </span>
                     </div>
-                    {/* 成员行：全量按 Σ 降序 + 比例条，点击 = 该成员该工具下钻 */}
+                    {/* 成员行（含逐轮展开）：点击 = 展开该成员该工具的逐轮
+                        调用清单；轮次行点击 = 跳转该轮（TurnDetail 深钻） */}
                     <div className="mt-1.5">
-                      {visible.map(c => (
-                        <div
-                          key={c.taskId}
-                          data-member-row={`${selectedTool.toolName}·${c.taskId}`}
-                          role="button"
-                          tabIndex={0}
-                          className={cn(
-                            "flex items-center gap-3 border-b border-black/[0.04] px-1 py-1.5 text-[11px] tabular-nums transition-colors last:border-0 dark:border-white/[0.05]",
-                            onOpenSearch ? "cursor-pointer hover:bg-muted/50" : undefined,
-                          )}
-                          onClick={
-                            onOpenSearch
-                              ? () => onOpenSearch(`tool:${selectedTool.toolName} member:${c.taskId}`)
-                              : undefined
-                          }
-                          onKeyDown={
-                            onOpenSearch
-                              ? e => { if (e.key === "Enter" || e.key === " ") onOpenSearch(`tool:${selectedTool.toolName} member:${c.taskId}`) }
-                              : undefined
-                          }
-                        >
-                          <span className="w-[128px] shrink-0 truncate font-medium" title={c.taskId}>
-                            {c.label}
-                          </span>
-                          <span className={cn("w-[80px] shrink-0", c.errors > 0 ? "text-red-600" : "text-muted-foreground")}>
-                            {`${c.calls} 次${c.errors > 0 ? ` · 错 ${c.errors}` : ""}`}
-                          </span>
-                          <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+                      {visible.map(c => {
+                        const isExpanded = expandedMembers.has(c.taskId);
+                        return (
+                          <div key={c.taskId} className="border-b border-black/[0.04] last:border-0 dark:border-white/[0.05]">
                             <div
-                              className="h-full rounded-full transition-[width] duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]"
-                              style={{
-                                width: `${Math.round((c.totalMs / maxCellMs) * 100)}%`,
-                                background: selectedTool.isDispatch ? DISPATCH_COLOR : SEG_COLORS[0],
-                                opacity: selectedTool.isDispatch ? 0.5 : 0.8,
-                              }}
-                            />
+                              data-member-row={`${selectedTool.toolName}·${c.taskId}`}
+                              role="button"
+                              tabIndex={0}
+                              className="flex cursor-pointer items-center gap-3 px-1 py-1.5 text-[11px] tabular-nums transition-colors hover:bg-muted/50"
+                              onClick={() => toggleMember(c.taskId)}
+                              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") toggleMember(c.taskId) }}
+                            >
+                              <span className="w-[128px] shrink-0 truncate font-medium" title={c.taskId}>
+                                {c.label}
+                              </span>
+                              <span className={cn("w-[80px] shrink-0", c.errors > 0 ? "text-red-600" : "text-muted-foreground")}>
+                                {`${c.calls} 次${c.errors > 0 ? ` · 错 ${c.errors}` : ""}`}
+                              </span>
+                              <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className="h-full rounded-full transition-[width] duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]"
+                                  style={{
+                                    width: `${Math.round((c.totalMs / maxCellMs) * 100)}%`,
+                                    background: selectedTool.isDispatch ? DISPATCH_COLOR : SEG_COLORS[0],
+                                    opacity: selectedTool.isDispatch ? 0.5 : 0.8,
+                                  }}
+                                />
+                              </div>
+                              <span className="w-[48px] shrink-0 text-right font-semibold">
+                                {fmtMs(c.totalMs)}
+                              </span>
+                              <ChevronRightIcon
+                                className={cn(
+                                  "size-3 shrink-0 text-muted-foreground/40 transition-transform duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+                                  isExpanded && "rotate-90",
+                                )}
+                              />
+                            </div>
+                            {/* 逐轮调用清单（三级下钻第三级）：展示序 = Σ 降序
+                                （perf 视角找慢轮），同轮多次调用一行（×N）；
+                                旧档案无 turns 数组时空态不炸 */}
+                            {isExpanded && (() => {
+                              const sorted = [...(c.turns ?? [])].sort(
+                                (a, b) => b.totalMs - a.totalMs || a.ts - b.ts,
+                              );
+                              const showAll = showAllTurns.has(c.taskId);
+                              const rows = showAll ? sorted : sorted.slice(0, TURN_FOLD);
+                              return (
+                                <div
+                                  data-member-turns={`${selectedTool.toolName}·${c.taskId}`}
+                                  className="bg-foreground/[0.02] py-1 pl-2 dark:bg-white/[0.02]"
+                                >
+                                  {rows.map(e => (
+                                    <div
+                                      key={e.turnId}
+                                      data-member-turn={e.turnId}
+                                      role="button"
+                                      tabIndex={onOpenTurn ? 0 : undefined}
+                                      title={onOpenTurn ? "跳转该轮（Turns 轮详情深钻）" : undefined}
+                                      className={cn(
+                                        "flex items-center gap-2.5 rounded-md px-2 py-1 text-[11px] tabular-nums text-muted-foreground",
+                                        onOpenTurn && "cursor-pointer hover:bg-muted/60 hover:text-foreground",
+                                      )}
+                                      onClick={onOpenTurn ? () => onOpenTurn(e.turnId) : undefined}
+                                      onKeyDown={onOpenTurn ? ev => { if (ev.key === "Enter" || ev.key === " ") onOpenTurn(e.turnId) } : undefined}
+                                    >
+                                      {e.turnIndex != null && (
+                                        <span
+                                          className="shrink-0 font-medium text-foreground/70"
+                                          title="轮次序号（与 Turns #N 直达同口径）"
+                                        >
+                                          #{e.turnIndex}
+                                        </span>
+                                      )}
+                                      <span className="w-[96px] shrink-0">{fmtTurnTs(e.ts)}</span>
+                                      {e.calls > 1 && <span className="shrink-0">×{e.calls}</span>}
+                                      {e.errors > 0 && <span className="shrink-0 text-red-600">错 {e.errors}</span>}
+                                      <span className="ml-auto shrink-0 font-semibold text-foreground/80">
+                                        {e.totalMs > 0 ? fmtMs(e.totalMs) : "无计时"}
+                                      </span>
+                                    </div>
+                                  ))}
+                                  {sorted.length > TURN_FOLD && (
+                                    <div
+                                      className="cursor-pointer select-none px-2 py-1 text-[11px] text-blue-600 transition-colors hover:underline dark:text-blue-400"
+                                      onClick={e => { e.stopPropagation(); setShowAllTurns(prev => toggleSet(prev, c.taskId)) }}
+                                    >
+                                      {showAll ? "收起" : `展开全部 (${sorted.length} 轮)`}
+                                    </div>
+                                  )}
+                                  {sorted.length === 0 && (
+                                    <div className="px-2 py-1 text-center text-[11px]">（无逐轮数据）</div>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
-                          <span className="w-[48px] shrink-0 text-right font-semibold">
-                            {fmtMs(c.totalMs)}
-                          </span>
-                          <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40" />
-                        </div>
-                      ))}
+                        );
+                      })}
                       {filtered.length === 0 && (
                         <div className="px-1 py-3 text-center text-[11px] text-muted-foreground">无匹配成员</div>
                       )}
@@ -378,7 +462,7 @@ export function PerfToolTime({
         </div>
         {/* 图例：交互读法（构成信息归右栏分解面板，条已退役） */}
         <p className="mt-1.5 text-[10px] text-muted-foreground">
-          点击行选中（右侧看成员分解）· 点成员行/搜索图标 → Turns 搜索直达调用清单
+          点击工具行选中（右侧看成员分解）· 点成员行展开逐轮调用 · 点轮次行跳转该轮 · 搜索图标 → Turns 全员调用搜索
         </p>
       </CardContent>
     </Card>

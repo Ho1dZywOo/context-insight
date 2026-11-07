@@ -206,7 +206,7 @@ export function TurnDetail({ turn, highlight, onRefresh, subagentLabel, onPrevTu
   const entDelay = (ms: number) => (entrance ? { animationDelay: `${ms}ms` } : undefined)
 
   return (
-    <div id="turn-detail-top" className="flex min-h-full flex-col bg-muted/40">
+    <div id="turn-detail-top" data-turn-detail={turn.turnId} className="flex min-h-full flex-col bg-muted/40">
       {/* ① 导航条 + 胶片轨（sticky 全出血，毛玻璃）：走查钮 | 标题/位置 + 元信息 | 身份药丸 + 刷新。
           入场时快速淡入（chrome 不位移只浮现）；延迟窗口内换轮则原位更新 */}
       <div className={cn(

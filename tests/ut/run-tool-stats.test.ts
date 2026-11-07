@@ -14,8 +14,9 @@
 // 不进 meta.totalToolMs（与 lib/tool-timing 双计教义同源）；④tool × member
 // 矩阵（格含 firstTurnId 下钻锚点，取最早轮）；⑤错误判别单一源（state ok
 // 但 result 含 <tool_use_error>Cancelled 仍判 cancelled——superset 查询
-// 覆盖）；⑥run 不存在 404。成员 = mini-bundle 双成员 run（唯一 sessionIds
-// 防测试并行撞库）。
+// 覆盖）；⑥矩阵格逐轮聚合（三级下钻数据源：同轮多调用一行 / ts 升序 /
+// wire 回填与无计时如实入行）；⑦run 不存在 404。成员 = mini-bundle 双成员
+// run（唯一 sessionIds 防测试并行撞库）。
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
@@ -93,11 +94,14 @@ beforeAll(async () => {
   // 成员 A（opencode 无 wire）：
   // Bash ×3（1000/3000/5000，末次 error）· Read ×1 无计时 · Edit ×1 state ok
   // 但 result 含 <tool_use_error>Cancelled（错误判别单一源的 cancelled 路）
+  // · WebSearch ×2 同轮（ta1）——矩阵格逐轮聚合「同轮多调用一行」断言用
   await mkCall(ta1.id, { toolCallId: 'ts-tc-bash-1', toolName: 'Bash', durationMs: 1000 });
   await mkCall(ta2.id, { toolCallId: 'ts-tc-bash-2', toolName: 'Bash', durationMs: 3000 });
   await mkCall(ta3.id, { toolCallId: 'ts-tc-bash-3', toolName: 'Bash', durationMs: 5000, state: 'error', errorType: 'exit-1' });
   await mkCall(ta2.id, { toolCallId: 'ts-tc-read-1', toolName: 'Read', durationMs: 0 });
   await mkCall(ta3.id, { toolCallId: 'ts-tc-edit-1', toolName: 'Edit', durationMs: 500, resultJson: '<tool_use_error>用户操作被 Cancelled</tool_use_error>' });
+  await mkCall(ta1.id, { toolCallId: 'ts-tc-ws-1', toolName: 'WebSearch', durationMs: 600 });
+  await mkCall(ta1.id, { toolCallId: 'ts-tc-ws-2', toolName: 'WebSearch', durationMs: 400 });
 
   // 成员 B（claude-format + wire）：
   // Grep wire 回填 2500（durationMs=0）· Grep 真实 1500 · Task 派发 3500
@@ -126,14 +130,17 @@ function getStats(runId: string) {
   );
 }
 
+/** 夹具轮时刻（epoch ms）——逐轮行 ts 断言用 */
+const T = (s: string) => new Date(`2026-10-13T${s}Z`).getTime();
+
 describe('run tool-stats（工具维度耗时统计，API 层）', () => {
   it('per-tool 聚合：Σ/分位/均值/错误类型 + 排行序（totalMs 降序）', async () => {
     const res = await getStats(RUN_ID);
     expect(res.status).toBe(200);
     const body = await res.json();
     const names = (body.tools as Array<{ toolName: string }>).map(t => t.toolName);
-    // Bash 9000 > Grep 4000 > Task 3500（派发）> Edit 500 > skill 40（元调用）> Read 0（无计时）
-    expect(names).toEqual(['Bash', 'Grep', 'Task', 'Edit', 'skill', 'Read']);
+    // Bash 9000 > Grep 4000 > Task 3500（派发）> WebSearch 1000 > Edit 500 > skill 40（元调用）> Read 0（无计时）
+    expect(names).toEqual(['Bash', 'Grep', 'Task', 'WebSearch', 'Edit', 'skill', 'Read']);
 
     const bash = body.tools.find((t: { toolName: string }) => t.toolName === 'Bash');
     expect(bash.calls).toBe(3);
@@ -167,10 +174,10 @@ describe('run tool-stats（工具维度耗时统计，API 层）', () => {
 
     expect(body.meta.wireDerivedCalls).toBe(1);
     expect(body.meta.untimedCalls).toBe(1);
-    expect(body.meta.timedCalls).toBe(8);
-    expect(body.meta.totalCalls).toBe(9);
-    // Σ 工具执行 = Bash 9000 + Grep 4000 + Edit 500 + skill 40（Task 派发另计）
-    expect(body.meta.totalToolMs).toBe(13540);
+    expect(body.meta.timedCalls).toBe(10);
+    expect(body.meta.totalCalls).toBe(11);
+    // Σ 工具执行 = Bash 9000 + Grep 4000 + WebSearch 1000 + Edit 500 + skill 40（Task 派发另计）
+    expect(body.meta.totalToolMs).toBe(14540);
     expect(body.meta.dispatchMs).toBe(3500);
   });
 
@@ -204,6 +211,37 @@ describe('run tool-stats（工具维度耗时统计，API 层）', () => {
 
     // Bash 只在成员 A：B 列无格
     expect(body.matrix.Bash[MEM_B]).toBeUndefined();
+  });
+
+  it('矩阵格逐轮聚合（三级下钻数据源）：同轮多调用一行 / ts 升序 / wire 回填与无计时如实入行', async () => {
+    const body = await (await getStats(RUN_ID)).json();
+
+    // WebSearch ×2 同轮（ta1）聚合一行：calls 2、Σ 1000——跳转目标 = 轮
+    const ws = body.matrix.WebSearch[MEM_A];
+    expect(ws.turns).toEqual([
+      { turnId: ctx.turnIds.ta1, turnIndex: 0, calls: 2, totalMs: 1000, errors: 0, ts: T('02:00:10') },
+    ]);
+
+    // Bash 三轮三行（ts 升序定序；错误入行；#N 序号 = 会话内 turnIndex）
+    const bashA = body.matrix.Bash[MEM_A];
+    expect(bashA.turns).toEqual([
+      { turnId: ctx.turnIds.ta1, turnIndex: 0, calls: 1, totalMs: 1000, errors: 0, ts: T('02:00:10') },
+      { turnId: ctx.turnIds.ta2, turnIndex: 1, calls: 1, totalMs: 3000, errors: 0, ts: T('02:01:10') },
+      { turnId: ctx.turnIds.ta3, turnIndex: 2, calls: 1, totalMs: 5000, errors: 1, ts: T('02:02:10') },
+    ]);
+    // firstTurnId 与逐轮首行同源（最早轮）
+    expect(bashA.firstTurnId).toBe(bashA.turns[0].turnId);
+
+    // Grep wire 回填入行（tb1 2500 是 toolUseId 间隙推导值）
+    expect(body.matrix.Grep[MEM_B].turns).toEqual([
+      { turnId: ctx.turnIds.tb1, turnIndex: 0, calls: 1, totalMs: 2500, errors: 0, ts: T('02:10:00') },
+      { turnId: ctx.turnIds.tb2, turnIndex: 1, calls: 1, totalMs: 1500, errors: 0, ts: T('02:11:00') },
+    ]);
+
+    // 无计时调用如实入行（totalMs 0——轮跳转目标仍有效，轴不撒谎）
+    expect(body.matrix.Read[MEM_A].turns).toEqual([
+      { turnId: ctx.turnIds.ta2, turnIndex: 1, calls: 1, totalMs: 0, errors: 0, ts: T('02:01:10') },
+    ]);
   });
 
   it('skill 族元调用：isSkillRelated 透传采集侧单一源（提示词注入类——计时如实、不派发）', async () => {

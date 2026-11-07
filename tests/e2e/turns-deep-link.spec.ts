@@ -11,7 +11,8 @@
 // Σ 最高 = bash（23s，默认选中行）——工具名是夹具常量，断言逐字锁定。
 //
 //   ① Perf tab：工具耗时卡 master-detail 就位 + 下钻角标 → `tool:bash` 深链
-//   ② 成员分解行下钻 → `tool:bash member:ses_e2e_exec`（归因到成员）
+//   ② 成员行展开逐轮调用 → 点轮次行跳转该轮（三级下钻：?turn= 深链 +
+//      轮详情深钻）
 //   ③ 搜索胶囊直打 tool: 语法 + Enter → 命中浮层驻留
 //
 // 断言锁定「q 换值重放」的连续下钻链路：每次下钻都该带搜索词进场、自动
@@ -58,19 +59,27 @@ test.describe("Turns 搜索语法与下钻深链", () => {
     await expect(run.turnsSearchInput()).toHaveValue(`tool:${E2E_TOP_TOOL}`);
   });
 
-  test("成员分解行下钻 → tool:bash member:ses_e2e_exec（归因到成员）", async ({ page }) => {
+  test("成员行展开逐轮调用 → 点轮次行跳转该轮（三级下钻）", async ({ page }) => {
     const run = new RunWorkbenchPO(page);
     await run.goto(E2E_TOOL_RUN_ID, "tab=perf");
     await expect(page.locator(`[data-tool-breakdown="${E2E_TOP_TOOL}"]`)).toBeVisible();
 
-    // 右栏分解面板（默认选中 bash）：成员行下钻 → tool:bash member:<taskId>
+    // 右栏分解面板（默认选中 bash）：成员行点击 → 面板内展开逐轮调用清单
     const memberRow = page.locator(`[data-member-row="${E2E_TOP_TOOL}·${E2E_TOOL_MEMBER_A}"]`);
     await expect(memberRow).toBeVisible();
     await memberRow.click();
 
+    const turnsBox = page.locator(`[data-member-turns="${E2E_TOP_TOOL}·${E2E_TOOL_MEMBER_A}"]`);
+    await expect(turnsBox).toBeVisible();
+    await expect(turnsBox.locator("[data-member-turn]")).not.toHaveCount(0);
+    // 轮次序号标注（#N 直达同口径）
+    await expect(turnsBox).toContainText(/#\d+/);
+
+    // 轮次行点击 → ?turn= 深链 + 轮详情深钻（非空态）
+    await turnsBox.locator("[data-member-turn]").first().click();
     await expect(page).toHaveURL(/tab=turns/);
-    expect(urlQuery(page)).toBe(`tool:${E2E_TOP_TOOL} member:${E2E_TOOL_MEMBER_A}`);
-    await expect(run.turnsSearchInput()).toHaveValue(`tool:${E2E_TOP_TOOL} member:${E2E_TOOL_MEMBER_A}`);
+    await expect(page).toHaveURL(/turn=/);
+    await expect(page.locator("[data-turn-detail]")).toBeVisible({ timeout: 20_000 });
   });
 
   test("搜索胶囊直打 tool: 语法 + Enter → 命中浮层驻留", async ({ page }) => {
