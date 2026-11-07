@@ -387,7 +387,7 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('turn=rop-t-a0');
   });
 
-  it('?tab=perf 工具耗时卡：排行/诚实标注/派发标 + 矩阵格下钻 Turns 搜索深链（q 预填自动执行）', async () => {
+  it('?tab=perf 工具耗时卡：inset 排行/诚实标注/派发技能标 + 成员段与分解行下钻 Turns 搜索深链（q 预填自动执行）', async () => {
     await renderPage('?tab=perf');
 
     // 取数并入五路合并（tool-stats = Perf 双维度的工具侧端点）
@@ -409,30 +409,31 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(cardText).toContain('派发');
     expect(cardText).toContain('派发 3.5s 另计');
 
-    // skill 族元调用徽标：紫字「技能」+ 悬停解释耗时语义（提示词注入非可
-    // 执行工具）；普通工具（Read）无徽标——与派发标同门反馈语法
+    // 右对齐统计列（标签上/值下——热点排行同门语法）
+    const readRowEl = card!.querySelector('[data-tool-row="Read"]')!;
+    expect(readRowEl.textContent).toContain('9.0s');
+    expect(readRowEl.textContent).toContain('5.0s');
+
+    // skill 族元调用徽标：胶囊「技能」+ 名字悬停（title）解释耗时语义（提示
+    // 词注入非可执行工具）；普通工具（Read）无徽标——与派发标同门反馈语法
     const skillRow = card!.querySelector('[data-tool-row="skill"]')!;
-    const badgeTexts = [...skillRow.querySelectorAll('text')].map(t => t.textContent);
-    expect(badgeTexts).toContain('技能');
-    expect(skillRow.querySelector('title')?.textContent).toContain('技能加载/调用——提示词注入类元调用，耗时不代表工具执行');
+    expect(skillRow.textContent).toContain('技能');
+    expect(skillRow.querySelector('span[title]')?.getAttribute('title')).toContain('技能加载/调用——提示词注入类元调用，耗时不代表工具执行');
     const readRow = card!.querySelector('[data-tool-row="Read"]')!;
-    expect([...readRow.querySelectorAll('text')].map(t => t.textContent)).not.toContain('技能');
-    // 成员轴命名与泳道同源（member.label）
-    expect(cardText).toContain('成员A');
-    expect(cardText).toContain('成员B');
+    expect(readRow.textContent).not.toContain('技能');
 
     // 条内成员构成堆叠（矩阵退役后的交叉热力形态）：Top-3 成员段 + 灰「其
-    // 他」段（聚合不可点）；Top-3 外成员无独立段；宽段内嵌显示名
+    // 他」段（聚合不可点）；Top-3 外成员无独立段；悬停 title 给名/量
     const segA = card!.querySelector('[data-tool-seg="Read·ses_mini_a"]');
     expect(segA).toBeTruthy();
-    expect(segA!.querySelector('title')?.textContent).toContain('成员A · 3 次 · 6.0s');
-    expect(segA!.querySelector('text')?.textContent).toBe('成员A');
+    expect(segA!.getAttribute('title')).toContain('成员A · 3 次 · 6.0s');
     expect(card!.querySelector('[data-tool-seg="Read·ts-m4"]')).toBeNull();
     const otherSeg = card!.querySelector('[data-tool-seg="Read·other"]');
     expect(otherSeg).toBeTruthy();
-    expect(otherSeg!.querySelector('title')?.textContent).toContain('其他 1 成员 · Σ 0.5s');
+    expect(otherSeg!.getAttribute('title')).toContain('其他 1 成员 · Σ 0.5s');
 
-    // 段下钻：Read × 成员B → Turns 搜索深链（q 语法直达调用清单）
+    // 段下钻：Read × 成员B → Turns 搜索深链（q 语法直达调用清单；段点击
+    // 不触发行展开——stopPropagation）
     const segB = card!.querySelector('[data-tool-seg="Read·ses_mini_b"]');
     expect(segB).toBeTruthy();
     ensurePushSpy().mockClear();
@@ -452,17 +453,14 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     const input = turnsTab!.querySelector<HTMLInputElement>('input[data-turns-search-input]');
     expect(input?.value).toBe('tool:Read member:ses_mini_b');
 
-    // 成员分解清单（矩阵退役后的全量成员入口）：chevron 展开 → 全量成员
-    // 按 Σ 降序（含无显示名成员回落原始 taskId），行点击 = 同款深链
-    const chev = card!.querySelector('[data-tool-expand="Read"]');
-    expect(chev).toBeTruthy();
-    await act(async () => {
-      chev!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    const panel = card!.querySelector('[data-tool-breakdown]');
+    // 右侧下钻面板（master-detail）：默认选中 Σ 最高工具（Read）常驻——
+    // 全量成员按 Σ 降序（含无显示名成员回落原始 taskId），成员轴命名与泳
+    // 道同源（member.label）；成员行点击 = 同款深链
+    const panel = card!.querySelector('[data-tool-breakdown="Read"]');
     expect(panel).toBeTruthy();
-    expect(panel!.textContent).toContain('Read · 成员分解');
-    expect(panel!.textContent).toContain('4/4 成员');
+    expect(panel!.textContent).toContain('成员 · 4');
+    expect(panel!.textContent).toContain('成员A');
+    expect(panel!.textContent).toContain('成员B');
     const memberRows = [...panel!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row'));
     expect(memberRows).toEqual(['Read·ses_mini_a', 'Read·ses_mini_b', 'Read·ts-m3', 'Read·ts-m4']);
     ensurePushSpy().mockClear();
@@ -472,7 +470,8 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('q=tool%3ARead+member%3Ats-m3');
 
     // 搜索框双匹配：显示名（成员B）与原始 ID（ts-m3）皆命中——大 run 定位
-    // 特定成员的正路；手风琴单开：切展开 Grep → Read 面板收起且搜索态清空
+    // 特定成员的正路；切换选中 Grep → 面板换内容且搜索态清空，再点收起 →
+    // 占位空态（面板退场）
     const search = panel!.querySelector<HTMLInputElement>('input[data-tool-member-search]');
     const setNative = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
     await act(async () => {
@@ -488,21 +487,26 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect([...panel!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row')))
       .toEqual(['Read·ts-m3']);
     await act(async () => {
-      card!.querySelector('[data-tool-expand="Grep"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      card!.querySelector('[data-tool-toggle="Grep"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    const panel2 = card!.querySelector('[data-tool-breakdown]');
+    const panel2 = card!.querySelector('[data-tool-breakdown="Grep"]');
     expect(panel2).toBeTruthy();
-    expect(panel2!.textContent).toContain('Grep · 成员分解');
+    expect(panel2!.textContent).toContain('成员 · 1');
     expect([...panel2!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row')))
       .toEqual(['Grep·ses_mini_b']);
+    await act(async () => {
+      card!.querySelector('[data-tool-toggle="Grep"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(card!.querySelector('[data-tool-breakdown]')).toBeNull();
+    expect(card!.querySelector('[data-tool-breakdown-empty]')).toBeTruthy();
 
-    // 工具行下钻（无 member 归因）：行名点击 → tool:Grep 全成员搜索——q 换值
-    // 重放的连续下钻路径（perf tab 常驻挂载仅隐藏，行仍在 DOM）
-    const grepRow = document.querySelector('[data-tool-row="Grep"]');
-    expect(grepRow).toBeTruthy();
+    // 工具行下钻（无 member 归因）：幽灵搜索角标点击 → tool:Grep 全成员搜
+    // 索——q 换值重放的连续下钻路径（perf tab 常驻挂载仅隐藏，行仍在 DOM）
+    const grepDrill = document.querySelector('[data-tool-drill="Grep"]');
+    expect(grepDrill).toBeTruthy();
     ensurePushSpy().mockClear();
     await act(async () => {
-      grepRow!.querySelector('text')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      grepDrill!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('q=tool%3AGrep');
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
