@@ -106,8 +106,23 @@ vi.stubGlobal('fetch', vi.fn(async () => ({
 
 let root: Root | null = null
 
+// history.pushState 间谍（条目栈 URL 镜像断言锚）：懒建 + renderPage 复位。
+// 调用形态 (state, unused, url)——url 断言取第三参
+let pushSpy: ReturnType<typeof vi.spyOn> | null = null
+function ensurePushSpy() {
+  if (!pushSpy) pushSpy = vi.spyOn(window.history, 'pushState')
+  return pushSpy
+}
+
 async function renderPage(initialSearch = '') {
   searchState.current = initialSearch
+  // history 条目栈测试基建：重置当前条目 state（happy-dom 的 Window 在文件
+  // 内共享——上一用例的 runNavSeq/runView 标残留会让 mount 盖标跳过、goBack
+  // 误判有栈）+ pushState 间谍作 URL 镜像断言锚（happy-dom 的 pushState 不
+  // 更新 location，URL 断言走调用记录）。受限宿主用例（replaceState 抛错）
+  // 下重置跳过
+  try { window.history.replaceState(null, '', `/run/minidemo01${initialSearch}`) } catch { /* 受限宿主：跳过 */ }
+  ensurePushSpy().mockClear()
   nav.replace.mockClear()
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -216,14 +231,15 @@ describe('Run 详情页暗色工作台', () => {
     expect(ovText).toContain('第 1 次运行')
     expect(ovText).toContain('导入信息')
 
-    // 切 Graph：navigate 单点写 URL 镜像（replace，无 history 条目），
-    // 两个 tab 容器 hidden 互换（均保持挂载）
+    // 切 Graph：navigate 单点入条目栈（真实 history 条目——URL 镜像随
+    // pushState 走、视图态随条目 state 走），两个 tab 容器 hidden 互换（均保持挂载）
     const graphTab = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('Graph'))
     expect(graphTab).toBeTruthy()
     await act(async () => {
       graphTab!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    expect(nav.replace).toHaveBeenCalledWith('?tab=graph', { scroll: false })
+    expect(ensurePushSpy().mock.calls.some(([, , url]) => url === '?tab=graph')).toBe(true)
+    expect((window.history.state as { runView?: { tab?: string } })?.runView?.tab).toBe('graph')
     expect(overview!.classList.contains('hidden')).toBe(true)
     expect(graph!.classList.contains('hidden')).toBe(false)
   });
@@ -243,23 +259,26 @@ describe('Run 详情页暗色工作台', () => {
       const visibleTab = (key: string) =>
         document.querySelector(`[data-run-tab="${key}"]`)?.className ?? ''
 
-      // Score → Files：两个动作依次入栈
+      // Score → Files：两个动作依次入条目栈（真实 history 条目）
       await act(async () => { tabBtn('Files').click() })
       expect(visibleTab('files')).toContain('flex')
       await act(async () => { tabBtn('Score').click() })
       expect(visibleTab('score')).toContain('flex')
       expect(visibleTab('files')).toContain('hidden')
+      expect((window.history.state as { runNavSeq?: number })?.runNavSeq).toBe(2)
 
-      // 返回 → Files（上一个动作），URL 镜像同步恢复
+      // 返回 → Files（上一个动作）：history.back → popstate 按条目 state
+      // 的 runView 恢复（与鼠标侧键同一出口）
       await act(async () => { backBtn().click() })
       expect(visibleTab('files')).toContain('flex')
       expect(visibleTab('score')).toContain('hidden')
-      expect(nav.replace).toHaveBeenLastCalledWith(expect.stringContaining('tab=files'), { scroll: false })
+      expect((window.history.state as { runView?: { tab?: string } })?.runView?.tab).toBe('files')
 
-      // 再返回 → Overview（初始态，栈逐步退空）
+      // 再返回 → Overview（初始条目，栈逐步退空）
       await act(async () => { backBtn().click() })
       expect(visibleTab('overview')).toContain('flex')
-      expect(nav.replace).toHaveBeenLastCalledWith(expect.stringContaining('tab=overview'), { scroll: false })
+      expect((window.history.state as { runView?: { tab?: string } })?.runView?.tab).toBe('overview')
+      expect((window.history.state as { runNavSeq?: number })?.runNavSeq).toBe(0)
 
       // 栈空 → 离页兜底恰一次（回上页或首页，二者恰一）
       nav.back.mockClear()
@@ -267,6 +286,111 @@ describe('Run 详情页暗色工作台', () => {
       await act(async () => { backBtn().click() })
       expect(nav.back.mock.calls.length + nav.push.mock.calls.length).toBe(1)
     } finally {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => responseBody })))
+    }
+  });
+
+  it('鼠标侧键后退语义：浏览器历史条目承载工作台动作——popstate 逐步回退、前进键重放、chrome 返回钮同出口', async () => {
+    // Files 面板取数单独兜底（其余端点沿用 responseBody 通用 mock）
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/file-reads')) return { ok: true, json: async () => ({ files: [] }) }
+      return { ok: true, json: async () => responseBody }
+    }))
+    try {
+      await renderPage()
+      const tabBtn = (label: string) =>
+        [...document.querySelectorAll('button')].find(b => b.textContent === label) as HTMLButtonElement
+      const visibleTab = (key: string) =>
+        document.querySelector(`[data-run-tab="${key}"]`)?.className ?? ''
+      // 返回钮残影双 chevron：第二个 path 的 opacity 属性是 canBack 的镜像
+      const ghostOpacity = () =>
+        document.querySelectorAll('button[title="返回上一步"] svg path')[1]?.getAttribute('opacity')
+
+      // 两个动作入条目栈（每个工作台动作 = 真实 history 条目，视图态随条目 state 走）
+      await act(async () => { tabBtn('Files').click() })
+      await act(async () => { tabBtn('Score').click() })
+      expect(visibleTab('score')).toContain('flex')
+      expect(ghostOpacity()).toBe('0.32')
+
+      // 鼠标侧键后退 = history.back + popstate → 回退上一个工作台动作（Files）
+      //（此前侧键直接离页：router.replace 单条目下浏览器历史里没有工作台条目）
+      await act(async () => { window.history.back() })
+      expect(visibleTab('files')).toContain('flex')
+      expect(visibleTab('score')).toContain('hidden')
+      expect((window.history.state as { runView?: { tab?: string } })?.runView?.tab).toBe('files')
+      expect(ghostOpacity()).toBe('0.32')
+
+      // 再退 → 初始条目（Overview），可达性归零、残影熄灭
+      await act(async () => { window.history.back() })
+      expect(visibleTab('overview')).toContain('flex')
+      expect((window.history.state as { runNavSeq?: number })?.runNavSeq).toBe(0)
+      expect(ghostOpacity()).toBe('0')
+
+      // 前进键重放（此前内存栈无前进概念——真实历史条目天然支持）
+      await act(async () => { window.history.forward() })
+      expect(visibleTab('files')).toContain('flex')
+      expect(ghostOpacity()).toBe('0.32')
+
+      // chrome 返回钮与侧键同一出口（goBack = history.back，popstate 恢复）
+      await act(async () => {
+        (document.querySelector('button[title="返回上一步"]') as HTMLButtonElement).click()
+      })
+      expect(visibleTab('overview')).toContain('flex')
+      expect((window.history.state as { runNavSeq?: number })?.runNavSeq).toBe(0)
+    } finally {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => responseBody })))
+    }
+  });
+
+  it('离线导出降级：history 抛 SecurityError（file:// 宿主）→ 内存栈承载回退，返回语义与历史模式同构', async () => {
+    // 模拟受限宿主：replaceState/pushState 对 file:// origin null 抛
+    // SecurityError（Chrome 行为）——mount 探测即落空，本页降级内存栈。
+    // 前置清当前条目标：上一用例可能已盖 runNavSeq，而 mount 盖标有「已带
+    // 标则跳过」守卫——带标宿主不触碰 replaceState，降级探测永不触发
+    window.history.replaceState(null, '', '/run/minidemo01')
+    const pushStub = ensurePushSpy();
+    pushStub.mockImplementation(() => { throw new Error('SecurityError: file:// origin') });
+    const replaceStub = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {
+      throw new Error('SecurityError: file:// origin');
+    });
+    // Files 面板取数单独兜底（其余端点沿用 responseBody 通用 mock）
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/file-reads')) return { ok: true, json: async () => ({ files: [] }) }
+      return { ok: true, json: async () => responseBody }
+    }));
+    try {
+      await renderPage()
+      const tabBtn = (label: string) =>
+        [...document.querySelectorAll('button')].find(b => b.textContent === label) as HTMLButtonElement
+      const backBtn = () => document.querySelector('button[title="返回上一步"]') as HTMLButtonElement
+      const visibleTab = (key: string) =>
+        document.querySelector(`[data-run-tab="${key}"]`)?.className ?? ''
+
+      // 两个动作入内存栈（pushState 从未被调——mount 探测在 replaceState 就落空）
+      await act(async () => { tabBtn('Files').click() })
+      expect(visibleTab('files')).toContain('flex')
+      await act(async () => { tabBtn('Score').click() })
+      expect(visibleTab('score')).toContain('flex')
+      expect(pushStub.mock.calls.length).toBe(0)
+
+      // 返回 → Files（内存栈弹出恢复）→ 再返回 → Overview，语义与历史模式同构
+      await act(async () => { backBtn().click() })
+      expect(visibleTab('files')).toContain('flex')
+      expect(visibleTab('score')).toContain('hidden')
+      await act(async () => { backBtn().click() })
+      expect(visibleTab('overview')).toContain('flex')
+
+      // 栈空 → 离页兜底恰一次（回上页或首页，二者恰一）
+      nav.back.mockClear()
+      nav.push.mockClear()
+      await act(async () => { backBtn().click() })
+      expect(nav.back.mock.calls.length + nav.push.mock.calls.length).toBe(1)
+    } finally {
+      // mockReset 将 spyOn 间谍恢复原实现（后续用例继续记录真实 pushState）
+      pushStub.mockReset()
+      replaceStub.mockRestore()
       vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => responseBody })))
     }
   });

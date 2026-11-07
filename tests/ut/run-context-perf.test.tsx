@@ -215,8 +215,21 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
 
 let root: Root | null = null;
 
+// history.pushState 间谍（条目栈 URL 镜像断言锚）：懒建 + renderPage 复位。
+// 调用形态 (state, unused, url)——url 断言取第三参
+let pushSpy: ReturnType<typeof vi.spyOn> | null = null;
+function ensurePushSpy() {
+  if (!pushSpy) pushSpy = vi.spyOn(window.history, 'pushState');
+  return pushSpy;
+}
+
 async function renderPage(initialSearch = '') {
   searchState.current = initialSearch;
+  // history 条目栈测试基建：重置当前条目 state（同文件跨用例防 runNavSeq/
+  // runView 标残留）+ pushState 间谍复位（happy-dom 的 pushState 不更新
+  // location，URL 断言走调用记录）
+  window.history.replaceState(null, '', `/run/minidemo01${initialSearch}`);
+  ensurePushSpy().mockClear();
   nav.replace.mockClear();
   fetchCalls.length = 0;
   const container = document.createElement('div');
@@ -285,7 +298,7 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     const turnBtn = [...detail!.querySelectorAll('button')].find(b => b.textContent === '→ Turns');
     expect(turnBtn).toBeTruthy();
     await act(async () => { turnBtn!.click() });
-    expect(nav.replace.mock.calls.some(([url]) =>
+    expect(ensurePushSpy().mock.calls.some(([, , url]) =>
       String(url).includes('tab=turns') && String(url).includes('member=ses_mini_a') && String(url).includes('turn=rop-ctx-a0'),
     )).toBe(true);
   });
@@ -336,22 +349,23 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     // 跳转①：时间线子代理条双击 → Turns 深链（该会话首轮）
     const subBar = perf!.querySelector('[data-bar="rop-exec-sub"]');
     expect(subBar).toBeTruthy();
-    nav.replace.mockClear();
+    ensurePushSpy().mockClear();
     await act(async () => {
       subBar!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     });
-    expect(nav.replace).toHaveBeenCalled();
-    expect(String(nav.replace.mock.calls[0]?.[0])).toContain('tab=turns');
-    expect(String(nav.replace.mock.calls[0]?.[0])).toContain('turn=rop-t-sub0');
+    expect(ensurePushSpy().mock.calls.length).toBeGreaterThan(0);
+    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('tab=turns');
+    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('turn=rop-t-sub0');
 
-    // 跳转②：热点行内定位角标 → 同一深链出口
+    // 跳转②：热点行内定位角标 → 同一深链出口；跳转①后视图已在目标态，
+    // 同值 navigate 是 no-op——不产生冗余历史条目（条目栈零增长）
     const locateBtn = subLane!.querySelector('[title="在 Turns 时间线定位该单元"]');
     expect(locateBtn).toBeTruthy();
-    nav.replace.mockClear();
+    ensurePushSpy().mockClear();
     await act(async () => {
       locateBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(String(nav.replace.mock.calls[0]?.[0])).toContain('turn=rop-t-sub0');
+    expect(ensurePushSpy().mock.calls.length).toBe(0);
 
     // 跳转③：热点行展开 → 轮次行点击 → 该轮深链（成员A 首轮）
     const memberLane = perf!.querySelector('[data-lane-row="ses_mini_a"]')!;
@@ -360,11 +374,11 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     });
     const turnRow = memberLane.querySelector('[data-turn="rop-t-a0"]');
     expect(turnRow).toBeTruthy();
-    nav.replace.mockClear();
+    ensurePushSpy().mockClear();
     await act(async () => {
       turnRow!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(String(nav.replace.mock.calls[0]?.[0])).toContain('turn=rop-t-a0');
+    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('turn=rop-t-a0');
   });
 
   it('?tab=perf 工具耗时卡：排行/诚实标注/派发标 + 矩阵格下钻 Turns 搜索深链（q 预填自动执行）', async () => {
@@ -401,11 +415,11 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     // 矩阵格下钻：Read × 成员B → Turns 搜索深链（q 语法直达调用清单）
     const cell = card!.querySelector('[data-tool-cell="Read·ses_mini_b"]');
     expect(cell).toBeTruthy();
-    nav.replace.mockClear();
+    ensurePushSpy().mockClear();
     await act(async () => {
       cell!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    const navUrl = String(nav.replace.mock.calls[0]?.[0]);
+    const navUrl = String(ensurePushSpy().mock.calls[0]?.[2]);
     expect(navUrl).toContain('tab=turns');
     expect(navUrl).toContain('q=tool%3ARead+member%3Ases_mini_b');
 
@@ -422,11 +436,11 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     // 重放的连续下钻路径（perf tab 常驻挂载仅隐藏，行仍在 DOM）
     const grepRow = document.querySelector('[data-tool-row="Grep"]');
     expect(grepRow).toBeTruthy();
-    nav.replace.mockClear();
+    ensurePushSpy().mockClear();
     await act(async () => {
       grepRow!.querySelector('text')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(String(nav.replace.mock.calls[0]?.[0])).toContain('q=tool%3AGrep');
+    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('q=tool%3AGrep');
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
     const input2 = document.querySelector<HTMLInputElement>('input[data-turns-search-input]');
     expect(input2?.value).toBe('tool:Grep');

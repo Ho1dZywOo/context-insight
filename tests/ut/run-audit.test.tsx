@@ -302,8 +302,19 @@ vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
 
 let root: Root | null = null;
 
+// history.pushState 间谍（条目栈 URL 镜像断言锚）：懒建 + renderPage 复位。
+// 调用形态 (state, unused, url)——url 断言取第三参
+let pushSpy: ReturnType<typeof vi.spyOn> | null = null;
+function ensurePushSpy() {
+  if (!pushSpy) pushSpy = vi.spyOn(window.history, 'pushState');
+  return pushSpy;
+}
+
 async function renderPage(initialSearch = '') {
   searchState.current = initialSearch;
+  // history 条目栈测试基建：重置当前条目 state（同文件跨用例防标残留）
+  window.history.replaceState(null, '', `/run/minidemo01${initialSearch}`);
+  ensurePushSpy().mockClear();
   nav.replace.mockClear();
   fetchCalls.length = 0;
   auditBodies.length = 0;
@@ -477,8 +488,8 @@ describe('Run 详情 Audit tab（四域审计重构）', () => {
     });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
     expect(fetchCalls.some(u => u.includes('turn-digest') && u.includes('member=ses_mini_b'))).toBe(true);
-    expect(nav.replace.mock.calls.some(c => String(c[0]).includes('turn=turn_b_3'))).toBe(true);
-    expect(nav.replace.mock.calls.some(c => String(c[0]).includes('tab=turns'))).toBe(true);
+    expect(ensurePushSpy().mock.calls.some(c => String(c[2]).includes('turn=turn_b_3'))).toBe(true);
+    expect(ensurePushSpy().mock.calls.some(c => String(c[2]).includes('tab=turns'))).toBe(true);
 
     // resume：取消选择后再选同一目标 → store 已有结果直接展示报告，不再发 POST、也不再弹启动卡
     await act(async () => {
@@ -626,6 +637,6 @@ describe('Run 详情 Audit tab（四域审计重构）', () => {
       turnLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(nav.replace.mock.calls.some(c => String(c[0]).includes('turn=turn_b_3'))).toBe(true);
+    expect(ensurePushSpy().mock.calls.some(c => String(c[2]).includes('turn=turn_b_3'))).toBe(true);
   });
 });
