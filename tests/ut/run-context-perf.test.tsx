@@ -171,14 +171,20 @@ const perfToolStats = {
   ],
   matrix: {
     Read: {
-      ses_mini_a: { calls: 3, totalMs: 6000, errors: 1, firstTurnId: 'rop-t-a0' },
-      ses_mini_b: { calls: 1, totalMs: 2000, errors: 0, firstTurnId: 'rop-ctx-b0' },
-      'ts-m3': { calls: 1, totalMs: 500, errors: 0, firstTurnId: 'rop-t-a0' },
-      'ts-m4': { calls: 1, totalMs: 500, errors: 0, firstTurnId: 'rop-ctx-a0' },
+      ses_mini_a: {
+        calls: 3, totalMs: 6000, errors: 1, firstTurnId: 'rop-t-a0',
+        turns: [
+          { turnId: 'rop-t-a0', turnIndex: 0, calls: 2, totalMs: 5500, errors: 1, ts: 1 },
+          { turnId: 'rop-ctx-a0', turnIndex: 1, calls: 1, totalMs: 500, errors: 0, ts: 2 },
+        ],
+      },
+      ses_mini_b: { calls: 1, totalMs: 2000, errors: 0, firstTurnId: 'rop-ctx-b0', turns: [{ turnId: 'rop-ctx-b0', turnIndex: 0, calls: 1, totalMs: 2000, errors: 0, ts: 3 }] },
+      'ts-m3': { calls: 1, totalMs: 500, errors: 0, firstTurnId: 'rop-t-a0', turns: [{ turnId: 'rop-t-a0', turnIndex: 0, calls: 1, totalMs: 500, errors: 0, ts: 4 }] },
+      'ts-m4': { calls: 1, totalMs: 500, errors: 0, firstTurnId: 'rop-ctx-a0', turns: [{ turnId: 'rop-ctx-a0', turnIndex: 1, calls: 1, totalMs: 500, errors: 0, ts: 5 }] },
     },
-    Task: { ses_mini_b: { calls: 1, totalMs: 3500, errors: 0, firstTurnId: 'rop-ctx-b0' } },
-    skill: { ses_mini_a: { calls: 2, totalMs: 500, errors: 0, firstTurnId: 'rop-ctx-a0' } },
-    Grep: { ses_mini_b: { calls: 1, totalMs: 0, errors: 0, firstTurnId: 'rop-ctx-b0' } },
+    Task: { ses_mini_b: { calls: 1, totalMs: 3500, errors: 0, firstTurnId: 'rop-ctx-b0', turns: [{ turnId: 'rop-ctx-b0', turnIndex: 0, calls: 1, totalMs: 3500, errors: 0, ts: 6 }] } },
+    skill: { ses_mini_a: { calls: 2, totalMs: 500, errors: 0, firstTurnId: 'rop-ctx-a0', turns: [{ turnId: 'rop-ctx-a0', turnIndex: 1, calls: 2, totalMs: 500, errors: 0, ts: 7 }] } },
+    Grep: { ses_mini_b: { calls: 1, totalMs: 0, errors: 0, firstTurnId: 'rop-ctx-b0', turns: [{ turnId: 'rop-ctx-b0', turnIndex: 0, calls: 1, totalMs: 0, errors: 0, ts: 8 }] } },
   },
   members: [
     'ses_mini_a', 'ses_mini_b',
@@ -435,17 +441,36 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(panel!.textContent).toContain('成员B');
     const memberRows = [...panel!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row'));
     expect(memberRows).toEqual(['Read·ses_mini_a', 'Read·ses_mini_b', 'Read·ts-m3', 'Read·ts-m4']);
+
+    // 三级下钻第三级：成员行点击 → 面板内展开逐轮调用清单（Σ 降序找慢
+    // 轮；同轮多调用聚合 ×N；展开是纯面板动作，不导航——pushState 零调用）
     ensurePushSpy().mockClear();
     await act(async () => {
-      panel!.querySelector('[data-member-row="Read·ts-m3"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      panel!.querySelector('[data-member-row="Read·ses_mini_a"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('q=tool%3ARead+member%3Ats-m3');
+    const turnsBox = panel!.querySelector('[data-member-turns="Read·ses_mini_a"]');
+    expect(turnsBox).toBeTruthy();
+    const turnRowIds = [...turnsBox!.querySelectorAll('[data-member-turn]')].map(b => b.getAttribute('data-member-turn'));
+    expect(turnRowIds).toEqual(['rop-t-a0', 'rop-ctx-a0']);   // 5500 > 500 的 Σ 降序
+    expect(turnsBox!.textContent).toContain('5.5s');
+    expect(turnsBox!.textContent).toContain('0.5s');
+    expect(turnsBox!.textContent).toContain('×2');             // 同轮两次调用聚合一行
+    expect(turnsBox!.textContent).toContain('#0');             // 轮次序号（#N 直达同口径）
+    expect(ensurePushSpy().mock.calls.length).toBe(0);
 
-    // Turns tab 挂载即消费 q：搜索自动执行（走 /turns/search）+ 胶囊回填关键词
-    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(fetchCalls.some(u => u.startsWith('/api/observe/run/minidemo01/turns/search?keyword='))).toBe(true);
-    const input = document.querySelector<HTMLInputElement>('input[data-turns-search-input]');
-    expect(input?.value).toBe('tool:Read member:ts-m3');
+    // 轮次行点击 → 跳转该轮（?turn= 深链 + Turns 轮详情深钻）
+    await act(async () => {
+      turnsBox!.querySelector('[data-member-turn="rop-t-a0"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const turnUrl = String(ensurePushSpy().mock.calls[0]?.[2]);
+    expect(turnUrl).toContain('tab=turns');
+    expect(turnUrl).toContain('turn=rop-t-a0');
+
+    // 再点成员行收起（清单退场——手风琴开合的另一半）
+    await act(async () => {
+      panel!.querySelector('[data-member-row="Read·ses_mini_a"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(panel!.querySelector('[data-member-turns="Read·ses_mini_a"]')).toBeNull();
 
     // 搜索框双匹配：显示名（成员B）与原始 ID（ts-m3）皆命中——大 run 定位
     // 特定成员的正路；切换选中 Grep → 面板换内容且搜索态清空，再点收起 →
@@ -472,6 +497,13 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(panel2!.textContent).toContain('成员 · 1');
     expect([...panel2!.querySelectorAll('[data-member-row]')].map(b => b.getAttribute('data-member-row')))
       .toEqual(['Grep·ses_mini_b']);
+    // 无计时工具的逐轮行如实标「无计时」（源缺时间——轴不撒谎的第三级同款）
+    await act(async () => {
+      panel2!.querySelector('[data-member-row="Grep·ses_mini_b"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const grepTurns = panel2!.querySelector('[data-member-turns="Grep·ses_mini_b"]');
+    expect(grepTurns).toBeTruthy();
+    expect(grepTurns!.textContent).toContain('无计时');
     await act(async () => {
       card!.querySelector('[data-tool-toggle="Grep"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
@@ -490,5 +522,7 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
     const input2 = document.querySelector<HTMLInputElement>('input[data-turns-search-input]');
     expect(input2?.value).toBe('tool:Grep');
+    // Turns tab 挂载即消费 q：搜索真实执行（走 /turns/search——空转 = 回归）
+    expect(fetchCalls.some(u => u.startsWith('/api/observe/run/minidemo01/turns/search?keyword='))).toBe(true);
   });
 });

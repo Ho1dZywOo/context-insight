@@ -300,6 +300,7 @@ export function PerfPanorama({ endpoints, onOpenTurn, onOpenSearch, swimlanePayl
           stats={toolStats}
           members={memberAxis}
           totalNonLlmMs={model?.totalNonLlm ?? null}
+          onOpenTurn={onOpenTurn}
           onOpenSearch={onOpenSearch}
         />
       )}
