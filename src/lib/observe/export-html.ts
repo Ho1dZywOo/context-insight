@@ -98,6 +98,8 @@ export async function gatherRunExportData(runId: string): Promise<RunExportPaylo
     archiveIfOk(`${base}/context`),
     archiveIfOk(`${base}/lanes`),
     archiveIfOk(`${base}/tool-stats`),
+    // score 评测导出（issue #116 RSI 语料）：离线 bundle 同 URL 可答（内核①精确档案命中）
+    archiveIfOk(`${base}/score-export`),
     archiveIfOk(fileReadsUrl),
   ])
 
