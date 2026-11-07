@@ -15,27 +15,61 @@
 // 评分卡内容不再自套滚动）；onJumpToTurn：评分证据 §N → DB turnIndex（1-based）
 // → turnId 深链 Turns tab（映射走 turn-digest 轻摘要——只要 turnIndex→turnId，
 // 不要 member-turns 全量轮次在大会话上的秒级卡顿）。
+// 板块内导出评分 JSON（issue #116，RSI 自循环演进语料）：动作住在数据所在
+// 处——全员评分卡 + 维度定义快照，页面按钮与 score-export 端点同款载荷
+// （离线 bundle 档案同 URL 应答，离线同样可导）。
 
 import { useEffect, useMemo, useState } from "react";
+import { FileJsonIcon, Loader2Icon } from "lucide-react";
+import { toast } from "sonner";
 import { RunMemberPicker } from "@/components/run/RunMemberPicker";
 import { TrajectoryScoring } from "@/components/scoring/TrajectoryScoring";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
+import { fallbackDownload } from "@/lib/observe/export-html";
+import { isSoloRunId, soloTaskIdOf } from "@/lib/run/identity";
 import { buildMainAgentTurnMap, type TurnDigest } from "@/lib/shared/turn-digest";
 import type { RunMemberRow } from "@/lib/run/member-rows";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
 export interface RunScoreTabProps {
   runId: string;
+  /** run 显示名（bundle 导出文件名用；solo 用成员 taskId） */
+  runName?: string | null;
   members: RunMemberRow[];
   member: string | null;
   onMemberChange: (member: string | null) => void;
   onOpenTurn: (turnId: string) => void;
 }
 
-export function RunScoreTab({ runId, members, member, onMemberChange, onOpenTurn }: RunScoreTabProps) {
+export function RunScoreTab({ runId, runName, members, member, onMemberChange, onOpenTurn }: RunScoreTabProps) {
   const dataEpoch = useRunDataEpoch();
   const active = members.find(m => m.taskId === member) ?? members[0] ?? null;
   const [turnMap, setTurnMap] = useState<Map<number, string>>(() => new Map());
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExportScore() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const res = await fetch(`/api/observe/run/${encodeURIComponent(runId)}/score-export`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error("Export score failed", { description: err?.error ?? "Unknown error" });
+        return;
+      }
+      const blob = new Blob([await res.text()], { type: "application/json" });
+      // solo 保持会话文件名口径；bundle 用 run 身份（与 HTML 导出同一收敛规则）
+      const base = isSoloRunId(runId)
+        ? `session_${soloTaskIdOf(runId) ?? runId}`
+        : `run_${(runName ?? runId).replace(/[\\/:*?"<>|\s]+/g, "_")}`;
+      fallbackDownload(blob, `${base}_score.json`);
+      toast.success("Score data exported", { description: `${base}_score.json — 六维评分卡 + 维度定义快照（RSI 演进语料）` });
+    } catch {
+      toast.error("Export score failed", { description: "Network error" });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     if (active == null) return;
@@ -70,6 +104,16 @@ export function RunScoreTab({ runId, members, member, onMemberChange, onOpenTurn
       <div className="flex shrink-0 items-center gap-3 px-4 pt-3.5">
         <h3 className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">评分卡</h3>
         <RunMemberPicker members={members} value={active.taskId} onChange={onMemberChange} />
+        <button
+          type="button"
+          className="ml-auto flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-background px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-default disabled:opacity-45"
+          onClick={handleExportScore}
+          disabled={exporting}
+          title="导出评分 JSON（全员评分卡 + 维度定义快照——RSI 自循环演进语料）"
+        >
+          {exporting ? <Loader2Icon className="size-3.5 animate-spin" /> : <FileJsonIcon className="size-3.5" />}
+          导出评分 JSON
+        </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4 pt-3">
         <TrajectoryScoring

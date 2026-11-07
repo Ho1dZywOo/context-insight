@@ -14,6 +14,8 @@ export type { AssembledInput, Measures, WireSummary, WorkflowDeclaration, Redact
 export type { Scorecard, DimensionResult, SubItemResult, Evidence } from './core/types';
 export { SCORECARD_SCHEMA } from './core/types';
 export { runScorecard, SCORER_VERSION, type RunScorecardOptions } from './core/runner';
+export { getDerivedScorecard, deriveForUi, type DerivedScorecard } from './core/scorecard-read';
+export { buildScoreExport, SCORE_EXPORT_SCHEMA, type ScoreExportFile, type ScoreExportMember, type ScoreExportMemberInput, type ScoreExportRunMeta, type ScoreExportSource } from './core/score-export';
 export { scorecardStore, FileScorecardStore, type ScorecardStore, type BaselineFilter } from './core/store';
 export { loadRegistry, type Registry } from './registry';
 export { BUILTIN_DIMENSIONS } from './definitions';
