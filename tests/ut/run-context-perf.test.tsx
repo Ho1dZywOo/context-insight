@@ -453,7 +453,7 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     const turnRowIds = [...turnsBox!.querySelectorAll('[data-member-turn]')].map(b => b.getAttribute('data-member-turn'));
     expect(turnRowIds).toEqual(['rop-t-a0', 'rop-ctx-a0']);   // 5500 > 500 的 Σ 降序
     expect(turnsBox!.textContent).toContain('5.5s');
-    expect(turnsBox!.textContent).toContain('0.5s');
+    expect(turnsBox!.textContent).toContain('500ms');        // 亚秒级用 ms 整数（单位阶梯）
     expect(turnsBox!.textContent).toContain('×2');             // 同轮两次调用聚合一行
     expect(turnsBox!.textContent).toContain('#0');             // 轮次序号（#N 直达同口径）
     expect(ensurePushSpy().mock.calls.length).toBe(0);
