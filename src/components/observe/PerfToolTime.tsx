@@ -47,7 +47,6 @@ const DISPATCH_COLOR = "#8c959f"; // 与时间构成「重试等待」灰同源
 const SKILL_COLOR = "#8b5cf6";   // 与 Token 构成「推理」紫同源（技能 = 提示词注入，语义相邻）
 const TOOL_FOLD = 15;            // 工具行折叠阈值（超限折叠 +「展开全部」）
 const MEMBER_FOLD = 12;          // 分解面板成员折叠阈值（同上）
-const TURN_FOLD = 8;             // 成员行展开的逐轮清单折叠阈值（同上）
 
 interface MemberCell {
   taskId: string;
@@ -83,7 +82,6 @@ export function PerfToolTime({
   const [showAllTools, setShowAllTools] = useState(false);
   const [showAllMembers, setShowAllMembers] = useState<Set<string>>(new Set());
   const [expandedMembers, setExpandedMembers] = useState<Set<string>>(new Set());
-  const [showAllTurns, setShowAllTurns] = useState<Set<string>>(new Set());
 
   // 每工具的成员格全量清单（Σ 降序）：堆叠段与成员分解面板共用单一源；
   // 显示名走 Perf 泳道同源（member.label ?? taskId），无 label 回落原始 ID
@@ -113,7 +111,6 @@ export function PerfToolTime({
   const toggle = (toolName: string) => {
     setMemberQuery("");
     setExpandedMembers(new Set());
-    setShowAllTurns(new Set());
     setSelected(prev => (prev === toolName ? null : toolName));
   };
 
@@ -124,11 +121,9 @@ export function PerfToolTime({
     return next;
   };
 
-  // 成员行点击 = 展开该成员该工具的逐轮调用清单（再点收起；连带清该行
-  // 的「展开全部」残留态）
+  // 成员行点击 = 展开该成员该工具的逐轮调用清单（再点收起）
   const toggleMember = (taskId: string) => {
     setExpandedMembers(prev => toggleSet(prev, taskId));
-    setShowAllTurns(prev => (prev.has(taskId) ? toggleSet(prev, taskId) : prev));
   };
 
   /** 逐轮行时间（MM-DD HH:mm:ss，源缺时间戳回落「—」） */
@@ -381,19 +376,18 @@ export function PerfToolTime({
                                 )}
                               />
                             </div>
-                            {/* 逐轮调用清单（三级下钻第三级）：展示序 = Σ 降序
-                                （perf 视角找慢轮），同轮多次调用一行（×N）；
-                                旧档案无 turns 数组时空态不炸 */}
+                            {/* 逐轮调用清单（三级下钻第三级）：卡片内滚动窗——
+                                多调用成员不撑长面板（Σ 降序慢轮置顶，深滚是
+                                少数场景）；同轮多次调用一行（×N）；旧档案无
+                                turns 数组时空态不炸 */}
                             {isExpanded && (() => {
-                              const sorted = [...(c.turns ?? [])].sort(
+                              const rows = [...(c.turns ?? [])].sort(
                                 (a, b) => b.totalMs - a.totalMs || a.ts - b.ts,
                               );
-                              const showAll = showAllTurns.has(c.taskId);
-                              const rows = showAll ? sorted : sorted.slice(0, TURN_FOLD);
                               return (
                                 <div
                                   data-member-turns={`${selectedTool.toolName}·${c.taskId}`}
-                                  className="bg-foreground/[0.02] py-1 pl-2 dark:bg-white/[0.02]"
+                                  className="max-h-56 overscroll-contain overflow-y-auto bg-foreground/[0.02] py-1 pl-2 dark:bg-white/[0.02]"
                                 >
                                   {rows.map(e => (
                                     <div
@@ -425,15 +419,7 @@ export function PerfToolTime({
                                       </span>
                                     </div>
                                   ))}
-                                  {sorted.length > TURN_FOLD && (
-                                    <div
-                                      className="cursor-pointer select-none px-2 py-1 text-[11px] text-blue-600 transition-colors hover:underline dark:text-blue-400"
-                                      onClick={e => { e.stopPropagation(); setShowAllTurns(prev => toggleSet(prev, c.taskId)) }}
-                                    >
-                                      {showAll ? "收起" : `展开全部 (${sorted.length} 轮)`}
-                                    </div>
-                                  )}
-                                  {sorted.length === 0 && (
+                                  {rows.length === 0 && (
                                     <div className="px-2 py-1 text-center text-[11px]">（无逐轮数据）</div>
                                   )}
                                 </div>
