@@ -11,13 +11,13 @@
 // 工具耗时统计、右下钻详情面板（master-detail；lg 视口断点对半分栏——与
 // OverviewPanels/SkillCharts 同门，窄视口面板沉底）。
 // 左列与同页热点排行同门语法：inset 分组列表（发丝行分隔 + 微底色容
-// 器）、行悬停浮层、chevron 弹性旋转选中、标签上/值下的右对齐统计列、
-// 悬停浮现的下钻角标（点击 = 该工具全成员下钻）。行内条 = Σ 执行时长比
-// 例条（HTML 行内条，与热点排行/文件读取量同门——非坐标图，坐标图仍纯
-// SVG 铁律），条内按成员构成堆叠：Top-3 成员段（悬停给名/量，点段 =
-// tool:X member:Y 下钻）+ 灰「其他」段——零点击回答「这个工具的时间
-// 花在谁身上」；p50/p95 近秩分位刻度落在条上（慢工具一眼可见，平均会
-// 撒谎）。右栏常驻选中工具的成员分解（默认选中 Σ 最高工具，再点同行收
+// 器）、行悬停浮层、chevron 弹性旋转选中、标签上/值下的统计列（列内数
+// 值居中——双列并排时右对齐读不齐，居中读齐）：总耗时 + 最大耗时（均
+// 值会撒谎，最大是长尾的直觉读法；p50/p95 分位保留在悬停读数）、悬停
+// 浮现的下钻角标（点击 = 该工具全成员下钻）。「这工具的时间花在谁身
+// 上」的成员构成归右栏分解面板单一出口，行内不画堆叠条（试过 Top-3
+// 成员段 + 灰「其他」段的堆叠条——构成信息看右栏即可，条上留不下有
+// 效信息，撤）。右栏常驻选中工具的成员分解（默认选中 Σ 最高工具，再点同行收
 // 起给占位空态）：全量成员按 Σ 降序 + 比例条 + 搜索框双匹配显示名/原始
 // taskId，超限折叠「展开全部」——成员是无界维度（solo 1 个 → 大 run 237
 // 个），纵向清单 + Top-K + 搜索 + 点击下钻是高基数维度的业界收敛答案。
@@ -26,7 +26,7 @@
 // 工具执行头部口径）；skill 族元调用行（skill / load_skill / 技能派发型
 // ——提示词注入而非可执行工具，isSkillRelated 由采集侧 tool-conventions
 // 单源判定）带「技能」胶囊标，悬停解释耗时语义。下钻唯一出口 = Turns
-// 搜索语法深链（幽灵角标 → tool:X 全成员，成员段/分解行 →
+// 搜索语法深链（幽灵角标 → tool:X 全成员，分解行 →
 // tool:X member:Y）——Turns 命中索引即调用清单，叙事舞台已渲染工具调用
 // 块（参数/结果/错误/时长），零新清单面。
 
@@ -35,18 +35,15 @@ import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   fmtMs,
-  PERF_COLORS,
   perfEntrance,
   PERF_CARD_SM,
 } from "@/components/observe/perf-shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { RunToolStats } from "@/lib/observe/collectors/tool-stats";
 
-const SEG_COLORS = ["#2563eb", "#16a34a", "#d97706"]; // 堆叠段：按行内位置（Top-1/2/3）着色不按成员——识别靠悬停与分解面板
-const OTHER_COLOR = "#cbd5e1";   // 「其他」聚合段：中性灰（不可点——聚合非成员）
+const SEG_COLORS = ["#2563eb", "#16a34a", "#d97706"]; // 右栏成员分解行条色（单色用量——条色不编码成员身份，识别靠清单文字）
 const DISPATCH_COLOR = "#8c959f"; // 与时间构成「重试等待」灰同源
 const SKILL_COLOR = "#8b5cf6";   // 与 Token 构成「推理」紫同源（技能 = 提示词注入，语义相邻）
-const STACK_TOP = 3;             // 条内堆叠取前 N 成员（其余归「其他」段）
 const TOOL_FOLD = 15;            // 工具行折叠阈值（超限折叠 +「展开全部」）
 const MEMBER_FOLD = 12;          // 分解面板成员折叠阈值（同上）
 
@@ -100,8 +97,6 @@ export function PerfToolTime({
     ]),
   );
 
-  const maxToolMs = Math.max(1, ...tools.map(t => t.totalMs));
-
   const toolShare = totalNonLlmMs != null && totalNonLlmMs > 0 ? meta.totalToolMs / totalNonLlmMs : null;
 
   // 选中即换工具清搜索（再点同行收起给占位空态）
@@ -149,12 +144,7 @@ export function PerfToolTime({
             <div className="divide-y divide-foreground/[0.06] overflow-hidden rounded-xl bg-foreground/[0.03] dark:bg-foreground/[0.06]">
               {visibleTools.map(t => {
                 const isSelected = selected === t.toolName;
-                const cells = cellsByTool.get(t.toolName) ?? [];
-                const top = cells.slice(0, STACK_TOP);
-                const restMs = cells.slice(STACK_TOP).reduce((s, c) => s + c.totalMs, 0);
-                const restCount = cells.length - top.length;
                 const errRate = t.calls > 0 ? t.errors / t.calls : 0;
-                const barPct = (t.totalMs / maxToolMs) * 100;
                 const nameTitle = [
                   `${t.toolName}${t.isDispatch ? "（派发——窗口为子代理整段执行，另计不入 Σ 工具执行）" : t.isSkillRelated ? "（技能加载/调用——提示词注入类元调用，耗时不代表工具执行）" : ""}`,
                   `${t.calls} 次 · 错误 ${t.errors}${t.errors > 0 ? `（${Math.round(errRate * 100)}%）` : ""}`,
@@ -207,72 +197,17 @@ export function PerfToolTime({
                             {t.calls} 次
                           </span>
                         </div>
-                        {/* Σ 时长比例条：按成员构成堆叠（Top-3 段 + 灰「其他」段；
-                            派发行段统一灰——「另计」信号不丢）+ p50/p95 分位刻度 */}
-                        <div
-                          className="relative mt-1.5 h-1.5 w-full max-w-[440px] rounded-full bg-muted"
-                          title={`Σ ${fmtMs(t.totalMs)} · 为最高工具的 ${barPct.toFixed(0)}%`}
-                        >
-                          <div
-                            className="flex h-full gap-px overflow-hidden rounded-full"
-                            style={{ width: `${Math.min(barPct, 100)}%` }}
-                          >
-                            {top.map((seg, si) => (
-                              <div
-                                key={seg.taskId}
-                                data-tool-seg={`${t.toolName}·${seg.taskId}`}
-                                className={cn("h-full min-w-0", onOpenSearch && "cursor-pointer")}
-                                style={{
-                                  flexGrow: Math.max(seg.totalMs, 0.0001),
-                                  flexBasis: 0,
-                                  background: t.isDispatch ? DISPATCH_COLOR : SEG_COLORS[si],
-                                  opacity: t.isDispatch ? 0.5 : 0.8,
-                                }}
-                                title={`${seg.label} · ${seg.calls} 次 · ${fmtMs(seg.totalMs)}${seg.errors > 0 ? ` · 错误 ${seg.errors}` : ""}\n点击 → Turns 搜索该成员的调用`}
-                                onClick={
-                                  onOpenSearch
-                                    ? e => {
-                                        e.stopPropagation();
-                                        onOpenSearch(`tool:${t.toolName} member:${seg.taskId}`);
-                                      }
-                                    : undefined
-                                }
-                              />
-                            ))}
-                            {restMs > 0 && (
-                              <div
-                                data-tool-seg={`${t.toolName}·other`}
-                                className="h-full min-w-0"
-                                style={{ flexGrow: Math.max(restMs, 0.0001), flexBasis: 0, background: OTHER_COLOR, opacity: 0.9 }}
-                                title={`其他 ${restCount} 成员 · Σ ${fmtMs(restMs)}`}
-                              />
-                            )}
-                          </div>
-                          {t.p50Ms > 0 && (
-                            <span
-                              className="absolute top-1/2 h-[11px] w-[2px] -translate-y-1/2 rounded-full bg-white shadow-[0_0_0_0.5px_rgba(0,0,0,0.18)]"
-                              style={{ left: `${Math.min((t.p50Ms / maxToolMs) * 100, 100)}%` }}
-                              title={`p50 ${fmtMs(t.p50Ms)}（单次调用分位）`}
-                            />
-                          )}
-                          {t.p95Ms > 0 && (
-                            <span
-                              className="absolute top-1/2 h-[11px] w-[2px] -translate-y-1/2 rounded-full"
-                              style={{ left: `${Math.min((t.p95Ms / maxToolMs) * 100, 100)}%`, background: PERF_COLORS.danger }}
-                              title={`p95 ${fmtMs(t.p95Ms)}（单次调用分位）`}
-                            />
-                          )}
-                        </div>
                       </div>
-                      {/* 右对齐统计列（标签上/值下——热点排行同门语法） */}
+                      {/* 居中统计列（标签上/值下；列内数值居中读齐）：总耗时
+                          + 最大耗时——均值会撒谎，最大是长尾的直觉读法 */}
                       <div className="flex shrink-0 items-center gap-4">
-                        <div className="flex flex-col items-end leading-tight">
-                          <span className="text-[10px] text-muted-foreground">耗时</span>
+                        <div className="flex flex-col items-center leading-tight">
+                          <span className="text-[10px] text-muted-foreground">总耗时</span>
                           <span className="text-xs font-semibold tabular-nums">{fmtMs(t.totalMs)}</span>
                         </div>
-                        <div className="hidden flex-col items-end leading-tight sm:flex">
-                          <span className="text-[10px] text-muted-foreground">p95</span>
-                          <span className="text-xs font-semibold tabular-nums">{fmtMs(t.p95Ms)}</span>
+                        <div className="hidden flex-col items-center leading-tight sm:flex">
+                          <span className="text-[10px] text-muted-foreground">最大耗时</span>
+                          <span className="text-xs font-semibold tabular-nums">{fmtMs(t.maxMs)}</span>
                         </div>
                       </div>
                       {/* 幽灵定位角标：悬停浮现，点击 = 该工具全成员下钻 Turns 搜索 */}
@@ -441,9 +376,9 @@ export function PerfToolTime({
             )}
           </div>
         </div>
-        {/* 图例：堆叠与分位刻度读法 */}
+        {/* 图例：交互读法（构成信息归右栏分解面板，条已退役） */}
         <p className="mt-1.5 text-[10px] text-muted-foreground">
-          条 = Σ 执行时长（段 = 前 {STACK_TOP} 成员，灰段 = 其他成员聚合）· 白刻度 p50 · 红刻度 p95（单次调用分位）· 点击行选中（右侧看成员分解）· 点段/成员行/搜索图标 → Turns 搜索直达调用清单
+          点击行选中（右侧看成员分解）· 点成员行/搜索图标 → Turns 搜索直达调用清单
         </p>
       </CardContent>
     </Card>
