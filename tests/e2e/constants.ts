@@ -57,5 +57,13 @@ export const CLAUDE_SKILL_JSONL = path.join(REPO_ROOT, "tests/ut/data/e2e/claude
 /** 该 JSONL 的会话 id（文件名主干，同上契约）。 */
 export const CLAUDE_SKILL_SESSION_ID = "claude-skill-dispatch";
 
+/** 回收站旅程专用一次性 JSONL（claude-autorefresh-base）：同样刻意不播种，
+ *  recycle-bin.spec 自行经 HTTP 导入 → UI 删除 → 回收站 → 恢复——全程自包
+ *  自净，不对其他 spec 留任何先验状态（首条用户消息「2+2」亦作断言锚）。 */
+export const AUTOREFRESH_JSONL = path.join(REPO_ROOT, "tests/ut/data/e2e/claude-autorefresh-base.jsonl");
+
+/** 该 JSONL 的会话 id（文件名主干，同上契约）。 */
+export const AUTOREFRESH_SESSION_ID = "claude-autorefresh-base";
+
 /** 播种产出的 run id（mini-bundle/workflow.json 的 id 字段）。 */
 export const E2E_RUN_ID = "minidemo01";

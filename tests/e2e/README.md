@@ -38,7 +38,19 @@ tests/e2e/
 ├── run-workbench.spec.ts     Run 工作台：tab 矩阵/深链/?a 门/历史栈返回
 ├── turns-deep-link.spec.ts   搜索语法深链：tool:X / tool:X member:Y / 命中浮层
 ├── session-view.spec.ts      Solo 会话视图：同壳工作台 + Markdown 导出 + Perf
-└── resilience.spec.ts        韧性：真 404 错误卡 + 500 注入不白屏
+├── resilience.spec.ts        韧性：真 404 错误卡 + 500 注入不白屏
+├── overview-tab.spec.ts      Overview：身份卡/指标瓦片/Tool Calls 分组列表
+├── graph-tab.spec.ts         Graph：DAG SVG 节点标签 + 缩放工具条四钮
+├── turns-player.spec.ts      Turns：角色筛选条计数真值/轮次播放器/走查推进
+├── search-grammar.spec.ts    搜索语法：#N 直跳/role: 算子/零命中文案
+├── context-tab.spec.ts       Context：增长曲线 + 图表模式切换 + 胶囊下钻档案弹窗
+├── audit-tab.spec.ts         Audit：四域导航/默认 skill 域/workflow·run 目标行
+├── skills-files-tab.spec.ts  Skills 斜杠调用行/Files 文件行全路径 + 搜索过滤
+├── wire-replay-tab.spec.ts   Wire 结构面（无捕获不崩）+ Replay 播放推进
+├── score-tab.spec.ts         Score：六维雷达/维度卡/成员切换/评分导出钮
+├── recycle-bin.spec.ts       回收站全旅程：删除→回收站→恢复回流（自包一次性夹具）
+├── upload-dialog.spec.ts     上传对话框：字段在场/取消可关
+└── offline-export.spec.ts    离线 HTML 导出：下载 + file:// 往返离线内核起播
 ```
 
 ### 环境隔离（五件套）
@@ -67,6 +79,10 @@ tests/e2e/
 
 claude-skill-dispatch.jsonl **刻意不播种**——留给 import-journey.spec 走 UI 向导首导，
 保住「导入前后差一行」的旅程断言。
+
+recycle-bin.spec 的**一次性夹具** `claude-autorefresh-base.jsonl`（`tests/ut/data/e2e/`）
+同样不进播种——spec 内经 HTTP 自行导入（global-setup 同款管线），结束时恢复回流
+为普通行，与播种态等价，幂等重跑安全。
 
 ### browserConsole 验收门
 
