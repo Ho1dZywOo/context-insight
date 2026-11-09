@@ -2,7 +2,7 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [1.0.3] - 2026-11-09
 
 ### Added
 - 【Score 评测数据导出（RSI 自循环演进语料）】Score 板块内新增「导出评分 JSON」：单一版本化文件（`insight-score-export@1`）打包三层可回溯数据——全员完整评分卡（分数/判定/证据轮次）、维度定义快照（维度↔子项↔权重↔聚合策略——匹配关系自解释，含 profile 口径与自定义维）、溯源信息（insight/scorer 版本、profile、时刻、run·成员身份）+ 便利聚合（成员总分/维度均值）；API 端点同款载荷可程序化拉取（curl 即 RSI 管线入口），离线 HTML 导出内嵌同款档案（离线也可导）
