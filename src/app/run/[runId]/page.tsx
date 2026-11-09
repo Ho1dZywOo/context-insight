@@ -222,8 +222,9 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   const [uploadOpen, setUploadOpen] = useState(false);
   const [exportingMd, setExportingMd] = useState(false);
   const [exportingHtml, setExportingHtml] = useState(false);
-  // tab/member 视图状态（URL 镜像单点，契约对齐 session-view）；goBack/canBack
-  // 为工作台内回退栈（navigate 前值入栈、select 不入栈）
+  // tab/member 视图状态（state 权威 + URL 镜像，契约对齐离线降级路径）；
+  // goBack/canBack 为条目栈出口——live 页面条目栈 = 浏览器历史（鼠标侧键/
+  // 浏览器返回钮与本钮同一出口，popstate 恢复视图），离线导出降级内存栈
   const { view, navigate, select, goBack, canBack } = useRunView();
   // 宿主能力门控（live 页面 = 全能力；离线导出 bundle = 只读档案）
   const { offline } = useRunHostCaps();
@@ -236,8 +237,9 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   // 稳定回调：RunGraph memo 依赖 props 引用稳定（子图入口不随无关重渲染换引用）
   const openSubgraph = useCallback((key: string) => setSubgraphKey(key), []);
 
-  // 返回 = 回退上一个工作台动作（tab 切换 / turn 深链 / 成员钻取，逐步回退）；
-  // 栈空则离页——浏览器有来路回上页，直开深链（无来路）回工作台首页
+  // 返回 = 回退上一个工作台动作（tab 切换 / turn 深链 / 成员钻取，逐步回退）
+  // ——与鼠标侧键、浏览器返回钮同一真相（浏览器历史条目，popstate 恢复）；
+  // 条目栈空则离页——浏览器有来路回上页，直开深链（无来路）回工作台首页
   const handleBack = useCallback(() => {
     if (goBack()) return;
     if (window.history.length > 1) router.back();
@@ -740,6 +742,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
               viewModel={viewModel}
               turnId={view.turnId}
               onSelectTurn={id => select({ turnId: id })}
+              searchQuery={view.q}
             />
           </div>
         ) : null}
@@ -767,7 +770,12 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
 
         {visitedTabs.has("perf") ? (
           <div data-run-tab="perf" className={tabPanelClass("perf")}>
-            <RunPerfTab key={identityEpoch} runId={run.runId} onOpenTurn={turnId => navigate({ tab: "turns", turnId })} />
+            <RunPerfTab
+              key={identityEpoch}
+              runId={run.runId}
+              onOpenTurn={turnId => navigate({ tab: "turns", turnId })}
+              onOpenSearch={q => navigate({ tab: "turns", q })}
+            />
           </div>
         ) : null}
 

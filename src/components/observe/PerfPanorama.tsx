@@ -22,15 +22,19 @@ import {
   type TurnPerf, type BridgePerf, type ExecItem, type PerfLaneStat, type LaneExec,
 } from "./perf-shared"
 import { PerfLaneList } from "./PerfLaneList"
+import { PerfToolTime } from "./PerfToolTime"
 import { AgentSwimlaneV2 } from "./AgentSwimlaneV2"
 import type { AgentItem, BridgeItem } from "./AgentCallGraph"
+import type { RunToolStats } from "@/lib/observe/collectors/tool-stats"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 interface Props {
   /** run 合并端点（executions / turns / bridges / lanes，返回形状镜像） */
-  endpoints: { executions: string; turns: string; bridges: string; lanes?: string }
+  endpoints: { executions: string; turns: string; bridges: string; lanes?: string; toolStats?: string }
   /** 定位出口：统一收敛到 turnId（Turns 深链管线入态） */
   onOpenTurn?: (turnId: string) => void
+  /** 搜索出口：Turns 搜索语法深链（工具耗时卡的行/格下钻——命中索引即调用清单） */
+  onOpenSearch?: (q: string) => void
   /** 时间线载荷直供（离线导出查看器）：提供时时间线卡与跳转解析免请求渲染 */
   swimlanePayload?: {
     agents: AgentItem[]
@@ -73,12 +77,13 @@ function computeWallSlices(subtasks: ExecItem[]): number[] {
 const DUR_LLM = "#6366f1"
 const DUR_NONLLM = "#f59e0b"
 
-export function PerfPanorama({ endpoints, onOpenTurn, swimlanePayload }: Props) {
+export function PerfPanorama({ endpoints, onOpenTurn, onOpenSearch, swimlanePayload }: Props) {
   const [items, setItems] = useState<ExecItem[] | null>(null)
   const [turns, setTurns] = useState<TurnPerf[] | null>(null)
   const [bridges, setBridges] = useState<BridgePerf[]>([])
   const [laneTable, setLaneTable] = useState<string[]>([])
   const [laneTableInferred, setLaneTableInferred] = useState(false)
+  const [toolStats, setToolStats] = useState<RunToolStats | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -87,19 +92,24 @@ export function PerfPanorama({ endpoints, onOpenTurn, swimlanePayload }: Props) 
     const lanesP = endpoints.lanes
       ? fetchJson(endpoints.lanes).catch(() => null)
       : Promise.resolve(null)
+    const toolStatsP = endpoints.toolStats
+      ? fetchJson(endpoints.toolStats).catch(() => null)
+      : Promise.resolve(null)
     Promise.all([
       fetchJson(endpoints.executions),
       fetchJson(endpoints.turns),
       fetchJson(endpoints.bridges),
       lanesP,
+      toolStatsP,
     ])
-      .then(([execData, turnsData, bridgesData, lanesData]) => {
+      .then(([execData, turnsData, bridgesData, lanesData, toolStatsData]) => {
         if (cancelled) return
         setItems(execData.items ?? [])
         setTurns(turnsData.items ?? [])
         setBridges(bridgesData.items ?? [])
         setLaneTable(Array.isArray(lanesData?.lanes) ? lanesData.lanes : [])
         setLaneTableInferred(lanesData?.source === "inferred")
+        setToolStats(toolStatsData?.tools?.length > 0 ? toolStatsData : null)
         setLoading(false)
       })
       .catch(() => {
@@ -162,6 +172,18 @@ export function PerfPanorama({ endpoints, onOpenTurn, swimlanePayload }: Props) 
     }
     return [...m.values()]
   }, [turns, bridges])
+
+  // 工具耗时卡的成员轴（taskId → 显示名）：turns 的 member 投影——与泳道
+  // 命名同源（member.label ?? taskId 由卡片兜底），去重保首见
+  const memberAxis = useMemo(() => {
+    const m = new Map<string, { taskId: string; label: string | null }>()
+    for (const t of turns ?? []) {
+      if (t.member && !m.has(t.member.taskId)) {
+        m.set(t.member.taskId, { taskId: t.member.taskId, label: t.member.label ?? null })
+      }
+    }
+    return [...m.values()]
+  }, [turns])
 
   // 效率序列：主 agent 轮（root）TPS / TPOT，x 轴按轮次时刻呈现（真实
   // 时间轴——turnIndex 是会话内局部序号，多成员混排不可作轴），排除压
@@ -271,6 +293,14 @@ export function PerfPanorama({ endpoints, onOpenTurn, swimlanePayload }: Props) 
           laneExecs={laneExecs}
           t0={model?.t0 ?? 0}
           onOpenTurn={onOpenTurn}
+        />
+      )}
+      {toolStats && (
+        <PerfToolTime
+          stats={toolStats}
+          members={memberAxis}
+          totalNonLlmMs={model?.totalNonLlm ?? null}
+          onOpenSearch={onOpenSearch}
         />
       )}
       {perfSeries.length > 1 && (

@@ -1,0 +1,141 @@
+{
+  "schema": "workflow-bundle",
+  "version": 1,
+  "id": "e2e-tools01",
+  "kind": "workflow",
+  "name": "e2e-tools",
+  "startedAt": null,
+  "finishedAt": null,
+  "data": {
+    "exportDataComplete": false,
+    "members": [
+      {
+        "id": "M_INIT_E",
+        "kind": "process",
+        "name": "init：第 0 代第 1 次执行",
+        "startedAt": "2026-11-01T10:00:00Z",
+        "finishedAt": "2026-11-01T10:00:05Z",
+        "output": {
+          "text": "ready"
+        },
+        "annotation": {
+          "note": "环境准备",
+          "role": "execute"
+        },
+        "nodeId": "init",
+        "generation": 0,
+        "attempt": 1,
+        "attemptResult": "succeeded",
+        "executionState": "finished"
+      },
+      {
+        "id": "M_INIT_V",
+        "kind": "process",
+        "name": "init：第 0 代第 1 次验收",
+        "startedAt": null,
+        "finishedAt": null,
+        "annotation": {
+          "role": "verify"
+        },
+        "nodeId": "init",
+        "generation": 0,
+        "attempt": 1,
+        "verification": {
+          "type": "script",
+          "status": "passed",
+          "reason": "exit 0"
+        },
+        "executionState": "finished"
+      },
+      {
+        "id": "S_BUILD_E0",
+        "kind": "session",
+        "name": "build：第 0 代第 1 次执行",
+        "startedAt": "2026-11-01T10:00:10Z",
+        "finishedAt": "2026-11-01T10:00:40Z",
+        "sessionId": "ses_e2e_exec",
+        "location": "sessions/ses_e2e_exec.native",
+        "annotation": {
+          "note": "读配置 + 构建（Read×2 + bash×1，工具耗时主语料）",
+          "role": "execute"
+        },
+        "nodeId": "build",
+        "generation": 0,
+        "attempt": 1,
+        "attemptResult": "failed",
+        "retryPolicy": {
+          "maxRetries": 1,
+          "onExhaust": "rollback",
+          "rollbackToNodeId": "build"
+        },
+        "executionState": "finished"
+      },
+      {
+        "id": "S_BUILD_V0",
+        "kind": "session",
+        "name": "build：第 0 代第 1 次验收",
+        "startedAt": "2026-11-01T10:01:00Z",
+        "finishedAt": "2026-11-01T10:01:05Z",
+        "sessionId": "ses_e2e_verify",
+        "location": "sessions/ses_e2e_verify.native",
+        "annotation": {
+          "note": "验收产物（Read×1）",
+          "role": "verify"
+        },
+        "nodeId": "build",
+        "generation": 0,
+        "attempt": 1,
+        "verification": {
+          "type": "agent",
+          "status": "failed",
+          "reason": "缺少边界用例"
+        },
+        "executionState": "finished"
+      },
+      {
+        "id": "S_BUILD_E1",
+        "kind": "session",
+        "name": "build：第 1 代第 1 次执行",
+        "startedAt": "2026-11-01T10:02:00Z",
+        "finishedAt": "2026-11-01T10:02:20Z",
+        "sessionId": "ses_e2e_exec2",
+        "location": "sessions/ses_e2e_exec2.native",
+        "annotation": {
+          "note": "补齐后重建（bash×1 + Grep×1）",
+          "role": "execute"
+        },
+        "nodeId": "build",
+        "generation": 1,
+        "attempt": 1,
+        "attemptResult": "succeeded",
+        "executionState": "finished"
+      },
+      {
+        "id": "M_BUILD_V1",
+        "kind": "process",
+        "name": "build：第 1 代第 1 次验收",
+        "startedAt": null,
+        "finishedAt": null,
+        "annotation": {
+          "role": "verify"
+        },
+        "nodeId": "build",
+        "generation": 1,
+        "attempt": 1,
+        "verification": {
+          "type": "script",
+          "status": "passed",
+          "reason": "exit 0"
+        },
+        "executionState": "finished"
+      }
+    ],
+    "relations": [
+      { "from": "M_INIT_E", "to": "M_INIT_V", "type": "depends_on" },
+      { "from": "M_INIT_V", "to": "S_BUILD_E0", "type": "depends_on" },
+      { "from": "S_BUILD_E0", "to": "S_BUILD_V0", "type": "depends_on" },
+      { "from": "S_BUILD_V0", "to": "S_BUILD_E1", "type": "depends_on" },
+      { "from": "S_BUILD_E1", "to": "M_BUILD_V1", "type": "depends_on" }
+    ]
+  }
+}

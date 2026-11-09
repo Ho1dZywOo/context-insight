@@ -122,8 +122,19 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
 
 let root: Root | null = null;
 
+// history.pushState 间谍（条目栈 URL 镜像断言锚）：懒建 + renderPage 复位。
+// 调用形态 (state, unused, url)——url 断言取第三参
+let pushSpy: ReturnType<typeof vi.spyOn> | null = null;
+function ensurePushSpy() {
+  if (!pushSpy) pushSpy = vi.spyOn(window.history, 'pushState');
+  return pushSpy;
+}
+
 async function renderPage(initialSearch = '') {
   searchState.current = initialSearch;
+  // history 条目栈测试基建：重置当前条目 state（同文件跨用例防标残留）
+  window.history.replaceState(null, '', `/run/minidemo01${initialSearch}`);
+  ensurePushSpy().mockClear();
   nav.replace.mockClear();
   fetchCalls.length = 0;
   const container = document.createElement('div');
@@ -180,10 +191,10 @@ describe('Graph 成员定位（locate 收口）', () => {
       });
       // 会话 → 首轮解析：pageSize=1 锚点请求
       expect(fetchCalls.some(u => u.includes('member=ses_mini_a') && u.includes('pageSize=1'))).toBe(true);
-      // 深链落地：URL replace 到 turns + 首轮选中
-      const lastReplace = String(nav.replace.mock.calls.at(-1)?.[0] ?? '');
-      expect(lastReplace).toContain('tab=turns');
-      expect(lastReplace).toContain('turn=rop-t-a0');
+      // 深链落地：navigate 入条目栈（URL 镜像随 pushState 走）到 turns + 首轮选中
+      const lastPush = String(ensurePushSpy().mock.calls.at(-1)?.[2] ?? '');
+      expect(lastPush).toContain('tab=turns');
+      expect(lastPush).toContain('turn=rop-t-a0');
       // Turns 挂载：详情可见 + 目标行居中揭示（详情归属→节点展开→成员分页→行就位）
       await act(async () => { await new Promise(r => setTimeout(r, 80)) });
       expect(document.querySelector('[data-run-tab="turns"]')).toBeTruthy();

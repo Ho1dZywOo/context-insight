@@ -17,7 +17,9 @@ UI version tracked in `src/lib/version.ts` — `package.json` version stays in s
 | `./start.sh -d` | Dev mode (`next dev`): hot reload while editing insight source; first request per route compiles on demand |
 | `./start.sh -c tui` | Backend + CLI TUI mode (backend stops when CLI exits) |
 | `../cpx/install.sh` | Standalone cpx installer (also invoked by `./start.sh`); capture works without insight, `cpx list` browses captures; import is insight's own job (UI / auto-import at capture exit) |
-| `npm run test` | `vitest run` — all tests |
+| `npm run test` | 一条命令全覆盖：pretest（tsc + 库预备）→ `vitest run`（tests/ut 组件契约 + tests/pipeline 数据管线）→ `playwright test`（tests/e2e 浏览器全栈，自举 boot-server） |
+| `npm run test:pipeline` | `vitest run tests/pipeline` — 数据管线层单独跑 |
+| `npm run e2e` | `playwright test` — 浏览器全栈层单独跑（首跑需 `npx playwright install chromium`） |
 | `npm run test:watch` | `vitest` — watch mode |
 | `npm run test:cli` | `vitest run tests/cli/` — CLI tests only |
 | `npx vitest run tests/cli/unit/commands/import.test.ts` | Run a single test file |

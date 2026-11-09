@@ -2,6 +2,12 @@
 tests/
 coverage/
 
+# 浏览器 E2E（Playwright，tests/e2e 随 tests/ 整体排除；根级配置与
+# 产物哨兵单列——prisma/e2e.db 每轮由 boot-server.sh 重建，绝不随包）
+playwright.config.ts
+test-results/
+playwright-report/
+
 # 构建产物与缓存（next build 产物不放包内 —— 现场构建落 ~/.context-insight/.next）
 .next/
 out/

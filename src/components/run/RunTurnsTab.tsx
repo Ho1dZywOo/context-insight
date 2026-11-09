@@ -72,6 +72,10 @@ export interface RunTurnsTabProps {
   viewModel: RunViewModel;
   turnId: string | null;
   onSelectTurn: (turnId: string | null) => void;
+  /** Turns 搜索预填深链（Perf 工具耗时卡等入口的搜索语法直达）：非 null 且
+   *  未消费过时执行一次搜索并驻留命中索引（搜索胶囊输入框随驻留关键词自动
+   *  回显）；同值不重放，换值重放（连续下钻） */
+  searchQuery?: string | null;
 }
 
 // viewModel → 节点序列（主图按 代→rank 排序；子图节点递归挂生成器后）
@@ -134,7 +138,7 @@ function firstContentNode(nodes: TurnsNode[]): TurnsNode | undefined {
 /** 搜索未驻留时过滤 hook 的稳定空集（避免每次渲染新数组触发 memo 重算） */
 const EMPTY_SEARCH_ITEMS: TurnSearchItem[] = [];
 
-export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurnsTabProps) {
+export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn, searchQuery = null }: RunTurnsTabProps) {
   const dataEpoch = useRunDataEpoch();
   const nodes = useMemo(() => buildNodes(viewModel), [viewModel]);
   const flatSessions = useMemo(() => nodes.flatMap(c => c.sessions), [nodes]);
@@ -631,6 +635,16 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn }: RunTurns
       setSearch(prev => (prev ? { ...prev, loading: false } : prev));
     }
   }, [runId, resetHitFilter]);
+
+  // 搜索预填深链消费（渲染期 prop 变化模式，与换选快照/命中序号钳位同门）：
+  // 新 q 值到 → 执行一次搜索（驻留命中索引，输入框随驻留关键词回显）。初始
+  // 态为 null——挂载时 q 已就位（深链直开/切 tab 进入）同样算「新值」照常
+  // 消费；同值不重放（tab 常驻挂载下往返不重搜），换值重放（连续下钻）
+  const [consumedSearchQuery, setConsumedSearchQuery] = useState<string | null>(null);
+  if (searchQuery !== consumedSearchQuery) {
+    setConsumedSearchQuery(searchQuery);
+    if (searchQuery != null) void runSearch(searchQuery);
+  }
 
   const exitSearch = useCallback(() => {
     setSearch(null);

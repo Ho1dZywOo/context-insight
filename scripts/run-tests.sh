@@ -2,8 +2,10 @@
 # insight 单元用例入口（供仓顶 scripts/run-tests.sh 转调，也可单独执行）。
 # 依赖缺失时自动 npm install（fresh clone / 流水线一条命令可跑；postinstall
 # 会生成 Prisma client）。
-# tests 分层：tests/ut 默认跑（npm run test）；tests/e2e（真 CLI/浏览器/环境
-# 依赖）显式跑：npm run test:e2e。
+# tests 分层与入口：`npm run test` 一条命令全覆盖——pretest（tsc + 库预备）
+# → vitest（tests/ut 组件契约 + tests/pipeline 数据管线）→ Playwright
+# （tests/e2e 浏览器全栈，自举 boot-server：e2e.db 重建 + 按需构建 + 起服）。
+# 单层入口：npm run e2e（仅浏览器）/ npm run test:pipeline（仅管线）。
 # COVERAGE=1 时改跑 npm run test:cov（pretest + vitest --coverage，v8
 # provider 统计 src/ 全量；npm 只对 test 名挂 pretest 钩子，test:cov 需显式串）。
 # --coverage / -c 参数等价置 COVERAGE=1。
@@ -48,5 +50,8 @@ if [ "${COVERAGE:-0}" = "1" ]; then
     && echo "==> [insight] 覆盖率明细: packages/insight/coverage/index.html（浏览器）/ lcov.info"
   exit "$rc"
 else
+  # npm run test 已含 Playwright 全栈层：浏览器二进制缺失时自愈补装
+  # （已装则是秒级 no-op；无法下载时 playwright 自身的报错足够可行动）
+  npx playwright install chromium >/dev/null 2>&1 || true
   npm run test
 fi

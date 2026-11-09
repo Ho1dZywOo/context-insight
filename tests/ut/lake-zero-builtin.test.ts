@@ -60,7 +60,7 @@ describe('平台中性哨兵（平台化 P1-P3 防回潮锁，词表源 sensitiv
   const BRAND_NAME_FILES = new Set([
     'src/lib/branding.ts',
     'scripts/pack-cannbot.mjs',
-    'tests/e2e/cannbot-pack.test.ts',
+    'tests/pipeline/cannbot-pack.test.ts',
   ]);
   const LEGACY_ENVELOPE_HOME = new Set(['src/lib/shared/envelope.ts', 'cpx/src/envelope.ts']);
   // 品牌名白名单文件内 CANNbay/CANNBay 合法（branding 字面量/翻转规则/探针）

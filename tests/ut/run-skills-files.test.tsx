@@ -217,8 +217,19 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
 
 let root: Root | null = null;
 
+// history.pushState 间谍（条目栈 URL 镜像断言锚）：懒建 + renderPage 复位。
+// 调用形态 (state, unused, url)——url 断言取第三参
+let pushSpy: ReturnType<typeof vi.spyOn> | null = null;
+function ensurePushSpy() {
+  if (!pushSpy) pushSpy = vi.spyOn(window.history, 'pushState');
+  return pushSpy;
+}
+
 async function renderPage(initialSearch = '') {
   searchState.current = initialSearch;
+  // history 条目栈测试基建：重置当前条目 state（同文件跨用例防标残留）
+  window.history.replaceState(null, '', `/run/minidemo01${initialSearch}`);
+  ensurePushSpy().mockClear();
   nav.replace.mockClear();
   fetchCalls.length = 0;
   if (!skillsVariant.current) skillsVariant.current = skillsAll;
@@ -328,25 +339,25 @@ describe('Run 详情 Skills/Files tab（run-observe-parity 刀D）', () => {
     const jumps = tab.querySelectorAll('[data-skill-jump]');
     expect(jumps.length).toBe(2);
 
-    // 明细箭头跳转 → Turns 深链（nav.replace 落 tab=turns&turn=）；悬停提示不带括号注记
-    nav.replace.mockClear();
+    // 明细箭头跳转 → Turns 深链（navigate 入条目栈，URL 镜像随 pushState 走）；悬停提示不带括号注记
+    ensurePushSpy().mockClear();
     const jumpB = [...jumps].find(j => j.getAttribute('data-skill-jump') === 'rop-t-b0') as HTMLElement;
     expect(jumpB.getAttribute('title')).toBe('跳转 turn 现场');
     await act(async () => {
       jumpB.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
-    expect(nav.replace.mock.calls.length).toBeGreaterThan(0);
-    const last = String(nav.replace.mock.calls.at(-1)?.[0] ?? '');
+    expect(ensurePushSpy().mock.calls.length).toBeGreaterThan(0);
+    const last = String(ensurePushSpy().mock.calls.at(-1)?.[2] ?? '');
     expect(last).toContain('tab=turns');
     expect(last).toContain('turn=rop-t-b0');
 
     // 时间线点直跳（不经明细）：绿点落其 turn
-    nav.replace.mockClear();
+    ensurePushSpy().mockClear();
     const dotY = tab.querySelector('circle[data-skill-dot="rop-skill-y"]') as unknown as Element;
     await act(async () => {
       dotY.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
-    const viaDot = String(nav.replace.mock.calls.at(-1)?.[0] ?? '');
+    const viaDot = String(ensurePushSpy().mock.calls.at(-1)?.[2] ?? '');
     expect(viaDot).toContain('turn=rop-t-a1');
 
     // 收起明细：成员名退场（收纳状态可逆）
@@ -458,20 +469,20 @@ describe('Run 详情 Skills/Files tab（run-observe-parity 刀D）', () => {
     expect(jumps.length).toBe(2);
 
     // 明细箭头跳转 → Turns 深链
-    nav.replace.mockClear();
+    ensurePushSpy().mockClear();
     const jumpB = [...jumps].find(j => j.getAttribute('data-skill-jump') === 'rop-t-b0') as HTMLElement;
     await act(async () => {
       jumpB.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
-    expect(String(nav.replace.mock.calls.at(-1)?.[0])).toContain('turn=rop-t-b0');
+    expect(String(ensurePushSpy().mock.calls.at(-1)?.[2])).toContain('turn=rop-t-b0');
 
     // 时间线点直跳（不经明细）
-    nav.replace.mockClear();
+    ensurePushSpy().mockClear();
     const dotY = svg!.querySelector('circle[data-skill-dot="claude-agent"]') as unknown as Element;
     await act(async () => {
       dotY.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
-    expect(String(nav.replace.mock.calls.at(-1)?.[0])).toContain('turn=rop-t-a1');
+    expect(String(ensurePushSpy().mock.calls.at(-1)?.[2])).toContain('turn=rop-t-a1');
 
     // 切回技能维：派发视图退场、技能瓦片回归
     const segSkills = [...tab.querySelectorAll('button')].find(b => b.textContent === '技能')!;

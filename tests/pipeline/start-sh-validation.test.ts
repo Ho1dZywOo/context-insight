@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// tests/e2e → 包根需退两层（分层重构挪目录时少改了一层，bash 退 127）
+// tests/pipeline → 包根需退两层（分层重构挪目录时少改了一层，bash 退 127）
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const START_SH = path.join(PROJECT_ROOT, 'start.sh');
 
