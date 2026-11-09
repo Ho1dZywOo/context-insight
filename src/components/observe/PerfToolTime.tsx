@@ -102,6 +102,8 @@ export function PerfToolTime({
 
   const maxToolMs = Math.max(1, ...tools.map(t => t.totalMs));
 
+  // Σ 工具执行（跨成员累加）/ 非 LLM 墙钟：多成员并发执行时 Σ 工具时长可超
+  // 墙钟非 LLM 时间，比率可 >100%——诚实标注、不钳制（轴不撒谎）
   const toolShare = totalNonLlmMs != null && totalNonLlmMs > 0 ? meta.totalToolMs / totalNonLlmMs : null;
 
   // 选中即换工具清搜索（再点同行收起给占位空态）
@@ -118,7 +120,16 @@ export function PerfToolTime({
   };
 
   const visibleTools = showAllTools ? tools : tools.slice(0, TOOL_FOLD);
-  const selectedTool = tools.find(t => t.toolName === selected) ?? null;
+  // 派生兜底：dataEpoch 刷新后 stats 换新对象但组件不重挂，selected 可能指向已
+  // 消失的工具——回落到新的 Σ 最高工具（右栏不退成占位空态）；selected=null 收
+  // 起态不回落（点同行收起仍给占位空态）
+  const effectiveSelected =
+    selected == null
+      ? null
+      : tools.some(t => t.toolName === selected)
+        ? selected
+        : tools[0]?.toolName ?? null;
+  const selectedTool = tools.find(t => t.toolName === effectiveSelected) ?? null;
 
   return (
     <Card {...perfEntrance(150, PERF_CARD_SM)} size="sm" data-testid="perf-tool-time">
@@ -128,7 +139,7 @@ export function PerfToolTime({
             <CardTitle>工具耗时</CardTitle>
             <span className="text-[11px] text-muted-foreground">
               Σ 执行 {fmtMs(meta.totalToolMs)}
-              {toolShare != null ? ` · 占非 LLM 时间 ${Math.round(toolShare * 100)}%` : ""}
+              {toolShare != null ? ` · Σ工具执行/非LLM墙钟 ${Math.round(toolShare * 100)}%` : ""}
               {meta.dispatchMs > 0 ? ` · 派发 ${fmtMs(meta.dispatchMs)} 另计` : ""}
             </span>
           </div>
@@ -148,7 +159,7 @@ export function PerfToolTime({
           <div className="min-w-0">
             <div className="divide-y divide-foreground/[0.06] overflow-hidden rounded-xl bg-foreground/[0.03] dark:bg-foreground/[0.06]">
               {visibleTools.map(t => {
-                const isSelected = selected === t.toolName;
+                const isSelected = effectiveSelected === t.toolName;
                 const cells = cellsByTool.get(t.toolName) ?? [];
                 const top = cells.slice(0, STACK_TOP);
                 const restMs = cells.slice(STACK_TOP).reduce((s, c) => s + c.totalMs, 0);
