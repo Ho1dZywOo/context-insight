@@ -813,6 +813,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
             <RunScoreTab
               key={identityEpoch}
               runId={run.runId}
+              runName={run.name}
               members={memberRows}
               member={view.member}
               onMemberChange={m => navigate({ member: m })}

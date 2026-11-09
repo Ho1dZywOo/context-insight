@@ -26,6 +26,7 @@ import { ToolCallList } from "./ToolCallList"
 import { SkillEventList } from "./SkillEventList"
 import { TurnFilmstrip, type FilmstripTurn } from "./TurnFilmstrip"
 import { TurnInputCard } from "./TurnInputCard"
+import { fmtMs } from "@/components/observe/perf-shared"
 import type { TurnHighlight } from "@/lib/shared/highlight"
 
 export interface TurnDetailData {
@@ -111,13 +112,7 @@ const ROLE_PILL: Record<string, string> = {
   compaction: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
 }
 
-function formatLatency(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
-  return `${(ms / 60000).toFixed(1)}min`
-}
-
-// 大数字拆量级单位（数值大字 + 单位小字，图例仍走 formatLatency）
+// 大数字拆量级单位（数值大字 + 单位小字，图例仍走共享 fmtMs）
 function splitLatency(ms: number): { n: string; u: string } {
   if (ms < 1000) return { n: `${ms}`, u: "ms" }
   if (ms < 60000) return { n: (ms / 1000).toFixed(1), u: "s" }
@@ -206,7 +201,7 @@ export function TurnDetail({ turn, highlight, onRefresh, subagentLabel, onPrevTu
   const entDelay = (ms: number) => (entrance ? { animationDelay: `${ms}ms` } : undefined)
 
   return (
-    <div id="turn-detail-top" className="flex min-h-full flex-col bg-muted/40">
+    <div id="turn-detail-top" data-turn-detail={turn.turnId} className="flex min-h-full flex-col bg-muted/40">
       {/* ① 导航条 + 胶片轨（sticky 全出血，毛玻璃）：走查钮 | 标题/位置 + 元信息 | 身份药丸 + 刷新。
           入场时快速淡入（chrome 不位移只浮现）；延迟窗口内换轮则原位更新 */}
       <div className={cn(
@@ -308,27 +303,27 @@ export function TurnDetail({ turn, highlight, onRefresh, subagentLabel, onPrevTu
           </div>
           {turnTotalMs > 0 && (
             <div className="mt-2.5 flex h-1.5 gap-px overflow-hidden rounded-full bg-foreground/[0.06]">
-              <div className="h-full bg-amber-500" style={{ width: `${(modelMs / turnTotalMs) * 100}%` }} title={`模型 ${formatLatency(modelMs)}`} />
+              <div className="h-full bg-amber-500" style={{ width: `${(modelMs / turnTotalMs) * 100}%` }} title={`模型 ${fmtMs(modelMs)}`} />
               {toolTotalMs > 0 && (
-                <div className="h-full bg-orange-500" style={{ width: `${(toolTotalMs / turnTotalMs) * 100}%` }} title={`工具 ${formatLatency(toolTotalMs)}`} />
+                <div className="h-full bg-orange-500" style={{ width: `${(toolTotalMs / turnTotalMs) * 100}%` }} title={`工具 ${fmtMs(toolTotalMs)}`} />
               )}
             </div>
           )}
           {turnTotalMs > 0 && (
             <div className="mt-2 text-[11px] text-muted-foreground tabular-nums flex items-center gap-2 flex-wrap">
               <span className="inline-flex items-center gap-1">
-                <span className="size-1.5 rounded-full bg-amber-500" />模型 {formatLatency(modelMs)}
+                <span className="size-1.5 rounded-full bg-amber-500" />模型 {fmtMs(modelMs)}
               </span>
               {toolTotalMs > 0 && (
                 <span className="inline-flex items-center gap-1">
-                  <span className="size-1.5 rounded-full bg-orange-500" />工具 {formatLatency(toolTotalMs)} · {turn.toolCalls.length} calls
+                  <span className="size-1.5 rounded-full bg-orange-500" />工具 {fmtMs(toolTotalMs)} · {turn.toolCalls.length} calls
                 </span>
               )}
             </div>
           )}
           {hasTtft && (
             <div className="mt-0.5 text-[11px] text-muted-foreground/75 tabular-nums" title="模型段内分解（cpx 捕获实测）">
-              首 token {formatLatency(turn.ttftMs!)} · 流式 {formatLatency(streamMs)}
+              首 token {fmtMs(turn.ttftMs!)} · 流式 {fmtMs(streamMs)}
             </div>
           )}
         </div>
@@ -495,7 +490,7 @@ function OutputSections({ toolCalls, skillEvents, skillToolCalls, highlight }: {
                 <span className="font-medium text-foreground/80">{name}</span>
                 {g.version != null && <span className="text-muted-foreground/70">v{g.version}</span>}
                 <span className={g.success ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>{g.success ? "✓" : "✗"}</span>
-                <span className="text-muted-foreground/70">{formatLatency(g.ms)}</span>
+                <span className="text-muted-foreground/70">{fmtMs(g.ms)}</span>
               </span>
             ))}
             {skillsOpen ? "▾" : "▸"}

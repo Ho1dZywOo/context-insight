@@ -16,6 +16,9 @@
 // 口径教义（lib/tool-timing 同源）：Task/agent 派发窗口含子代理整段执行，
 // 与 Σlatency 双计——派发行单独标注、不进 meta.totalToolMs 头部口径；
 // 无计时调用（源缺时间且无 wire）如实计数、不进分位（轴不撒谎）。
+// 矩阵格除聚合外带逐轮调用行（turns：同轮多调用聚合一行，跳转目标 =
+// 轮）——三级下钻（工具 → 成员 → 轮 → TurnDetail 深钻）的数据全走本
+// 单一源嵌入载荷，离线导出档案零额外端点。
 // 消费方：/api/observe/run/[runId]/tool-stats（Perf 工具耗时卡 + 离线导出）。
 
 import type { PrismaClient } from '@prisma/client';
@@ -57,6 +60,23 @@ export interface ToolMatrixCell {
   errors: number;
   /** 该（工具 × 成员）最早一次调用所在轮——下钻 Turns 的直跳锚点 */
   firstTurnId: string | null;
+  /** 逐轮调用行（三级下钻：工具 × 成员 → 轮）。同轮多次调用聚合一
+   *  行——跳转目标 = 轮（TurnDetail 深钻）非单次调用；ts = 该轮该工具
+   *  最早调用时刻，升序定序；无计时调用如实计入（totalMs 不增） */
+  turns: ToolCellTurn[];
+}
+
+export interface ToolCellTurn {
+  turnId: string;
+  /** 轮次序号（会话内 0 基，与 Turns #N 直达同口径——看到即可搜） */
+  turnIndex: number;
+  /** 该轮内此工具调用次数（>1 = 同轮多次） */
+  calls: number;
+  /** 该轮内此工具 Σ 耗时（无计时调用不计入——如实 0） */
+  totalMs: number;
+  errors: number;
+  /** 该轮该工具最早调用时刻（epoch ms；0 = 源缺时间戳） */
+  ts: number;
 }
 
 export interface RunToolStats {
@@ -100,6 +120,8 @@ interface ScratchTool extends ToolStatItem {
 
 interface ScratchCell extends ToolMatrixCell {
   firstTs: number;
+  /** turnId → 逐轮聚合（输出时 ts 升序拍平成 turns 数组） */
+  turnMap: Map<string, { turnIndex: number; calls: number; totalMs: number; errors: number; firstTs: number }>;
 }
 
 export async function collectScopeToolStats(prisma: PrismaClient, scope: ObserveScope): Promise<RunToolStats> {
@@ -116,7 +138,7 @@ export async function collectScopeToolStats(prisma: PrismaClient, scope: Observe
       durationMs: true,
       isSkillRelated: true,
       dispatchBridgeId: true,
-      turn: { select: { id: true, sessionId: true, createdAt_ts: true, createdAt: true } },
+      turn: { select: { id: true, sessionId: true, turnIndex: true, createdAt_ts: true, createdAt: true } },
     },
   });
   if (rows.length === 0) return emptyStats();
@@ -231,7 +253,7 @@ export async function collectScopeToolStats(prisma: PrismaClient, scope: Observe
     let memberRow = matrix[c.toolName];
     if (!memberRow) memberRow = matrix[c.toolName] = {};
     let cell = memberRow[taskId];
-    if (!cell) cell = memberRow[taskId] = { calls: 0, totalMs: 0, errors: 0, firstTurnId: null, firstTs: Number.POSITIVE_INFINITY };
+    if (!cell) cell = memberRow[taskId] = { calls: 0, totalMs: 0, errors: 0, firstTurnId: null, turns: [], firstTs: Number.POSITIVE_INFINITY, turnMap: new Map() };
     cell.calls++;
     if (ms > 0) cell.totalMs += ms;
     if (kind != null) cell.errors++;
@@ -240,6 +262,16 @@ export async function collectScopeToolStats(prisma: PrismaClient, scope: Observe
       cell.firstTs = ts;
       cell.firstTurnId = turn.id;
     }
+    // 逐轮聚合（三级下钻数据源）：同轮多次调用一行——跳转目标 = 轮
+    let turnCell = cell.turnMap.get(turn.id);
+    if (!turnCell) {
+      turnCell = { turnIndex: turn.turnIndex, calls: 0, totalMs: 0, errors: 0, firstTs: ts };
+      cell.turnMap.set(turn.id, turnCell);
+    }
+    turnCell.calls++;
+    if (ms > 0) turnCell.totalMs += ms;
+    if (kind != null) turnCell.errors++;
+    if (ts < turnCell.firstTs) turnCell.firstTs = ts;
   }
 
   const list: ToolStatItem[] = [];
@@ -284,6 +316,9 @@ export async function collectScopeToolStats(prisma: PrismaClient, scope: Observe
         totalMs: cell.totalMs,
         errors: cell.errors,
         firstTurnId: cell.firstTurnId,
+        turns: [...cell.turnMap.entries()]
+          .map(([turnId, t]) => ({ turnId, turnIndex: t.turnIndex, calls: t.calls, totalMs: t.totalMs, errors: t.errors, ts: t.firstTs }))
+          .sort((a, b) => a.ts - b.ts || a.turnId.localeCompare(b.turnId)),
       };
     }
   }

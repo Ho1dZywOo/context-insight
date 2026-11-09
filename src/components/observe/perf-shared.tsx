@@ -117,14 +117,13 @@ export const PERF_COLORS = { axis: "#94a3b8", grid: "#e2e8f0", danger: "#dc2626"
 
 // ── 口径格式化 ────────────────────────────────────────────────────────────────
 export function fmtMs(ms: number): string {
-  if (ms <= 0) return "0s"
-  const s = ms / 1000
-  if (s < 60) return `${s.toFixed(1)}s`
-  const m = Math.floor(s / 60)
-  const rem = Math.round(s % 60)
-  if (m < 60) return `${m}m${rem.toString().padStart(2, "0")}s`
-  const h = Math.floor(m / 60)
-  return `${h}h${(m % 60).toString().padStart(2, "0")}m`
+  // 单位阶梯：满 1s 才用 s、满 1min 才用 min（依此类推 h）——亚秒级一律
+  // ms 整数（X.Xs 四舍五入会把 40ms 挤成 0.0s，轴不撒谎从单位开始）
+  if (ms <= 0) return "0ms"
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 3600000) return `${(ms / 60000).toFixed(1)}min`
+  return `${(ms / 3600000).toFixed(1)}h`
 }
 
 export function fmtTok(n: number): string {

@@ -11,11 +11,11 @@
 // 回收站（侧栏 section 形态，VS Code Explorer 同款位）：insight 库删除的资
 // 产先落快照于此——「恢复」回流为独立会话（原 run 目录已删，不复活 run），
 // 「彻底删除/清空」不可逆。破坏性操作走两步确认（行内按钮变形，3.5s 自动
-// 解除，轻确认无弹窗）；恢复成功后 router.refresh() 让主列表同步
-// 浮现。
+// 解除，轻确认无弹窗）；恢复成功后整页 reload 让主列表同步浮现（主列表
+// items 是客户端 state——分页/搜索局部更新——router.refresh() 只换 props
+// 不重置 state，回流行不会出现；与删除流程同口径）。
 
 import { useCallback, useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { ChevronDownIcon, RotateCcwIcon, TrashIcon, LoaderIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AssetIcon, modelIconId } from '@/components/collection/AssetIcon'
@@ -49,7 +49,6 @@ function formatDeletedAt(iso: string): string {
 }
 
 export function RecycleBin() {
-  const router = useRouter()
   const [entries, setEntries] = useState<RecycleEntry[] | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -89,7 +88,10 @@ export function RecycleBin() {
       const data = await post({ action: 'restore', name })
       if (data?.imported === true) {
         setEntries(prev => (prev ?? []).filter(e => e.name !== name))
-        router.refresh()
+        // 整页 reload（非 router.refresh）：主列表 items 是客户端 state，
+        // refresh 只换 props 不重置 state，回流行不会浮现——徽章与列表会
+        // 自相矛盾（badge 4 / list 3）；删除流程同款出口，三处 UI 一致
+        window.location.reload()
       } else if (data) {
         // imported:false（空会话 0 轮 / 同 taskId 已存在走 merge/dedup）：快照
         // 未回流也未删除——保留条目并如实提示，不静默抹掉列表条目
@@ -98,7 +100,7 @@ export function RecycleBin() {
     } finally {
       setBusy(null)
     }
-  }, [post, router])
+  }, [post])
 
   const handlePurge = useCallback(async (name: string) => {
     if (arm !== name) {

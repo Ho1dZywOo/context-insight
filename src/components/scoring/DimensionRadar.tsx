@@ -1,17 +1,20 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
 // This program is free software, you can redistribute it and/or modify it under the terms and conditions of
-// CANN Open Software License Agreement Version 2.0 (the "License").
+// the CANN Open Software License Agreement Version 2.0 (the "License").
 // Please refer to the License for details. You may not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
 'use client';
 
-// 六维能力雷达图（军用扫描台版）：深色磷光屏 + 锥形扫描波（亮边在前、尾迹
-// 渐隐，否决时转红色警报）+ 圆形量程环/方位刻度/十字准线 + CRT 扫描线与
-// 暗角。纯 SVG + CSS 动画（GPU transform），不引图表库（仓库红线）；扫描波
-// 在网格与数据形之下，reduced-motion 时静止。
+// 六维能力雷达图（工作台仪表版）：保留雷达态势——锥形扫描波（亮边在前、
+// 尾迹渐隐，否决时转红色警报）+ 圆形量程环/方位刻度/十字准线 + 平滑数值
+// 形与顶点脉冲；剥掉早期军用磷光屏的暗黑外壳（CRT 扫描线/暗角/取景框/
+// 状态灯），配色全走主题 CSS 变量（--foreground/--muted-foreground），浅色
+// 与深色主题同卡自适应，与工作台 Card 语言同门。纯 SVG + CSS 动画（GPU
+// transform），不引图表库（仓库红线）；扫描波在网格与数据形之下，
+// reduced-motion 时静止。
 // D1/D2 是否决维没有 0-1 分，按判定映射：完成/clean=1、未完成/violation=0、
 // 无法判定=0.5、疑似=0.7——形状示意用，真实结论看旁边徽标。
 
@@ -74,15 +77,11 @@ export function DimensionRadar({ dimensions, size = 360 }: { dimensions: Dimensi
   const main = vetoed ? '#ef4444' : '#3b82f6';
   const accent = vetoed ? '#f97316' : '#8b5cf6';
 
-  // 磷光台色：正常 = 磷光绿；否决 = 红色警报（扫描波/刻度/角标同步转红）
-  const phos = (a: number) => vetoed ? `rgba(248,113,113,${a})` : `rgba(52,211,153,${a})`;
-  const phosBright = vetoed ? '#fca5a5' : '#99f6e4';
-  const screenBg = vetoed
-    ? 'radial-gradient(circle at 50% 52%, #26121a 0%, #170a10 68%, #100609 100%)'
-    : 'radial-gradient(circle at 50% 52%, #0d2130 0%, #081523 68%, #060e18 100%)';
+  // 扫描波（主题色锥形渐变）：正常 = 品牌蓝尾迹；否决 = 红色警报——浅深
+  // 两态同色相（半透明主色，浅底深底都可读）
   const beamBg = vetoed
-    ? 'conic-gradient(from 0deg, transparent 0deg, transparent 235deg, rgba(248,113,113,0.04) 275deg, rgba(248,113,113,0.12) 315deg, rgba(252,165,165,0.30) 348deg, rgba(254,226,226,0.52) 360deg)'
-    : 'conic-gradient(from 0deg, transparent 0deg, transparent 235deg, rgba(52,211,153,0.03) 275deg, rgba(52,211,153,0.10) 315deg, rgba(94,234,212,0.28) 348deg, rgba(236,254,255,0.55) 360deg)';
+    ? 'conic-gradient(from 0deg, transparent 0deg, transparent 250deg, rgba(239,68,68,0.03) 290deg, rgba(239,68,68,0.10) 325deg, rgba(239,68,68,0.20) 350deg, rgba(252,165,165,0.38) 360deg)'
+    : 'conic-gradient(from 0deg, transparent 0deg, transparent 250deg, rgba(59,130,246,0.03) 290deg, rgba(59,130,246,0.09) 325deg, rgba(59,130,246,0.18) 350deg, rgba(147,197,253,0.38) 360deg)';
 
   const valuePoints = axes.map((d, i) => pointOf(i, radius * Math.max(0.05, dimValue(d)!)));
   const shapePath = smoothClosedPath(valuePoints);
@@ -119,10 +118,7 @@ export function DimensionRadar({ dimensions, size = 360 }: { dimensions: Dimensi
   });
 
   return (
-    <div
-      className="relative overflow-hidden rounded-xl ring-1"
-      style={{ background: screenBg, borderColor: 'transparent', boxShadow: `inset 0 0 32px rgba(0,0,0,0.45), 0 0 0 1px ${phos(0.16)}` }}
-    >
+    <div className="relative">
       <style>{`
         @media (prefers-reduced-motion: no-preference) {
           .${uid}-grow { animation: ${uid}-pop 0.9s cubic-bezier(0.22, 1.2, 0.36, 1) both; }
@@ -132,8 +128,6 @@ export function DimensionRadar({ dimensions, size = 360 }: { dimensions: Dimensi
           }
           .${uid}-beam { animation: ${uid}-spin 6s linear infinite; will-change: transform; }
           @keyframes ${uid}-spin { to { transform: rotate(360deg); } }
-          .${uid}-dot { animation: ${uid}-blink 1.6s ease-in-out infinite; }
-          @keyframes ${uid}-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
         }
       `}</style>
 
@@ -145,26 +139,19 @@ export function DimensionRadar({ dimensions, size = 360 }: { dimensions: Dimensi
       <svg width={size + labelPad * 2} height={size} viewBox={`${-labelPad} 0 ${size + labelPad * 2} ${size}`} className="relative h-auto w-full shrink-0" aria-label="六维能力雷达图">
         <defs>
           <linearGradient id={`${uid}-fill`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor={main} stopOpacity="0.55" />
-            <stop offset="100%" stopColor={accent} stopOpacity="0.25" />
+            <stop offset="0%" stopColor={main} stopOpacity="0.38" />
+            <stop offset="100%" stopColor={accent} stopOpacity="0.16" />
           </linearGradient>
-          <filter id={`${uid}-glow`} x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur stdDeviation="6" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
         </defs>
 
         {/* 量程环（圆形）+ 十字准线：雷达台的圆形基准，与六边形数据网叠加 */}
         {[0.33, 0.66, 1].map(f => (
-          <circle key={f} cx={cx} cy={cy} r={radius * f} fill="none" stroke={phos(f === 1 ? 0.35 : 0.1)} strokeWidth={f === 1 ? 1 : 0.7} />
+          <circle key={f} cx={cx} cy={cy} r={radius * f} fill="none" stroke="var(--muted-foreground)" strokeOpacity={f === 1 ? 0.38 : 0.12} strokeWidth={f === 1 ? 1 : 0.7} />
         ))}
-        <line x1={cx - radius} y1={cy} x2={cx + radius} y2={cy} stroke={phos(0.12)} strokeWidth={0.6} />
-        <line x1={cx} y1={cy - radius} x2={cx} y2={cy + radius} stroke={phos(0.12)} strokeWidth={0.6} />
+        <line x1={cx - radius} y1={cy} x2={cx + radius} y2={cy} stroke="var(--muted-foreground)" strokeOpacity={0.14} strokeWidth={0.6} />
+        <line x1={cx} y1={cy - radius} x2={cx} y2={cy + radius} stroke="var(--muted-foreground)" strokeOpacity={0.14} strokeWidth={0.6} />
         {/* 中心点 */}
-        <circle cx={cx} cy={cy} r={2} fill={phosBright} opacity={0.9} />
+        <circle cx={cx} cy={cy} r={2} fill="var(--muted-foreground)" opacity={0.55} />
 
         {/* 六边形数据网：外环实线、内环虚线 */}
         {[0.25, 0.5, 0.75, 1].map(f => (
@@ -172,39 +159,39 @@ export function DimensionRadar({ dimensions, size = 360 }: { dimensions: Dimensi
             key={f}
             points={ringPolygon(f)}
             fill="none"
-            stroke={phos(f === 1 ? 0.5 : 0.22)}
+            stroke="var(--muted-foreground)"
+            strokeOpacity={f === 1 ? 0.45 : 0.16}
             strokeWidth={f === 1 ? 1.4 : 0.8}
             strokeDasharray={f === 1 ? undefined : '3 4'}
           />
         ))}
         {/* 环刻度（沿顶轴） */}
         {[0.25, 0.5, 0.75, 1].map(f => (
-          <text key={f} x={cx + 8} y={cy - radius * f + 3} fill={phos(0.55)} fontSize={9} fontFamily="monospace">
+          <text key={f} x={cx + 8} y={cy - radius * f + 3} fill="var(--muted-foreground)" fillOpacity={0.65} fontSize={9} fontFamily="system-ui, sans-serif">
             {f * 100}
           </text>
         ))}
         {/* 轴线 */}
         {axes.map((_, i) => {
           const [x, y] = pointOf(i, radius);
-          return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke={phos(0.18)} strokeWidth={0.7} />;
+          return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--muted-foreground)" strokeOpacity={0.14} strokeWidth={0.7} />;
         })}
         {/* 方位刻度 */}
         {ticks.map((t, i) => (
-          <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke={phos(t.cardinal ? 0.55 : 0.3)} strokeWidth={t.cardinal ? 1.1 : 0.7} />
+          <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke="var(--muted-foreground)" strokeOpacity={t.cardinal ? 0.42 : 0.2} strokeWidth={t.cardinal ? 1.1 : 0.7} />
         ))}
 
-        {/* 数值形状：发光 + 渐变填充 + 平滑曲线（入场生长动画） */}
+        {/* 数值形状：渐变填充 + 平滑曲线（入场生长动画） */}
         <g className={`${uid}-grow`} style={origin}>
-          <path d={shapePath} fill={`url(#${uid}-fill)`} filter={`url(#${uid}-glow)`} opacity={0.9} />
           <path d={shapePath} fill={`url(#${uid}-fill)`} stroke={main} strokeWidth={2.2} strokeLinejoin="round" strokeLinecap="round" />
           {valuePoints.map((p, i) => (
             <g key={axes[i].dimensionId}>
-              {/* 顶点脉冲光晕（SMIL：半径扩散 + 淡出） */}
+              {/* 顶点脉冲（SMIL：半径扩散 + 淡出） */}
               <circle cx={p[0]} cy={p[1]} r={3} fill="none" stroke={main} strokeWidth={1}>
-                <animate attributeName="r" values="3;11" dur="2.2s" begin={`${(i * 0.28).toFixed(2)}s`} repeatCount="indefinite" />
-                <animate attributeName="opacity" values="0.7;0" dur="2.2s" begin={`${(i * 0.28).toFixed(2)}s`} repeatCount="indefinite" />
+                <animate attributeName="r" values="3;9" dur="2.4s" begin={`${(i * 0.28).toFixed(2)}s`} repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0.5;0" dur="2.4s" begin={`${(i * 0.28).toFixed(2)}s`} repeatCount="indefinite" />
               </circle>
-              <circle cx={p[0]} cy={p[1]} r={3.4} fill={scoreHex(dimValue(axes[i]))} stroke="#0b1520" strokeWidth={1.2} />
+              <circle cx={p[0]} cy={p[1]} r={3.4} fill={scoreHex(dimValue(axes[i]))} stroke="var(--background)" strokeWidth={1.2} />
             </g>
           ))}
         </g>
@@ -219,28 +206,14 @@ export function DimensionRadar({ dimensions, size = 360 }: { dimensions: Dimensi
           const [vx, vy] = pointOf(i, radius - 20);
           return (
             <g key={d.dimensionId}>
-              <text x={x} y={y + 3} textAnchor={anchor} fill="#cdd9e5" fontSize={10.5} fontWeight={700}>{label}</text>
-              <text x={vx} y={vy + 3} textAnchor="middle" fill={scoreHex(dimValue(d))} fontSize={10} fontFamily="monospace" fontWeight={700}>
+              <text x={x} y={y + 3} textAnchor={anchor} fill="var(--foreground)" fillOpacity={0.78} fontSize={10.5} fontWeight={600}>{label}</text>
+              <text x={vx} y={vy + 3} textAnchor="middle" fill={scoreHex(dimValue(d))} fontSize={10} fontFamily="system-ui, sans-serif" fontWeight={700}>
                 {valueText}
               </text>
             </g>
           );
         })}
       </svg>
-
-      {/* CRT 扫描线 + 暗角（磷光屏质感，纯装饰不拦事件） */}
-      <div aria-hidden className="pointer-events-none absolute inset-0" style={{ background: 'repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 3px)' }} />
-      <div aria-hidden className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(circle at 50% 52%, transparent 52%, rgba(3,9,16,0.55) 100%)' }} />
-      {/* 角标框（军用取景框四角） */}
-      <span aria-hidden className="pointer-events-none absolute left-1.5 top-1.5 size-3.5 border-l border-t" style={{ borderColor: phos(0.5) }} />
-      <span aria-hidden className="pointer-events-none absolute right-1.5 top-1.5 size-3.5 border-r border-t" style={{ borderColor: phos(0.5) }} />
-      <span aria-hidden className="pointer-events-none absolute bottom-1.5 left-1.5 size-3.5 border-b border-l" style={{ borderColor: phos(0.5) }} />
-      <span aria-hidden className="pointer-events-none absolute bottom-1.5 right-1.5 size-3.5 border-b border-r" style={{ borderColor: phos(0.5) }} />
-      {/* 状态灯：正常 SWEEP / 否决 ALERT */}
-      <span aria-hidden className="pointer-events-none absolute bottom-2 right-3 flex items-center gap-1 font-mono text-[9px] tracking-[0.2em]" style={{ color: phos(0.6) }}>
-        <span className={`${uid}-dot inline-block size-1.5 rounded-full`} style={{ background: phosBright }} />
-        {vetoed ? 'ALERT' : 'SWEEP'}
-      </span>
     </div>
   );
 }

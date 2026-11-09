@@ -11,13 +11,13 @@
 // 工具耗时统计、右下钻详情面板（master-detail；lg 视口断点对半分栏——与
 // OverviewPanels/SkillCharts 同门，窄视口面板沉底）。
 // 左列与同页热点排行同门语法：inset 分组列表（发丝行分隔 + 微底色容
-// 器）、行悬停浮层、chevron 弹性旋转选中、标签上/值下的右对齐统计列、
-// 悬停浮现的下钻角标（点击 = 该工具全成员下钻）。行内条 = Σ 执行时长比
-// 例条（HTML 行内条，与热点排行/文件读取量同门——非坐标图，坐标图仍纯
-// SVG 铁律），条内按成员构成堆叠：Top-3 成员段（悬停给名/量，点段 =
-// tool:X member:Y 下钻）+ 灰「其他」段——零点击回答「这个工具的时间
-// 花在谁身上」；p50/p95 近秩分位刻度落在条上（慢工具一眼可见，平均会
-// 撒谎）。右栏常驻选中工具的成员分解（默认选中 Σ 最高工具，再点同行收
+// 器）、行悬停浮层、chevron 弹性旋转选中、标签上/值下的统计列（列内数
+// 值居中——双列并排时右对齐读不齐，居中读齐）：总耗时 + 最大耗时（均
+// 值会撒谎，最大是长尾的直觉读法；p50/p95 分位保留在悬停读数）、悬停
+// 浮现的下钻角标（点击 = 该工具全成员下钻）。「这工具的时间花在谁身
+// 上」的成员构成归右栏分解面板单一出口，行内不画堆叠条（试过 Top-3
+// 成员段 + 灰「其他」段的堆叠条——构成信息看右栏即可，条上留不下有
+// 效信息，撤）。右栏常驻选中工具的成员分解（默认选中 Σ 最高工具，再点同行收
 // 起给占位空态）：全量成员按 Σ 降序 + 比例条 + 搜索框双匹配显示名/原始
 // taskId，超限折叠「展开全部」——成员是无界维度（solo 1 个 → 大 run 237
 // 个），纵向清单 + Top-K + 搜索 + 点击下钻是高基数维度的业界收敛答案。
@@ -25,28 +25,26 @@
 // Task/agent 派发行灰条带「派发」胶囊标（窗口 = 子代理整段执行，不进 Σ
 // 工具执行头部口径）；skill 族元调用行（skill / load_skill / 技能派发型
 // ——提示词注入而非可执行工具，isSkillRelated 由采集侧 tool-conventions
-// 单源判定）带「技能」胶囊标，悬停解释耗时语义。下钻唯一出口 = Turns
-// 搜索语法深链（幽灵角标 → tool:X 全成员，成员段/分解行 →
-// tool:X member:Y）——Turns 命中索引即调用清单，叙事舞台已渲染工具调用
-// 块（参数/结果/错误/时长），零新清单面。
+// 单源判定）带「技能」胶囊标，悬停解释耗时语义。下钻三级：工具行 →
+// 成员分解（master-detail）→ 成员行展开逐轮调用（同轮多调用聚合一行，
+// Σ 降序找慢轮）→ 轮次行跳转该轮（TurnDetail 深钻，?turn= 深链）；工
+// 具行幽灵角标 = Turns 搜索语法深链（tool:X 全成员）——命中索引即调用
+// 清单，叙事舞台已渲染工具调用块（参数/结果/错误/时长），零新清单面。
 
 import { useState } from "react";
 import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   fmtMs,
-  PERF_COLORS,
   perfEntrance,
   PERF_CARD_SM,
 } from "@/components/observe/perf-shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { RunToolStats } from "@/lib/observe/collectors/tool-stats";
+import type { RunToolStats, ToolCellTurn } from "@/lib/observe/collectors/tool-stats";
 
-const SEG_COLORS = ["#2563eb", "#16a34a", "#d97706"]; // 堆叠段：按行内位置（Top-1/2/3）着色不按成员——识别靠悬停与分解面板
-const OTHER_COLOR = "#cbd5e1";   // 「其他」聚合段：中性灰（不可点——聚合非成员）
+const SEG_COLORS = ["#2563eb", "#16a34a", "#d97706"]; // 右栏成员分解行条色（单色用量——条色不编码成员身份，识别靠清单文字）
 const DISPATCH_COLOR = "#8c959f"; // 与时间构成「重试等待」灰同源
 const SKILL_COLOR = "#8b5cf6";   // 与 Token 构成「推理」紫同源（技能 = 提示词注入，语义相邻）
-const STACK_TOP = 3;             // 条内堆叠取前 N 成员（其余归「其他」段）
 const TOOL_FOLD = 15;            // 工具行折叠阈值（超限折叠 +「展开全部」）
 const MEMBER_FOLD = 12;          // 分解面板成员折叠阈值（同上）
 
@@ -56,12 +54,15 @@ interface MemberCell {
   calls: number;
   totalMs: number;
   errors: number;
+  /** 逐轮调用行（矩阵格单一源直传；展示序 = Σ 降序） */
+  turns: ToolCellTurn[];
 }
 
 export function PerfToolTime({
   stats,
   members,
   totalNonLlmMs,
+  onOpenTurn,
   onOpenSearch,
 }: {
   stats: RunToolStats;
@@ -69,7 +70,9 @@ export function PerfToolTime({
   members: Array<{ taskId: string; label: string | null }>;
   /** Perf 画像的非 LLM 时间（墙钟 − LLM）：占比分母，null = 画像缺席则只显绝对值 */
   totalNonLlmMs?: number | null;
-  /** 下钻出口：Turns 搜索语法深链（唯一出口——命中索引即调用清单） */
+  /** 三级下钻末跳：逐轮行点击 → Turns 该轮深钻（?turn= 深链） */
+  onOpenTurn?: (turnId: string) => void;
+  /** 下钻出口：Turns 搜索语法深链（工具行角标 → 全员调用清单） */
   onOpenSearch?: (q: string) => void;
 }) {
   const tools = stats.tools;
@@ -78,6 +81,7 @@ export function PerfToolTime({
   const [memberQuery, setMemberQuery] = useState("");
   const [showAllTools, setShowAllTools] = useState(false);
   const [showAllMembers, setShowAllMembers] = useState<Set<string>>(new Set());
+  const [expandedMembers, setExpandedMembers] = useState<Set<string>>(new Set());
 
   // 每工具的成员格全量清单（Σ 降序）：堆叠段与成员分解面板共用单一源；
   // 显示名走 Perf 泳道同源（member.label ?? taskId），无 label 回落原始 ID
@@ -92,6 +96,7 @@ export function PerfToolTime({
           calls: cell.calls,
           totalMs: cell.totalMs,
           errors: cell.errors,
+          turns: cell.turns,
         }))
         .sort(
           (a, b) =>
@@ -100,15 +105,14 @@ export function PerfToolTime({
     ]),
   );
 
-  const maxToolMs = Math.max(1, ...tools.map(t => t.totalMs));
-
   // Σ 工具执行（跨成员累加）/ 非 LLM 墙钟：多成员并发执行时 Σ 工具时长可超
   // 墙钟非 LLM 时间，比率可 >100%——诚实标注、不钳制（轴不撒谎）
   const toolShare = totalNonLlmMs != null && totalNonLlmMs > 0 ? meta.totalToolMs / totalNonLlmMs : null;
 
-  // 选中即换工具清搜索（再点同行收起给占位空态）
+  // 选中即换工具清搜索与展开态（再点同行收起给占位空态）
   const toggle = (toolName: string) => {
     setMemberQuery("");
+    setExpandedMembers(new Set());
     setSelected(prev => (prev === toolName ? null : toolName));
   };
 
@@ -117,6 +121,19 @@ export function PerfToolTime({
     if (next.has(id)) next.delete(id);
     else next.add(id);
     return next;
+  };
+
+  // 成员行点击 = 展开该成员该工具的逐轮调用清单（再点收起）
+  const toggleMember = (taskId: string) => {
+    setExpandedMembers(prev => toggleSet(prev, taskId));
+  };
+
+  /** 逐轮行时间（MM-DD HH:mm:ss，源缺时间戳回落「—」） */
+  const fmtTurnTs = (ts: number) => {
+    if (!(ts > 0)) return "—";
+    const d = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   };
 
   const visibleTools = showAllTools ? tools : tools.slice(0, TOOL_FOLD);
@@ -160,12 +177,7 @@ export function PerfToolTime({
             <div className="divide-y divide-foreground/[0.06] overflow-hidden rounded-xl bg-foreground/[0.03] dark:bg-foreground/[0.06]">
               {visibleTools.map(t => {
                 const isSelected = effectiveSelected === t.toolName;
-                const cells = cellsByTool.get(t.toolName) ?? [];
-                const top = cells.slice(0, STACK_TOP);
-                const restMs = cells.slice(STACK_TOP).reduce((s, c) => s + c.totalMs, 0);
-                const restCount = cells.length - top.length;
                 const errRate = t.calls > 0 ? t.errors / t.calls : 0;
-                const barPct = (t.totalMs / maxToolMs) * 100;
                 const nameTitle = [
                   `${t.toolName}${t.isDispatch ? "（派发——窗口为子代理整段执行，另计不入 Σ 工具执行）" : t.isSkillRelated ? "（技能加载/调用——提示词注入类元调用，耗时不代表工具执行）" : ""}`,
                   `${t.calls} 次 · 错误 ${t.errors}${t.errors > 0 ? `（${Math.round(errRate * 100)}%）` : ""}`,
@@ -218,72 +230,17 @@ export function PerfToolTime({
                             {t.calls} 次
                           </span>
                         </div>
-                        {/* Σ 时长比例条：按成员构成堆叠（Top-3 段 + 灰「其他」段；
-                            派发行段统一灰——「另计」信号不丢）+ p50/p95 分位刻度 */}
-                        <div
-                          className="relative mt-1.5 h-1.5 w-full max-w-[440px] rounded-full bg-muted"
-                          title={`Σ ${fmtMs(t.totalMs)} · 为最高工具的 ${barPct.toFixed(0)}%`}
-                        >
-                          <div
-                            className="flex h-full gap-px overflow-hidden rounded-full"
-                            style={{ width: `${Math.min(barPct, 100)}%` }}
-                          >
-                            {top.map((seg, si) => (
-                              <div
-                                key={seg.taskId}
-                                data-tool-seg={`${t.toolName}·${seg.taskId}`}
-                                className={cn("h-full min-w-0", onOpenSearch && "cursor-pointer")}
-                                style={{
-                                  flexGrow: Math.max(seg.totalMs, 0.0001),
-                                  flexBasis: 0,
-                                  background: t.isDispatch ? DISPATCH_COLOR : SEG_COLORS[si],
-                                  opacity: t.isDispatch ? 0.5 : 0.8,
-                                }}
-                                title={`${seg.label} · ${seg.calls} 次 · ${fmtMs(seg.totalMs)}${seg.errors > 0 ? ` · 错误 ${seg.errors}` : ""}\n点击 → Turns 搜索该成员的调用`}
-                                onClick={
-                                  onOpenSearch
-                                    ? e => {
-                                        e.stopPropagation();
-                                        onOpenSearch(`tool:${t.toolName} member:${seg.taskId}`);
-                                      }
-                                    : undefined
-                                }
-                              />
-                            ))}
-                            {restMs > 0 && (
-                              <div
-                                data-tool-seg={`${t.toolName}·other`}
-                                className="h-full min-w-0"
-                                style={{ flexGrow: Math.max(restMs, 0.0001), flexBasis: 0, background: OTHER_COLOR, opacity: 0.9 }}
-                                title={`其他 ${restCount} 成员 · Σ ${fmtMs(restMs)}`}
-                              />
-                            )}
-                          </div>
-                          {t.p50Ms > 0 && (
-                            <span
-                              className="absolute top-1/2 h-[11px] w-[2px] -translate-y-1/2 rounded-full bg-white shadow-[0_0_0_0.5px_rgba(0,0,0,0.18)]"
-                              style={{ left: `${Math.min((t.p50Ms / maxToolMs) * 100, 100)}%` }}
-                              title={`p50 ${fmtMs(t.p50Ms)}（单次调用分位）`}
-                            />
-                          )}
-                          {t.p95Ms > 0 && (
-                            <span
-                              className="absolute top-1/2 h-[11px] w-[2px] -translate-y-1/2 rounded-full"
-                              style={{ left: `${Math.min((t.p95Ms / maxToolMs) * 100, 100)}%`, background: PERF_COLORS.danger }}
-                              title={`p95 ${fmtMs(t.p95Ms)}（单次调用分位）`}
-                            />
-                          )}
-                        </div>
                       </div>
-                      {/* 右对齐统计列（标签上/值下——热点排行同门语法） */}
+                      {/* 居中统计列（标签上/值下；列内数值居中读齐）：总耗时
+                          + 最大耗时——均值会撒谎，最大是长尾的直觉读法 */}
                       <div className="flex shrink-0 items-center gap-4">
-                        <div className="flex flex-col items-end leading-tight">
-                          <span className="text-[10px] text-muted-foreground">耗时</span>
+                        <div className="flex flex-col items-center leading-tight">
+                          <span className="text-[10px] text-muted-foreground">总耗时</span>
                           <span className="text-xs font-semibold tabular-nums">{fmtMs(t.totalMs)}</span>
                         </div>
-                        <div className="hidden flex-col items-end leading-tight sm:flex">
-                          <span className="text-[10px] text-muted-foreground">p95</span>
-                          <span className="text-xs font-semibold tabular-nums">{fmtMs(t.p95Ms)}</span>
+                        <div className="hidden flex-col items-center leading-tight sm:flex">
+                          <span className="text-[10px] text-muted-foreground">最大耗时</span>
+                          <span className="text-xs font-semibold tabular-nums">{fmtMs(t.maxMs)}</span>
                         </div>
                       </div>
                       {/* 幽灵定位角标：悬停浮现，点击 = 该工具全成员下钻 Turns 搜索 */}
@@ -389,51 +346,99 @@ export function PerfToolTime({
                         {q ? `${filtered.length}/${cells.length}` : `成员 · ${cells.length}`}
                       </span>
                     </div>
-                    {/* 成员行：全量按 Σ 降序 + 比例条，点击 = 该成员该工具下钻 */}
+                    {/* 成员行（含逐轮展开）：点击 = 展开该成员该工具的逐轮
+                        调用清单；轮次行点击 = 跳转该轮（TurnDetail 深钻） */}
                     <div className="mt-1.5">
-                      {visible.map(c => (
-                        <div
-                          key={c.taskId}
-                          data-member-row={`${selectedTool.toolName}·${c.taskId}`}
-                          role="button"
-                          tabIndex={0}
-                          className={cn(
-                            "flex items-center gap-3 border-b border-black/[0.04] px-1 py-1.5 text-[11px] tabular-nums transition-colors last:border-0 dark:border-white/[0.05]",
-                            onOpenSearch ? "cursor-pointer hover:bg-muted/50" : undefined,
-                          )}
-                          onClick={
-                            onOpenSearch
-                              ? () => onOpenSearch(`tool:${selectedTool.toolName} member:${c.taskId}`)
-                              : undefined
-                          }
-                          onKeyDown={
-                            onOpenSearch
-                              ? e => { if (e.key === "Enter" || e.key === " ") onOpenSearch(`tool:${selectedTool.toolName} member:${c.taskId}`) }
-                              : undefined
-                          }
-                        >
-                          <span className="w-[128px] shrink-0 truncate font-medium" title={c.taskId}>
-                            {c.label}
-                          </span>
-                          <span className={cn("w-[80px] shrink-0", c.errors > 0 ? "text-red-600" : "text-muted-foreground")}>
-                            {`${c.calls} 次${c.errors > 0 ? ` · 错 ${c.errors}` : ""}`}
-                          </span>
-                          <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+                      {visible.map(c => {
+                        const isExpanded = expandedMembers.has(c.taskId);
+                        return (
+                          <div key={c.taskId} className="border-b border-black/[0.04] last:border-0 dark:border-white/[0.05]">
                             <div
-                              className="h-full rounded-full transition-[width] duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]"
-                              style={{
-                                width: `${Math.round((c.totalMs / maxCellMs) * 100)}%`,
-                                background: selectedTool.isDispatch ? DISPATCH_COLOR : SEG_COLORS[0],
-                                opacity: selectedTool.isDispatch ? 0.5 : 0.8,
-                              }}
-                            />
+                              data-member-row={`${selectedTool.toolName}·${c.taskId}`}
+                              role="button"
+                              tabIndex={0}
+                              className="flex cursor-pointer items-center gap-3 px-1 py-1.5 text-[11px] tabular-nums transition-colors hover:bg-muted/50"
+                              onClick={() => toggleMember(c.taskId)}
+                              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") toggleMember(c.taskId) }}
+                            >
+                              <span className="w-[128px] shrink-0 truncate font-medium" title={c.taskId}>
+                                {c.label}
+                              </span>
+                              <span className={cn("w-[80px] shrink-0", c.errors > 0 ? "text-red-600" : "text-muted-foreground")}>
+                                {`${c.calls} 次${c.errors > 0 ? ` · 错 ${c.errors}` : ""}`}
+                              </span>
+                              <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className="h-full rounded-full transition-[width] duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]"
+                                  style={{
+                                    width: `${Math.round((c.totalMs / maxCellMs) * 100)}%`,
+                                    background: selectedTool.isDispatch ? DISPATCH_COLOR : SEG_COLORS[0],
+                                    opacity: selectedTool.isDispatch ? 0.5 : 0.8,
+                                  }}
+                                />
+                              </div>
+                              <span className="w-[48px] shrink-0 text-right font-semibold">
+                                {fmtMs(c.totalMs)}
+                              </span>
+                              <ChevronRightIcon
+                                className={cn(
+                                  "size-3 shrink-0 text-muted-foreground/40 transition-transform duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+                                  isExpanded && "rotate-90",
+                                )}
+                              />
+                            </div>
+                            {/* 逐轮调用清单（三级下钻第三级）：卡片内滚动窗——
+                                多调用成员不撑长面板（Σ 降序慢轮置顶，深滚是
+                                少数场景）；同轮多次调用一行（×N）；旧档案无
+                                turns 数组时空态不炸 */}
+                            {isExpanded && (() => {
+                              const rows = [...(c.turns ?? [])].sort(
+                                (a, b) => b.totalMs - a.totalMs || a.ts - b.ts,
+                              );
+                              return (
+                                <div
+                                  data-member-turns={`${selectedTool.toolName}·${c.taskId}`}
+                                  className="max-h-56 overscroll-contain overflow-y-auto bg-foreground/[0.02] py-1 pl-2 dark:bg-white/[0.02]"
+                                >
+                                  {rows.map(e => (
+                                    <div
+                                      key={e.turnId}
+                                      data-member-turn={e.turnId}
+                                      role="button"
+                                      tabIndex={onOpenTurn ? 0 : undefined}
+                                      title={onOpenTurn ? "跳转该轮（Turns 轮详情深钻）" : undefined}
+                                      className={cn(
+                                        "flex items-center gap-2.5 rounded-md px-2 py-1 text-[11px] tabular-nums text-muted-foreground",
+                                        onOpenTurn && "cursor-pointer hover:bg-muted/60 hover:text-foreground",
+                                      )}
+                                      onClick={onOpenTurn ? () => onOpenTurn(e.turnId) : undefined}
+                                      onKeyDown={onOpenTurn ? ev => { if (ev.key === "Enter" || ev.key === " ") onOpenTurn(e.turnId) } : undefined}
+                                    >
+                                      {e.turnIndex != null && (
+                                        <span
+                                          className="shrink-0 font-medium text-foreground/70"
+                                          title="轮次序号（与 Turns #N 直达同口径）"
+                                        >
+                                          #{e.turnIndex}
+                                        </span>
+                                      )}
+                                      <span className="w-[96px] shrink-0">{fmtTurnTs(e.ts)}</span>
+                                      {e.calls > 1 && <span className="shrink-0">×{e.calls}</span>}
+                                      {e.errors > 0 && <span className="shrink-0 text-red-600">错 {e.errors}</span>}
+                                      <span className="ml-auto shrink-0 font-semibold text-foreground/80">
+                                        {e.totalMs > 0 ? fmtMs(e.totalMs) : "无计时"}
+                                      </span>
+                                    </div>
+                                  ))}
+                                  {rows.length === 0 && (
+                                    <div className="px-2 py-1 text-center text-[11px]">（无逐轮数据）</div>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
-                          <span className="w-[48px] shrink-0 text-right font-semibold">
-                            {fmtMs(c.totalMs)}
-                          </span>
-                          <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40" />
-                        </div>
-                      ))}
+                        );
+                      })}
                       {filtered.length === 0 && (
                         <div className="px-1 py-3 text-center text-[11px] text-muted-foreground">无匹配成员</div>
                       )}
@@ -452,9 +457,9 @@ export function PerfToolTime({
             )}
           </div>
         </div>
-        {/* 图例：堆叠与分位刻度读法 */}
+        {/* 图例：交互读法（构成信息归右栏分解面板，条已退役） */}
         <p className="mt-1.5 text-[10px] text-muted-foreground">
-          条 = Σ 执行时长（段 = 前 {STACK_TOP} 成员，灰段 = 其他成员聚合）· 白刻度 p50 · 红刻度 p95（单次调用分位）· 点击行选中（右侧看成员分解）· 点段/成员行/搜索图标 → Turns 搜索直达调用清单
+          点击工具行选中（右侧看成员分解）· 点成员行展开逐轮调用 · 点轮次行跳转该轮 · 搜索图标 → Turns 全员调用搜索
         </p>
       </CardContent>
     </Card>

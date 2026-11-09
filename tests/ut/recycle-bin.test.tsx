@@ -8,22 +8,17 @@
 
 // @vitest-environment happy-dom
 // 回收站面板 IT：挂载即取列表（GET /api/recycle）、恢复动作（POST restore +
-// 行移除 + router.refresh 同步主列表）、彻底删除两步确认（行内武装→确认）、
-// 清空两步确认。fetch/导航全 mock，组件层渲染。
+// 行移除 + 整页 reload 同步主列表——主列表 items 是客户端 state，
+// router.refresh() 只换 props 不重置 state，回流行不会浮现）、彻底删除两步
+// 确认（行内武装→确认）、清空两步确认。fetch/导航全 mock，组件层渲染。
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { RecycleBin } from '../../src/components/RecycleBin'
 
-const { pushSpy, refreshSpy, toastErrorSpy } = vi.hoisted(() => ({ pushSpy: vi.fn(), refreshSpy: vi.fn(), toastErrorSpy: vi.fn() }))
-
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: pushSpy, replace: () => {}, back: () => {}, refresh: refreshSpy }),
-  useSearchParams: () => new URLSearchParams(''),
-  usePathname: () => '/',
-}))
+const { toastErrorSpy } = vi.hoisted(() => ({ toastErrorSpy: vi.fn() }))
 
 vi.mock('sonner', () => ({ toast: { error: toastErrorSpy, success: vi.fn(), warning: vi.fn() } }))
 
@@ -48,13 +43,15 @@ describe('回收站面板', () => {
   let container: HTMLDivElement | null = null
   let root: Root | null = null
   let origFetch: typeof fetch
+  // 恢复成功 → window.location.reload（整页同步主列表）；happy-dom 的
+  // location.reload 可被 spyOn，断言导航出口而不真跳页
+  let reloadMock: MockInstance
 
   beforeEach(() => {
     entries = [...ENTRIES]
     restorePayload = { imported: true, query: null }
     calls.length = 0
-    pushSpy.mockClear()
-    refreshSpy.mockClear()
+    reloadMock = vi.spyOn(window.location, 'reload').mockImplementation(() => {})
     toastErrorSpy.mockClear()
     fetchMock.mockClear()
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -85,6 +82,7 @@ describe('回收站面板', () => {
     act(() => root?.unmount())
     container?.remove()
     ;(globalThis as { fetch: unknown }).fetch = origFetch
+    reloadMock.mockRestore()
   })
 
   it('挂载即列回收条目（query 兜底 taskId、计数角标、删除时间）', async () => {
@@ -100,14 +98,14 @@ describe('回收站面板', () => {
     expect(header.textContent!.match(/Recycle Bin2/)).toBeTruthy()
   })
 
-  it('恢复：POST restore + 行移除 + router.refresh（主列表同步浮现）', async () => {
+  it('恢复：POST restore + 行移除 + 整页 reload（主列表同步浮现）', async () => {
     act(() => root!.render(createElement(RecycleBin)))
     await settle()
     const restoreBtn = [...container!.querySelectorAll('[data-recycle-restore]')][0] as HTMLButtonElement
     await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
     expect(calls.some(c => c.body?.action === 'restore' && c.body?.name === 'ses-a__dsh.db')).toBe(true)
-    expect(refreshSpy).toHaveBeenCalled()
+    expect(reloadMock).toHaveBeenCalled()
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(1)
   })
 
@@ -120,7 +118,7 @@ describe('回收站面板', () => {
     await settle()
     // 服务端 imported:false 不删快照、未回流——条目必须保留，不能静默移除
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
-    expect(refreshSpy).not.toHaveBeenCalled()
+    expect(reloadMock).not.toHaveBeenCalled()
     expect(toastErrorSpy).toHaveBeenCalled()
     expect(String(toastErrorSpy.mock.calls[0][0])).toContain('空会话无法恢复')
   })
@@ -133,7 +131,7 @@ describe('回收站面板', () => {
     await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
-    expect(refreshSpy).not.toHaveBeenCalled()
+    expect(reloadMock).not.toHaveBeenCalled()
     expect(toastErrorSpy).toHaveBeenCalled()
     expect(String(toastErrorSpy.mock.calls[0][0])).toContain('会话已存在')
   })
