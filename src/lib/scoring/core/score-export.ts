@@ -27,8 +27,14 @@ import { SCORECARD_SCHEMA } from './types';
 import { SCORER_VERSION } from './runner';
 import { loadRegistry } from '../registry';
 import { getDerivedScorecard } from './scorecard-read';
+import { mapBounded } from '@/lib/shared/map-bounded';
 
 export const SCORE_EXPORT_SCHEMA = 'insight-score-export@1' as const;
+
+/** 导出全员取卡并发上限：缓存未命中成员会触发完整现算（重 Prisma 读 + 落盘），
+ *  无界并发会在首次导出大 run 时打满事件循环 / SQLite 单写者争抢；有界限流
+ *  与湖侧清单（SCORE_FETCH_LIMIT=8）同口径，GET 幂等只读不再被 N 次并发写拖垮。 */
+export const SCORE_EXPORT_CONCURRENCY = 8;
 
 export interface ScoreExportSource {
   insightVersion: string;
@@ -94,7 +100,7 @@ export async function buildScoreExport(
   prisma: PrismaClient,
 ): Promise<ScoreExportFile> {
   const registry = await loadRegistry();
-  const entries: ScoreExportMember[] = await Promise.all(members.map(async m => {
+  const entries: ScoreExportMember[] = await mapBounded(members, SCORE_EXPORT_CONCURRENCY, async m => {
     const base = { taskId: m.taskId, framework: m.framework, label: m.label ?? null };
     try {
       const got = await getDerivedScorecard(m.taskId, { framework: m.framework, prisma, registry });
@@ -103,7 +109,7 @@ export async function buildScoreExport(
     } catch (e) {
       return { ...base, sessionId: null, scorecard: null, error: e instanceof Error ? e.message : 'scorecard-failed' };
     }
-  }));
+  });
 
   const memberTotals = entries.map(m => ({
     taskId: m.taskId,

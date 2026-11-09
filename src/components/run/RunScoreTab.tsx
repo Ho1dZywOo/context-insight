@@ -26,6 +26,7 @@ import { RunMemberPicker } from "@/components/run/RunMemberPicker";
 import { TrajectoryScoring } from "@/components/scoring/TrajectoryScoring";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
 import { fallbackDownload } from "@/lib/observe/export-html";
+import { scoreExportFileName } from "@/lib/observe/score-export-name";
 import { isSoloRunId, soloTaskIdOf } from "@/lib/run/identity";
 import { buildMainAgentTurnMap, type TurnDigest } from "@/lib/shared/turn-digest";
 import type { RunMemberRow } from "@/lib/run/member-rows";
@@ -58,12 +59,15 @@ export function RunScoreTab({ runId, runName, members, member, onMemberChange, o
         return;
       }
       const blob = new Blob([await res.text()], { type: "application/json" });
-      // solo 保持会话文件名口径；bundle 用 run 身份（与 HTML 导出同一收敛规则）
-      const base = isSoloRunId(runId)
-        ? `session_${soloTaskIdOf(runId) ?? runId}`
-        : `run_${(runName ?? runId).replace(/[\\/:*?"<>|\s]+/g, "_")}`;
-      fallbackDownload(blob, `${base}_score.json`);
-      toast.success("Score data exported", { description: `${base}_score.json — 六维评分卡 + 维度定义快照（RSI 演进语料）` });
+      // 文件名单一源：与服务端 content-disposition 同款命名（solo 会话口径 / bundle run 身份）
+      const filename = scoreExportFileName({
+        solo: isSoloRunId(runId),
+        runId,
+        taskId: soloTaskIdOf(runId),
+        runName,
+      });
+      fallbackDownload(blob, filename);
+      toast.success("Score data exported", { description: `${filename} — 六维评分卡 + 维度定义快照（RSI 演进语料）` });
     } catch {
       toast.error("Export score failed", { description: "Network error" });
     } finally {

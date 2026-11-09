@@ -19,6 +19,7 @@ import { resolveRunScope } from '@/lib/run/observe/scope';
 import { readRun } from '@/lib/run/run-store';
 import { isSoloRunId } from '@/lib/run/identity';
 import { buildScoreExport } from '@/lib/scoring';
+import { scoreExportFileName } from '@/lib/observe/score-export-name';
 
 export const GET = withRouteLog<{ params: Promise<{ runId: string }> }>('observe/run/score-export', async (
   _request: NextRequest,
@@ -39,10 +40,13 @@ export const GET = withRouteLog<{ params: Promise<{ runId: string }> }>('observe
     prisma,
   );
 
-  // 文件名：solo 保持会话口径，bundle 用 run 身份（文件系统安全字符收敛）
-  const nameBase = solo ? scope.members[0]?.taskId ?? runId : stored?.manifest.name ?? runId;
-  const safeBase = String(nameBase).replace(/[\\/:*?"<>|\s]+/g, '_');
-  const filename = `${solo ? 'session' : 'run'}_${safeBase}_score.json`;
+  // 文件名单一源：与页面按钮同款命名（solo 会话口径 / bundle run 身份，安全字符收敛）
+  const filename = scoreExportFileName({
+    solo,
+    runId,
+    taskId: solo ? scope.members[0]?.taskId ?? null : null,
+    runName: solo ? null : stored?.manifest.name ?? null,
+  });
   return new NextResponse(JSON.stringify(file, null, 2), {
     headers: {
       'content-type': 'application/json; charset=utf-8',
