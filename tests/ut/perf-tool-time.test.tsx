@@ -32,7 +32,7 @@ const tool = (toolName: string, totalMs: number): RunToolStats['tools'][number] 
 const statsOf = (tools: RunToolStats['tools'], totalToolMs: number): RunToolStats => ({
   tools,
   matrix: Object.fromEntries(
-    tools.map(t => [t.toolName, { m1: { calls: t.calls, totalMs: t.totalMs, errors: 0, firstTurnId: null } }]),
+    tools.map(t => [t.toolName, { m1: { calls: t.calls, totalMs: t.totalMs, errors: 0, firstTurnId: null, turns: [] } }]),
   ),
   members: ['m1'],
   meta: {
