@@ -10,6 +10,7 @@ const root = path.resolve(here, "..")
 
 const alias = {
   "next/navigation": path.resolve(root, "src/export-view/shims/next-navigation.ts"),
+  "next/link": path.resolve(root, "src/export-view/shims/next-link.tsx"),
 }
 
 // 解析 @/ 别名到 src/ 下实际文件（带扩展名）

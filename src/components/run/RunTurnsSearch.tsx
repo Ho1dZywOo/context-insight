@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { SearchIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ScrollFade } from "@/components/ui/scroll-fade";
 import { highlightKeyword } from "@/lib/shared/highlight";
 import { parseTurnsQuery } from "@/lib/observe/collectors/turns-query";
 import type { TurnSearchItem } from "@/lib/observe/collectors/search";
@@ -605,7 +606,7 @@ export function TurnHitsPanel({ state, hits, activeIdx, selectedTurnId, visited,
           </div>
         )}
 
-        <div className="run-scroll-fade flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2 pt-1.5">
+        <ScrollFade className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2 pt-1.5">
           {state.loading ? (
             [0, 1, 2].map(i => (
               <div key={i} className="flex animate-pulse flex-col gap-1.5 rounded-lg px-2.5 py-2">
@@ -657,7 +658,7 @@ export function TurnHitsPanel({ state, hits, activeIdx, selectedTurnId, visited,
               </button>
             ))
           )}
-        </div>
+        </ScrollFade>
       </div>
     </div>
   );

@@ -1,89 +1,181 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software: you can redistribute it and/or modify it under the terms of
+// This program is free software; you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
 // Please refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// run-first 刀J2 离线导出 IT：export-html 装配层从 run 成员视图端点取数、按
-// session 路径/URL 键存档（export-view entry.tsx 的 fetch 拦截器按 session URL
-// 匹配）——键契约是离线 bundle 的存活不变量，锁死映射防漂移。
+// @vitest-environment happy-dom
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { gatherExportData, assembleEmbeddedHtml, urlKeyOf } from '@/lib/observe/export-html';
+// run 工作台离线导出 IT（run 工作台自身即离线查看器）：gather 按工作台
+// 同一 URL 构造器取数（run 级端点 + runMemberUrlFor 成员视图）、成员富轮仓
+// 与静态档案分离、对账结果 sessionStorage 迁移——URL/键契约是离线内核
+// fetch 应答的存活不变量，锁死映射防漂移。
+
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { gatherRunExportData, assembleEmbeddedHtml, urlKeyOf } from '@/lib/observe/export-html';
+
+const sessionRef = {
+  taskId: 'exp-t1', framework: 'claude-code', rowId: 'row-1', turns: 3, totalTokens: 120,
+  durationMs: 1000, label: 'l', startTime: null, endTime: null,
+  cacheReadTokens: 0, sourcePath: null,
+};
+const memberRef = {
+  memberId: 'm1', kind: 'execute', role: 'execute', name: 'n', note: null,
+  sessionId: 'exp-t1', location: null, startedAt: null, finishedAt: null,
+  session: sessionRef,
+};
+const viewModel = {
+  runId: 'run:exp', name: 'exp', status: 'passed', exportDataComplete: true,
+  startedAt: null, finishedAt: null, generations: [1],
+  nodes: [{
+    key: 'n-a-g1', nodeId: 'a', generation: 1, label: 'a', taskType: 'agent',
+    status: 'passed', executionState: 'executed', carriedFromGeneration: null,
+    attempts: [{
+      ordinal: 1, status: 'passed', startedAt: null, finishedAt: null, outputText: null,
+      verification: { type: 't', status: 's', reason: null },
+      executeMember: memberRef, verifyMember: null,
+    }],
+    pendingMembers: [],
+    retryPolicy: null, runOnFailure: null, predecessorKeys: [], parentKey: null, hasSubgraph: false,
+  }],
+  rollbacks: [],
+  views: [{
+    id: 'main', title: '主图', parentKey: null, nodeKeys: ['n-a-g1'], ranks: {},
+    edges: [], edgeChains: [], rollbackLinks: [],
+    layout: { bands: [], positions: {}, width: 0, height: 0 },
+  }],
+  warnings: [],
+};
 
 const json = (body: unknown) => ({ ok: true, json: () => Promise.resolve(body) });
+let calls: string[] = [];
 
+beforeEach(() => {
+  calls = [];
+  sessionStorage.clear();
+});
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('run-first 刀J2：离线导出装配（run 取数 → session 键存档）', () => {
-  it('gatherExportData：核心端点取 run 成员视图 URL，按 session 路径键存档', async () => {
-    const calls: string[] = [];
+describe('run 工作台离线导出：gather（工作台同一 URL 构造器取数）', () => {
+  it('run 级端点 + 成员视图端点全量取数；file-restore 按清单枚举', async () => {
     vi.stubGlobal('fetch', (u: string) => {
       calls.push(u);
-      if (u.endsWith('/member-detail')) {
+      if (u === '/api/observe/run/run%3Aexp') return Promise.resolve(json({ run: { runId: 'run:exp', kind: 'run' }, viewModel }));
+      if (u.includes('/file-reads')) return Promise.resolve(json({ files: [{ filePath: '/a/b.ts' }, { filePath: '/a/b.ts' }], summary: {} }));
+      if (u.includes('/member-detail')) {
         return Promise.resolve(json({
+          sessionId: 'row-1',
           taskId: 'exp-t1',
           skills: [{ skillName: 's1' }],
-          agents: [{ agentName: 'a1', isSubagent: true }],
+          agents: [{ agentName: 'a1', isSubagent: true }, { agentName: null, isSubagent: false }],
         }));
       }
+      if (u.includes('/member-turns')) return Promise.resolve(json({ items: [{ turnId: 't0' }], total: 1 }));
       return Promise.resolve(json({ ok: true }));
     });
 
-    const { data, param } = await gatherExportData('solo:exp-t1', 'exp-t1', 'claude-code');
+    const payload = await gatherRunExportData('run:exp');
 
-    // 取数侧：全部走 run 成员视图端点（member 闸由 solo 单成员自动满足）
-    expect(calls).toContain('/api/observe/run/solo%3Aexp-t1/member-detail');
-    expect(calls).toContain('/api/observe/run/solo%3Aexp-t1/member-turns');
-    expect(calls).toContain('/api/observe/run/solo%3Aexp-t1/bridges');
-    expect(calls).toContain('/api/observe/run/solo%3Aexp-t1/workflow');
-    expect(calls).toContain('/api/observe/run/solo%3Aexp-t1/file-reads');
-    expect(calls).toContain('/api/observe/executions?taskId=exp-t1');
-    expect(calls).toContain('/api/observe/stats?taskId=exp-t1');
+    // run 级聚合端点
+    for (const ep of ['executions', 'skills', 'bridges', 'context', 'lanes', 'file-reads']) {
+      expect(calls).toContain(`/api/observe/run/run%3Aexp/${ep}`);
+    }
+    // 文件还原：file-reads 清单去重枚举
+    expect(calls.filter(u => u.includes('/file-restore'))).toEqual([
+      '/api/observe/run/run%3Aexp/file-restore?filePath=%2Fa%2Fb.ts',
+    ]);
+    // 成员域：富轮仓三投影旗 + 转发端点（与 UI 同一 runMemberUrlFor 构造）
+    expect(calls).toContain('/api/observe/run/run%3Aexp/member-turns?includeContent=true&includeToolDetail=true&includeMeta=true&member=exp-t1');
+    expect(calls).toContain('/api/observe/run/run%3Aexp/turn-digest?member=exp-t1');
+    expect(calls).toContain('/api/observe/run/run%3Aexp/main-agent-workflow?member=exp-t1');
+    expect(calls).toContain('/api/observe/run/run%3Aexp/scorecard?taskId=exp-t1&framework=claude-code&member=exp-t1');
+    expect(calls).toContain('/api/observe/run/run%3Aexp/mate-agent?member=exp-t1');
+    expect(calls).toContain('/api/observe/run/run%3Aexp/skill-content?taskId=exp-t1&skillName=s1&member=exp-t1');
+    expect(calls).toContain('/api/observe/run/run%3Aexp/agent-content?taskId=exp-t1&agentName=a1&framework=claude-code&member=exp-t1');
+    // 不再触碰退役的 session 端点
     expect(calls.some(u => u.includes('/api/observe/session'))).toBe(false);
 
-    // 存档侧：键 = session 路径（离线拦截器按 path 匹配，容忍 query 差异）
-    expect(Object.keys(data)).toContain('/api/observe/session');
-    expect(Object.keys(data)).toContain('/api/observe/session/turns');
-    expect(Object.keys(data)).toContain('/api/observe/session/bridges');
-    expect(Object.keys(data)).toContain('/api/observe/session/workflow');
-    expect(Object.keys(data)).toContain('/api/observe/session/file-reads');
-    expect(Object.keys(data)).toContain('/api/observe/session/skill-content-audit');
-    expect(Object.keys(data)).toContain('/api/observe/session/llm-workflow-extract');
-    expect((data['/api/observe/session'] as { taskId: string }).taskId).toBe('exp-t1');
+    // 静态档案：精确 URL 键（含 run 详情自身）
+    expect(Object.keys(payload.archive)).toContain('/api/observe/run/run%3Aexp');
+    expect(Object.keys(payload.archive)).toContain(urlKeyOf('/api/observe/run/run%3Aexp/scorecard?taskId=exp-t1&framework=claude-code&member=exp-t1'));
+    expect(Object.keys(payload.archive)).toContain(urlKeyOf('/api/observe/run/run%3Aexp/file-restore?filePath=%2Fa%2Fb.ts'));
 
-    // per-参数端点：键 = 完整 session URL 归一化（与 entry.tsx urlKey 一致）
-    expect(Object.keys(param)).toContain(urlKeyOf('/api/observe/session/skill-content?taskId=exp-t1&skillName=s1'));
-    expect(Object.keys(param)).toContain(
-      urlKeyOf('/api/observe/session/agent-content?taskId=exp-t1&agentName=a1&framework=claude-code'),
-    );
+    // 成员富轮仓：合成器的单一数据源（成员归因 + framework + items 原样）；
+    // sessionId 取 member-detail 的会话行 id（row-1），而非成员 taskId（exp-t1）
+    expect(payload.memberTurns).toEqual([{
+      member: { taskId: 'exp-t1', label: expect.any(String) },
+      sessionId: 'row-1',
+      framework: 'claude-code',
+      items: [{ turnId: 't0' }],
+    }]);
   });
 
-  it('assembleEmbeddedHtml：数据全局内联，</script 序列鲁棒转义', () => {
+  it('对账结果迁移：run-audit 前缀全收、_html 剥离、skill-audit 按成员前缀收', async () => {
+    vi.stubGlobal('fetch', (u: string) => {
+      calls.push(u);
+      if (u === '/api/observe/run/run%3Aexp') return Promise.resolve(json({ run: { runId: 'run:exp', kind: 'run' }, viewModel }));
+      return Promise.resolve(json({ files: [], summary: {} }));
+    });
+    sessionStorage.setItem(`run-audit-run:exp-skill-s1`, JSON.stringify({ verdict: 'pass', _html: '<b>big</b>' }));
+    sessionStorage.setItem('run-audit-other-run-skill-x', JSON.stringify({ verdict: 'pass' }));
+    sessionStorage.setItem(`skill-audit-exp-t1-agent-a1`, JSON.stringify({ ok: 1, _html: 'x' }));
+    sessionStorage.setItem('unrelated-key', 'v');
+
+    const payload = await gatherRunExportData('run:exp');
+    expect(payload.audits['run-audit-run:exp-skill-s1']).toBe(JSON.stringify({ verdict: 'pass' }));
+    expect(payload.audits['skill-audit-exp-t1-agent-a1']).toBe(JSON.stringify({ ok: 1 }));
+    expect(Object.keys(payload.audits)).not.toContain('run-audit-other-run-skill-x');
+    expect(Object.keys(payload.audits)).not.toContain('unrelated-key');
+  });
+
+  it('单端点失败容忍：member-turns 失败记空仓（该成员离线降级不阻塞导出）', async () => {
+    vi.stubGlobal('fetch', (u: string) => {
+      calls.push(u);
+      if (u === '/api/observe/run/run%3Aexp') return Promise.resolve(json({ run: { runId: 'run:exp', kind: 'run' }, viewModel }));
+      if (u.includes('/member-turns')) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) });
+      if (u.includes('/scorecard')) return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'no' }) });
+      return Promise.resolve(json({ ok: true }));
+    });
+    const payload = await gatherRunExportData('run:exp');
+    expect(payload.memberTurns[0].items).toEqual([]);
+    // 失败端点不入档案（离线侧该能力缺位而非坏数据）
+    expect(Object.keys(payload.archive)).not.toContain(urlKeyOf('/api/observe/run/run%3Aexp/scorecard?taskId=exp-t1&framework=claude-code&member=exp-t1'));
+  });
+});
+
+describe('run 工作台离线导出：assemble（档案全局内联）', () => {
+  it('四个全局 + </script 序列鲁棒转义', () => {
     const html = assembleEmbeddedHtml(
       'body{}',
       'console.log(1)',
-      'exp-t1',
-      'claude-code',
-      { data: { '/api/observe/session': { evil: '</script><b>x' } }, param: {}, skillAudits: {} },
+      'run:exp',
+      '演示 run',
+      {
+        archive: { '/api/observe/run/run%3Aexp': { evil: '</script><b>x' } },
+        memberTurns: [{ member: { taskId: 't', label: null }, sessionId: 't', framework: null, items: [] }],
+        audits: {},
+      },
     );
-    expect(html).toContain('window.__EXPORT_TASK_ID = "exp-t1";');
-    expect(html).toContain('window.__EXPORT_FRAMEWORK = "claude-code";');
-    expect(html).toContain('window.__EXPORT_DATA =');
-    expect(html).toContain('window.__EXPORT_PARAM =');
-    expect(html).toContain('window.__EXPORT_SKILL_AUDITS =');
+    expect(html).toContain('window.__EXPORT_RUN_ID = "run:exp";');
+    expect(html).toContain('window.__EXPORT_ARCHIVE =');
+    expect(html).toContain('window.__EXPORT_MEMBER_TURNS =');
+    expect(html).toContain('window.__EXPORT_AUDITS =');
+    expect(html).toContain('演示 run');
     expect(html).toContain('<\\/script>');
     expect(html).not.toMatch(/<\/script><b>/);
   });
 
-  it('urlKeyOf：path + 排序后 query 归一化（与离线拦截器匹配键一致）', () => {
-    expect(urlKeyOf('/api/observe/session/turns?taskId=a&keyword=b')).toBe(
-      '/api/observe/session/turns?keyword=b&taskId=a',
+  it('urlKeyOf：path + 排序后 query 归一化（与离线内核匹配键一致）', () => {
+    expect(urlKeyOf('/api/observe/run/x/turns?member=a&pageSize=200')).toBe(
+      '/api/observe/run/x/turns?member=a&pageSize=200',
     );
-    expect(urlKeyOf('/api/observe/session')).toBe('/api/observe/session');
+    expect(urlKeyOf('/api/observe/run/x/turns?pageSize=200&member=a')).toBe(
+      '/api/observe/run/x/turns?member=a&pageSize=200',
+    );
+    expect(urlKeyOf('/api/observe/run/x')).toBe('/api/observe/run/x');
   });
 });

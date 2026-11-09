@@ -161,7 +161,8 @@ describe('buildSubagentNumbers：时间序统一编号', () => {
 
 // ② 一致性：同一份数据，会话块泳道徽标与 ContextTracker 组详情的
 // "general #1" 必须是同一个 subagentSessionId（sub-b，时间最早者）。
-// Context 的编号名在组详情渐进披露层（chevron 展开），须客户端渲染交互后断言
+// Context 的编号名在组详情弹窗（chevron 打开，经 Portal 挂 body），须客户端
+// 渲染交互后从 body 域断言
 let root: Root | null = null
 afterEach(() => {
   if (root) { act(() => { root!.unmount() }); root = null }
@@ -182,7 +183,8 @@ async function mountContextDetail(turns: TurnFixture[], legend: string): Promise
   expect(detailBtn).toBeTruthy()
   await act(async () => { detailBtn!.click() })
   await act(async () => { await new Promise(r => setTimeout(r, 20)) })
-  return container.textContent ?? ''
+  // 弹窗经 Portal 挂 body（container 外）——body 域文本同时含页面与弹窗
+  return document.body.textContent ?? ''
 }
 
 const T0 = '2026-09-15T10:00:00Z'

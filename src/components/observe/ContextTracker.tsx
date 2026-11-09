@@ -7,13 +7,15 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
+import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { Badge } from "@/components/ui/badge"
+import { ScrollFade } from "@/components/ui/scroll-fade"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ZoomInIcon, ZoomOutIcon, MaximizeIcon, ChevronRightIcon, PlayIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ContextReplayDialog } from "@/components/observe/ContextReplayDialog"
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { isCommandTurn, isContinuationTurn, parseCommandTurns, formatCommandDisplay } from "@/lib/shared/command-parser"
 import { buildRunActors, subagentBaseNameOf, type RunActor } from "@/components/observe/run-actor"
 import { contextAgentKeyOf, contextLegendKeyOf, contextColorMapOf } from "@/components/observe/context-legend"
@@ -96,6 +98,10 @@ interface AgentStats {
   cacheHitRate: number
   maxContextWindowPct: number
   events: ContextEvent[]
+  /** 初始轮（该 agent 的首个原始轮——常为 0-token 派发消息，不在 turns 里）：
+   *  增长曲线的原点锚——曲线从 0 生长到初始上下文；初始轮即首数据轮（无
+   *  0-token 轮）时锚与首数据点同 x（零宽 riser） */
+  birth: TurnRowItem | null
 }
 
 interface ContextEvent {
@@ -109,6 +115,17 @@ interface ContextEvent {
   contTimestamp?: string | null
   preCompactTokens?: number
   postCompactTokens?: number
+}
+
+/** 图例组（胶囊/组详情弹窗同构）：root 一键一会话、type 聚合 ×N */
+interface LegendGroup {
+  key: string
+  kind: "root" | "type"
+  label: string
+  color: string
+  sessionIds: string[]
+  count: number
+  visibleCount: number
 }
 
 /** /compact + continuation 事件检测（单个 root 分组内）：命令轮常
@@ -195,10 +212,15 @@ function detectCompactEvents(memberTurns: TurnRowItem[]): ContextEvent[] {
 
 function computeAgentStats(turns: TurnRowItem[], limitOf: (sid: string) => number): AgentStats[] {
   const sessionMap = new Map<string, TurnRowItem[]>()
+  // 初始轮（该 agent 键的首个原始轮——常为 0-token 派发消息，被统计过滤
+  // 排除）：增长曲线的原点锚。context 从 0 生长，曲线须以「0 → 初始上下文」
+  // 开局，而非从首个测量值起步
+  const birthMap = new Map<string, TurnRowItem>()
 
   for (const t of turns) {
-    if (t.totalTokens <= 0) continue
     const sid = contextAgentKeyOf(t)
+    if (!birthMap.has(sid)) birthMap.set(sid, t)
+    if (t.totalTokens <= 0) continue
     if (!sessionMap.has(sid)) sessionMap.set(sid, [])
     sessionMap.get(sid)!.push(t)
   }
@@ -293,7 +315,7 @@ function computeAgentStats(turns: TurnRowItem[], limitOf: (sid: string) => numbe
       })
     }
 
-    stats.push({ sessionId: sid, agentName, isRoot, subagentType, memberTaskId: member?.taskId ?? null, memberLabel: member?.label ?? null, contextLimit, turns: agentTurns, peak, average, min, totalTurns: agentTurns.length, avgGrowthPerTurn, cacheHitRate, maxContextWindowPct, events })
+    stats.push({ sessionId: sid, agentName, isRoot, subagentType, memberTaskId: member?.taskId ?? null, memberLabel: member?.label ?? null, contextLimit, turns: agentTurns, peak, average, min, totalTurns: agentTurns.length, avgGrowthPerTurn, cacheHitRate, maxContextWindowPct, events, birth: birthMap.get(sid) ?? null })
   }
 
   stats.sort((a, b) => {
@@ -388,17 +410,37 @@ type HoveredPoint = {
   sessionId: string; groupKey: string; turnIndex: number; x: number; y: number
   tokens: number; cacheRead: number; newInput: number; cacheWrite: number
   contextWindowPct: number | null; time: string; label: string; color: string; turn: TurnRowItem
-  /** 悬浮命中时快照的视口坐标 + 视口尺寸（渲染期零 ref 访问——相机值在
-   *  事件回调里算好入 state，React 渲染纯函数化） */
+  /** 初始锚点（0-token 派发轮）：tooltip 走派发轮形态（消息摘要，无 token
+   *  计量段） */
+  isBirth?: boolean
+  /** 悬浮命中时快照的视口坐标 + 视口尺寸（渲染期零 ref 访问——事件回调
+   *  里算好入 state，React 渲染纯函数化） */
   screen: { x: number; y: number; vpW: number; vpH: number }
 }
 
-/** 趋势图世界尺寸缺省（viewBox 单位）：真实世界跟随视口自适应（fit 时
- *  world = viewport、恒等相机——绘图区铺满全宽，宽屏无两侧留白）；无布局
- *  环境（happy-dom/SSR）保持该缺省，测试坐标可解析推演 */
+/** 命中域点（主图悬浮/点选）：数据轮 + 初始锚。初始锚是真实 user 轮——
+ *  可悬浮（tooltip 展示派发细节）、原地点击跳转该轮；零值不入统计口径 */
+type GrowthHitPoint = {
+  x: number; y: number
+  tokens: number; cacheRead: number; newInput: number; cacheWrite: number
+  contextWindowPct: number | null
+  turnIndex: number; time: string; turn: TurnRowItem
+  isBirth?: boolean
+}
+
+/** 趋势图几何缺省（viewBox 单位）：真实尺寸跟随视口自适应（ResizeObserver
+ *  直写 world——绘图区铺满全宽，宽屏无两侧留白）；无布局环境（happy-dom/
+ *  SSR）保持该缺省，测试坐标可解析推演 */
 const SVG_HEIGHT = 460
 const SVG_W = 1200
 const SVG_H = SVG_HEIGHT
+
+/** 大 run 自适应阈值：agent/图例组 ≤ INLINE_GROUPS_MAX 时全量平铺（单会
+ *  话/小 run 与既有行为零差异）；超出启用聚焦模式——曲线默认只画峰值
+ *  Top-K（百级成员的曲线墙既不可读也难渲染）、图例胶囊折叠区 + 搜索 */
+const INLINE_GROUPS_MAX = 12
+const FOCUS_TOP_K = 8
+const COLLAPSED_PILLS = 16
 
 function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onNavigateToTurn, onOpenReplay }: {
   agentStats: AgentStats[]
@@ -415,17 +457,15 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   const PADDING_RIGHT = 40
 
   const viewportRef = useRef<HTMLDivElement>(null)
-  const cameraRef = useRef<HTMLDivElement>(null)
-  const zoomLabelRef = useRef<HTMLButtonElement>(null)
-  const svgRef = useRef<SVGSVGElement>(null)
-  // 趋势图矢量世界：跟随视口自适应（state 驱动几何重算，ref 供命令式回调
-  // 即时读取——commitCamera 不等渲染）
+  // 趋势图世界：跟随视口自适应（state 驱动几何重算）
   const [world, setWorld] = useState({ w: SVG_W, h: SVG_H })
-  const worldRef = useRef({ w: SVG_W, h: SVG_H })
-  // 默认全显（用户拍板）：子代理曲线不按阈值折叠，需要收窄时用 全部/仅 Root
-  // 分段控件或类型胶囊整组收起
+  // 大 run 聚焦模式：agent 数超阈值时默认只画峰值 Top-K（曲线墙不可读）；
+  // 小 run / 单会话保持全显（用户拍板的原语义——子代理不按阈值折叠）
+  const topKSessionIds = useMemo(() => new Set(
+    [...agentStats].sort((a, b) => b.peak - a.peak).slice(0, FOCUS_TOP_K).map(s => s.sessionId),
+  ), [agentStats])
   const [visibleSessions, setVisibleSessions] = useState<Set<string>>(
-    () => new Set(agentStats.map(s => s.sessionId)),
+    () => (agentStats.length <= INLINE_GROUPS_MAX ? new Set(agentStats.map(s => s.sessionId)) : new Set(topKSessionIds)),
   )
   const [hoveredPoint, setHoveredPoint] = useState<HoveredPoint | null>(null)
   const hoveredRef = useRef<HoveredPoint | null>(null)
@@ -435,115 +475,42 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   // 卡片不参与联动
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<"area" | "line">("area")
+  // 大 run 图例治理：胶囊折叠区（预览前 N + 展开限高滚动）+ 前缀搜索
+  // （百级组里找任务是刚需）
+  const [legendExpanded, setLegendExpanded] = useState(false)
+  const [legendQuery, setLegendQuery] = useState("")
   const [detailKey, setDetailKey] = useState<string | null>(null)
   const [detailSid, setDetailSid] = useState<string | null>(null)
-  // 详情可见性契约：入口在画布旁（胶囊 chevron）或概览网格（卡片点击），
-  // 详情块可能距点击点数千像素（94 agent 的网格在下）——不滚动定位等于
-  // 没打开。block:'nearest' 已可见时不扰动（卡片点击场景）
-  const detailRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!detailKey) return
-    detailRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" })
-  }, [detailKey])
 
-  // ── 相机模型（Graph 画布同款）：viewport（overflow-hidden + contain 隔离，
-  // 永不出现滚动条）× camera（单元素 transform，GPU 合成平移/缩放）× 手势
-  // 落定矢量重栅格（静止态任意档位文字线条高清）。缩放百分比命令式直更
-  // textContent（不经 React），缩放过程零曲线重渲染
-  const camera = useRef({ x: 0, y: 0, z: 1 })
-  /** SVG 最近一次矢量重栅格时的缩放档位（CSS scale 相对它做手势期拉伸） */
-  const rasterZRef = useRef(1)
+  // ── 时间窗模型（Perf 效率分布同款）：图框恒定（SVG 随视口满铺，缩放绝不
+  // 作用于图框本身），缩放/平移只改时间轴——窗口内重新采样（LTTB）+ 刻度
+  // 随窗进位 + y 量程随窗口自适应（可见范围即分析范围；80/100% 参考线随
+  // 窗口量程进出画面）。窗口状态携带数据源身份：失配即视为全程（切数据
+  // 自动复位，无需副作用链）
+  const [winState, setWinState] = useState<{ src: AgentStats[]; range: [number, number] | null }>({ src: agentStats, range: null })
+  const win = winState.src === agentStats ? winState.range : null
+  const setWin = useCallback((range: [number, number] | null) => setWinState({ src: agentStats, range }), [agentStats])
+  // 缩放回调经 ref 透传给一次性挂载的原生滚轮监听（恒取最新渲染闭包，
+  // 免重挂监听）
+  const zoomAtRef = useRef<(factor: number, vx?: number) => void>(() => {})
+  // 缩放落定后的悬浮重算请求（窗口几何在渲染提交后才就绪——立即算会用旧几何）
+  const pendingHoverRef = useRef<{ x: number; y: number } | null>(null)
   const panMovedRef = useRef(false)
   const panningRef = useRef(false)
-  const gestureTimerRef = useRef<number | null>(null)
 
-  const toDomPrecision = (v: number) => Math.round(v * 1e4) / 1e4
-  const clampZoom = (z: number) => Math.min(Math.max(z, 0.3), 3)
-
-  const applyCamera = useCallback(() => {
-    const { x, y, z } = camera.current
-    const s = z / rasterZRef.current
-    const el = cameraRef.current
-    if (el) {
-      el.style.transform =
-        `translate(${toDomPrecision(x)}px, ${toDomPrecision(y)}px)` +
-        (Math.abs(s - 1) > 1e-4 ? ` scale(${toDomPrecision(s)})` : "")
-    }
-    if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(z * 100)}%`
-  }, [])
-
-  /** 相机落定：SVG 尺寸对齐逻辑缩放 → 矢量重栅格，CSS scale 归 1 */
-  const commitCamera = useCallback(() => {
-    rasterZRef.current = camera.current.z
-    const svg = svgRef.current
-    if (svg) {
-      svg.setAttribute("width", String(toDomPrecision(worldRef.current.w * camera.current.z)))
-      svg.setAttribute("height", String(toDomPrecision(worldRef.current.h * camera.current.z)))
-    }
-    applyCamera()
-  }, [applyCamera])
-
-  const zoomAt = useCallback((factor: number, cx?: number, cy?: number, immediate = false) => {
-    const vp = viewportRef.current
-    if (!vp) return
-    const { x, y, z } = camera.current
-    const next = clampZoom(z * factor)
-    if (next === z) return
-    const px = cx ?? vp.clientWidth / 2
-    const py = cy ?? vp.clientHeight / 2
-    // 光标锚点：缩放后保持视口点 (px, py) 下的内容点不动
-    camera.current = {
-      x: px - (px - x) * (next / z),
-      y: py - (py - y) * (next / z),
-      z: next,
-    }
-    // 离散操作（工具条按钮）立即矢量重栅格；连击手势（滚轮）先 GPU 拉伸，
-    // 静默 160ms 后落定重栅格
-    if (immediate) commitCamera()
-    else applyCamera()
-    if (gestureTimerRef.current !== null) window.clearTimeout(gestureTimerRef.current)
-    gestureTimerRef.current = window.setTimeout(() => {
-      commitCamera()
-      gestureTimerRef.current = null
-    }, 160)
-  }, [applyCamera, commitCamera])
-
-  const resetCamera = useCallback(() => {
-    camera.current = { x: 0, y: 0, z: 1 }
-    commitCamera()
-  }, [commitCamera])
-
-  const fitChart = useCallback(() => {
-    const vp = viewportRef.current
-    if (!vp) return
-    const w = vp.clientWidth
-    const h = vp.clientHeight
-    if (w <= 0 || h <= 0) {
-      // 无布局环境（happy-dom/SSR）：保持缺省世界 + 恒等相机
-      resetCamera()
-      return
-    }
-    // 世界尺寸 = 视口尺寸（z=1 恒等相机）：绘图区铺满全宽全高，零信箱留白；
-    // 缩放/平移在其上叠加（矢量世界随 resize 重建，几何按新世界重算）
-    worldRef.current = { w, h }
-    setWorld({ w, h })
-    camera.current = { x: 0, y: 0, z: 1 }
-    rasterZRef.current = 1
-    commitCamera()
-  }, [commitCamera, resetCamera])
-
-  // 挂载即适配（无布局环境回落恒等相机，测试可解析推演）；视口尺寸变化
-  // 重适配（响应式——浏览器 resize 后图表始终完整可见）
-  useLayoutEffect(() => { fitChart() }, [fitChart])
+  // 视口尺寸自适应（图框随视口重建，时间窗几何按新框重算）；无布局环境
+  //（happy-dom/SSR）保持缺省世界（测试坐标可解析推演）
   useEffect(() => {
     const vp = viewportRef.current
     if (!vp || typeof ResizeObserver === "undefined") return
-    const ro = new ResizeObserver(() => fitChart())
+    const ro = new ResizeObserver(entries => {
+      const w = Math.round(entries[0].contentRect.width)
+      const h = Math.round(entries[0].contentRect.height)
+      if (w <= 0 || h <= 0) return
+      setWorld(prev => (Math.abs(prev.w - w) < 4 && Math.abs(prev.h - h) < 4 ? prev : { w, h }))
+    })
     ro.observe(vp)
     return () => ro.disconnect()
-  }, [fitChart])
-  useEffect(() => () => {
-    if (gestureTimerRef.current !== null) window.clearTimeout(gestureTimerRef.current)
   }, [])
 
   // 类型配色（黄金角度序列）：全量 agents 计算而非可见集——显隐切换不改色，
@@ -553,7 +520,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   // 图例分组：root 一键一会话（成员短名）、subagent 按类型聚合（×N 计数）——
   // 百级子代理折叠成十级类型条目，与泳道图例同构
   const groups = useMemo(() => {
-    const byKey = new Map<string, { key: string; kind: "root" | "type"; label: string; color: string; sessionIds: string[]; count: number; visibleCount: number }>()
+    const byKey = new Map<string, LegendGroup>()
     for (const s of agentStats) {
       const key = contextLegendKeyOf(s)
       let g = byKey.get(key)
@@ -585,8 +552,28 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
   const activeHighlight = hoveredPoint?.groupKey ?? highlightKey ?? selectedKey
 
+  // ── 大 run 自适应（组数/卡数超阈值才生效，小 run/单会话零变化）──────────
+  // 图例展示序：可见组前置（折叠预览先回答「图上正画着谁」），组内保持规范
+  // 键序（配色分配同序不漂移）；小 run 保持纯规范序（行为零变化）
+  const legendBig = groups.length > INLINE_GROUPS_MAX
+  const orderedGroups = useMemo(() => {
+    if (!legendBig) return groups
+    const visible: typeof groups = []
+    const hidden: typeof groups = []
+    for (const g of groups) (g.visibleCount > 0 ? visible : hidden).push(g)
+    return [...visible, ...hidden]
+  }, [groups, legendBig])
+  const legendQueryLower = legendQuery.trim().toLowerCase()
+  const matchedGroups = legendQueryLower
+    ? orderedGroups.filter(g => g.label.toLowerCase().includes(legendQueryLower))
+    : orderedGroups
+  const legendShowAll = legendExpanded || legendQueryLower.length > 0
+  const shownGroups = legendShowAll ? matchedGroups : matchedGroups.slice(0, COLLAPSED_PILLS)
+  // 峰值 Top 快捷键激活判定（集合等值）
+  const topKActive = visibleSessions.size === topKSessionIds.size
+    && [...topKSessionIds].every(id => visibleSessions.has(id))
 
-  const filteredStats = agentStats.filter(s => visibleSessions.has(s.sessionId))
+  const filteredStats = useMemo(() => agentStats.filter(s => visibleSessions.has(s.sessionId)), [agentStats, visibleSessions])
   // 悬浮窗口占比回落用的每 agent 精确限（chart 单限是各 agent 最大值参考线）
   const limitBySid = useMemo(() => new Map(agentStats.map(s => [s.sessionId, s.contextLimit])), [agentStats])
 
@@ -596,93 +583,173 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       for (const t of s.turns) {
         pts.push({ turnIndex: t.turnIndex, timestamp: t.createdAt ? new Date(t.createdAt).getTime() : 0, inputTokens: t.inputMessagesTokens })
       }
+      // 初始轮入时间域：run 时间线自派发消息起算（曲线原点锚可及），但
+      // 不占 y 量程（inputTokens=0）也不进命中/悬浮域（allPoints 只供
+      // minTime/maxTime/globalMaxInput）
+      if (s.birth?.createdAt) {
+        pts.push({ turnIndex: s.birth.turnIndex, timestamp: new Date(s.birth.createdAt).getTime(), inputTokens: 0 })
+      }
     }
     return pts
   }, [filteredStats])
 
-  const minTime = allPoints.length > 0 ? Math.min(...allPoints.map(p => p.timestamp)) : 0
-  const maxTime = allPoints.length > 0 ? Math.max(...allPoints.map(p => p.timestamp)) : 0
-  const timeRange = maxTime - minTime || 1
+  const geo = useMemo(() => {
+    const minTime = allPoints.length > 0 ? Math.min(...allPoints.map(p => p.timestamp)) : 0
+    const maxTime = allPoints.length > 0 ? Math.max(...allPoints.map(p => p.timestamp)) : 0
+    const fullSpan = maxTime - minTime
+    const v0 = win ? Math.max(win[0], minTime) : minTime
+    const v1 = win ? Math.min(win[1], maxTime) : maxTime
+    const tSpan = Math.max(v1 - v0, 0)
 
-  const maxInput = Math.max(...allPoints.map(p => p.inputTokens), 1)
-  const yMax = Math.min(Math.ceil(maxInput * 1.15 / 10000) * 10000, contextWindowLimit * 1.1)
+    const chartWidth = world.w
+    const plotWidth = chartWidth - PADDING_LEFT - PADDING_RIGHT
+    const plotHeight = world.h - PADDING_TOP - PADDING_BOTTOM
+    const baselineY = world.h - PADDING_BOTTOM
 
-  const chartWidth = world.w
-  const plotWidth = chartWidth - PADDING_LEFT - PADDING_RIGHT
-  const plotHeight = world.h - PADDING_TOP - PADDING_BOTTOM
-  const baselineY = world.h - PADDING_BOTTOM
-
-  function toXFn(ts: number): number { return PADDING_LEFT + ((ts - minTime) / timeRange) * plotWidth }
-  function toYFn(tokens: number): number { return PADDING_TOP + plotHeight - (tokens / yMax) * plotHeight }
-
-  // Y 轴：nice step（1/2/2.5/5×10^n，~5 条刻度），替代死档位
-  const yTicks: Array<{ value: number; y: number; label: string }> = (() => {
-    const raw = yMax / 5
-    const mag = Math.pow(10, Math.floor(Math.log10(raw)))
-    const norm = raw / mag
-    const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag
-    const ticks: Array<{ value: number; y: number; label: string }> = []
-    for (let v = 0; v <= yMax; v += step) ticks.push({ value: v, y: toYFn(v), label: formatTokenCount(v) })
-    return ticks
-  })()
-
-  // X 轴：等分 ~5 刻度，量程自适应格式（<24h 仅时分，<3d 月/日+时分，更长仅月/日）
-  const timeTicks: Array<{ x: number; label: string }> = (() => {
-    const rangeHours = timeRange / 3600000
-    const target = 5
-    const stepMs = timeRange / target
-    const ticks: Array<{ x: number; label: string }> = []
-    for (let i = 0; i <= target; i++) {
-      const ts = minTime + stepMs * i
-      const d = new Date(ts)
-      const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
-      const label = rangeHours < 24 ? hm : rangeHours < 72 ? `${d.getMonth() + 1}/${d.getDate()} ${hm}` : `${d.getMonth() + 1}/${d.getDate()}`
-      ticks.push({ x: toXFn(ts), label })
+    // y 量程随窗口：可见峰值整步上取（1.15 余量），仍钳在窗口上限 1.1 倍内
+    //（逼近限制时 100% 参考线可及）；空窗回落全程峰值（网格结构不塌）
+    const globalMaxInput = Math.max(...allPoints.map(p => p.inputTokens), 1)
+    const winTurns: TurnRowItem[] = []
+    for (const s of filteredStats) {
+      for (const t of s.turns) {
+        const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0
+        if (ts >= v0 && ts <= v1) winTurns.push(t)
+      }
     }
-    return ticks
-  })()
+    const winMaxInput = winTurns.length > 0 ? Math.max(...winTurns.map(t => t.inputMessagesTokens), 1) : globalMaxInput
+    const yMax = Math.min(Math.ceil(winMaxInput * 1.15 / 10000) * 10000, contextWindowLimit * 1.1)
 
-  const cautionY = PADDING_TOP + plotHeight - (contextWindowLimit * 0.8 / yMax) * plotHeight
-  const limitY = PADDING_TOP + plotHeight - (contextWindowLimit / yMax) * plotHeight
+    const toXFn = (ts: number) => PADDING_LEFT + ((ts - v0) / (tSpan || 1)) * plotWidth
+    const toYFn = (tokens: number) => PADDING_TOP + plotHeight - (tokens / yMax) * plotHeight
 
-  const pctMarkers = useMemo(() => {
-    const markers: Array<{ pct: number; y: number; label: string; color: string }> = []
-    if (cautionY >= PADDING_TOP && cautionY <= baselineY) markers.push({ pct: 80, y: cautionY, label: "80%", color: "#eab308" })
-    if (limitY >= PADDING_TOP && limitY <= baselineY) markers.push({ pct: 100, y: limitY, label: "100%", color: "#ef4444" })
-    return markers
-  }, [cautionY, limitY, PADDING_TOP, baselineY])
+    // Y 轴：nice step（1/2/2.5/5×10^n，~5 条刻度），替代死档位
+    const yTicks: Array<{ value: number; y: number; label: string }> = (() => {
+      const raw = yMax / 5
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)))
+      const norm = raw / mag
+      const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag
+      const ticks: Array<{ value: number; y: number; label: string }> = []
+      for (let v = 0; v <= yMax; v += step) ticks.push({ value: v, y: toYFn(v), label: formatTokenCount(v) })
+      return ticks
+    })()
 
-  // 渲染降采样目标：~1 点/2px（LTTB）——悬浮命中/tooltip 仍走全量点，精度无损
-  const RENDER_PT_TARGET = Math.max(120, Math.floor(plotWidth / 2))
+    // X 轴：等分 ~5 刻度，格式随窗口跨度进位（<10min 秒级，<24h 仅时分，
+    // <3d 月/日+时分，更长仅月/日）——放大后刻度才会变细
+    const timeTicks: Array<{ x: number; label: string }> = (() => {
+      const spanHours = tSpan / 3600000
+      const target = 5
+      const stepMs = (tSpan || 1) / target
+      const ticks: Array<{ x: number; label: string }> = []
+      for (let i = 0; i <= target; i++) {
+        const ts = v0 + stepMs * i
+        const d = new Date(ts)
+        const two = (x: number) => String(x).padStart(2, "0")
+        const hm = `${two(d.getHours())}:${two(d.getMinutes())}`
+        const label = spanHours < 1 / 6
+          ? `${hm}:${two(d.getSeconds())}`
+          : spanHours < 24 ? hm : spanHours < 72 ? `${d.getMonth() + 1}/${d.getDate()} ${hm}` : `${d.getMonth() + 1}/${d.getDate()}`
+        ticks.push({ x: toXFn(ts), label })
+      }
+      return ticks
+    })()
+
+    const cautionY = PADDING_TOP + plotHeight - (contextWindowLimit * 0.8 / yMax) * plotHeight
+    const limitY = PADDING_TOP + plotHeight - (contextWindowLimit / yMax) * plotHeight
+
+    const pctMarkers: Array<{ pct: number; y: number; label: string; color: string }> = []
+    if (cautionY >= PADDING_TOP && cautionY <= baselineY) pctMarkers.push({ pct: 80, y: cautionY, label: "80%", color: "#eab308" })
+    if (limitY >= PADDING_TOP && limitY <= baselineY) pctMarkers.push({ pct: 100, y: limitY, label: "100%", color: "#ef4444" })
+
+    // 渲染降采样目标：~1 点/2px（LTTB）——悬浮命中/tooltip 仍走全量点，精度无损
+    const RENDER_PT_TARGET = Math.max(120, Math.floor(plotWidth / 2))
+
+    const agentLines = filteredStats.map(s => {
+      const groupKey = contextLegendKeyOf(s)
+      const color = colorMap.get(groupKey) ?? "#94a3b8"
+      const label = displayLabel(s)
+      const isRoot = s.isRoot
+      const points = s.turns
+        .filter(t => {
+          const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0
+          return ts >= v0 && ts <= v1
+        })
+        .map(t => ({
+          x: toXFn(t.createdAt ? new Date(t.createdAt).getTime() : 0),
+          y: toYFn(t.inputMessagesTokens),
+          tokens: t.totalTokens,
+          cacheRead: t.cacheReadTokens,
+          newInput: t.inputTokens,
+          cacheWrite: t.cacheWriteTokens,
+          contextWindowPct: t.contextWindowPct,
+          turnIndex: t.turnIndex,
+          time: formatTimestamp(t.createdAt),
+          turn: t,
+        }))
+      const peakInput = points.reduce((m, p) => Math.max(m, p.turn.inputMessagesTokens), 0)
+      const ltp = lttb(points, RENDER_PT_TARGET)
+      // 初始锚点：曲线从 0 生长——锚在初始轮时刻（初始轮即首数据轮时与其
+      // 同 x，零宽 riser；monotonePath 零宽段直线跳转）；单轮 agent 不锚
+      // （保留在场点口径）。锚只进绘制序列（线 + 面积）与命中域，统计口径
+      // 不动。x 取 min(birth, 首点)——序列保单调（原始轮序异常时不出回拐）
+      const birthTs = s.birth?.createdAt ? new Date(s.birth.createdAt).getTime() : null
+      const anchor = points.length >= 2
+        ? { x: Math.min(birthTs != null ? toXFn(birthTs) : points[0].x, points[0].x), y: toYFn(0) }
+        : null
+      // 命中负载：初始锚是真实原始轮（与首数据轮不同轮时）——可悬浮、可
+      // 原地点击跳转；初始轮即首数据轮（无 0-token 轮）时锚纯几何，该点
+      // 由数据点自身承载悬浮
+      const anchorHit: GrowthHitPoint | null = anchor && s.birth && !s.turns.includes(s.birth)
+        ? {
+            ...anchor,
+            tokens: 0, cacheRead: 0, newInput: 0, cacheWrite: 0, contextWindowPct: null,
+            turnIndex: s.birth.turnIndex,
+            time: formatTimestamp(s.birth.createdAt),
+            turn: s.birth,
+            isBirth: true,
+          }
+        : null
+      const renderPoints = anchor ? [anchor, ...ltp] : ltp
+      const areaPoints = anchor ? [anchor, ...points] : points
+      const hitPoints: GrowthHitPoint[] = anchorHit ? [anchorHit, ...points] : points
+      return { sessionId: s.sessionId, groupKey, color, label, isRoot, points, renderPoints, areaPoints, hitPoints, totalTurns: s.totalTurns, peakInput }
+    })
+
+    return {
+      minTime, maxTime, fullSpan, v0, v1, tSpan,
+      chartWidth, plotWidth, plotHeight, baselineY, yMax,
+      toXFn, toYFn, yTicks, timeTicks, cautionY, limitY, pctMarkers, agentLines,
+      emptyWin: win != null && winTurns.length === 0,
+    }
+  }, [allPoints, filteredStats, win, world, contextWindowLimit, colorMap, displayLabel, PADDING_TOP, PADDING_BOTTOM, PADDING_LEFT, PADDING_RIGHT])
+
+  const { minTime, maxTime, fullSpan, v0, v1, chartWidth, plotWidth, plotHeight, baselineY, yMax, toXFn, toYFn, yTicks, timeTicks, cautionY, limitY, pctMarkers, agentLines, emptyWin } = geo
+
+  // 时间窗缩放：光标时刻锚定（缩放后该时刻的屏幕位置不动），窗口钳制在
+  // 全程内；窗宽下限防退化，放大到全程即复位
+  const zoomAt = (factor: number, vxRaw?: number) => {
+    if (fullSpan <= 0) return
+    const vx = Math.min(chartWidth - PADDING_RIGHT, Math.max(PADDING_LEFT, vxRaw ?? (PADDING_LEFT + plotWidth / 2)))
+    const w0 = win ? win[0] : minTime
+    const w1 = win ? win[1] : maxTime
+    const span = w1 - w0
+    const next = Math.min(fullSpan, Math.max(Math.max(1000, fullSpan / 240), span / factor))
+    if (next >= fullSpan - 1) { setWin(null); return }
+    if (Math.abs(next - span) < 1) return
+    const ta = w0 + ((vx - PADDING_LEFT) / plotWidth) * span
+    let n0 = ta - ((ta - w0) / span) * next
+    let n1 = n0 + next
+    if (n0 < minTime) { n0 = minTime; n1 = n0 + next }
+    if (n1 > maxTime) { n1 = maxTime; n0 = n1 - next }
+    setWin([n0, n1])
+  }
+  useEffect(() => { zoomAtRef.current = zoomAt })
 
   function areaPathStr(pts: Array<{ x: number; y: number }>): string {
     if (pts.length < 2) return ""
     return `${monotonePath(pts)} L ${pts[pts.length - 1].x},${baselineY} L ${pts[0].x},${baselineY} Z`
   }
 
-  const agentLines = filteredStats.map(s => {
-    const groupKey = contextLegendKeyOf(s)
-    const color = colorMap.get(groupKey) ?? "#94a3b8"
-    const label = displayLabel(s)
-    const isRoot = s.isRoot
-    const points = s.turns.map(t => ({
-      x: toXFn(t.createdAt ? new Date(t.createdAt).getTime() : 0),
-      y: toYFn(t.inputMessagesTokens),
-      tokens: t.totalTokens,
-      cacheRead: t.cacheReadTokens,
-      newInput: t.inputTokens,
-      cacheWrite: t.cacheWriteTokens,
-      contextWindowPct: t.contextWindowPct,
-      turnIndex: t.turnIndex,
-      time: formatTimestamp(t.createdAt),
-      turn: t,
-    }))
-    const peakInput = points.reduce((m, p) => Math.max(m, p.turn.inputMessagesTokens), 0)
-    const renderPoints = lttb(points, RENDER_PT_TARGET)
-    return { sessionId: s.sessionId, groupKey, color, label, isRoot, points, renderPoints, totalTurns: s.totalTurns, peakInput }
-  })
-
-  // 悬浮命中：client → 视口 → 相机逆变换 → svg 用户坐标（手动数学，不依赖
+  // 悬浮命中：client → 视口 → svg 用户坐标（图框恒定 1:1，手动数学，不依赖
   // getScreenCTM——测试环境无 CTM 也可精确推演）。ref 持有最新闭包：滚轮/
   // 拖拽等原生监听不因渲染抖动重挂
   function findNearestPoint(svgX: number, svgY: number) {
@@ -690,7 +757,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     let bestPoint: typeof hoveredPoint | null = null
     const HIT_RADIUS_SQ = 2500
     for (const line of agentLines) {
-      for (const p of line.points) {
+      for (const p of line.hitPoints) {
         const dx = p.x - svgX
         const dy = p.y - svgY
         const dist = dx * dx + dy * dy
@@ -700,6 +767,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
             sessionId: line.sessionId, groupKey: line.groupKey, turnIndex: p.turnIndex, x: p.x, y: p.y,
             tokens: p.tokens, cacheRead: p.cacheRead, newInput: p.newInput, cacheWrite: p.cacheWrite,
             contextWindowPct: p.contextWindowPct, time: p.time, label: line.label, color: line.color, turn: p.turn,
+            isBirth: p.isBirth,
             screen: { x: 0, y: 0, vpW: 0, vpH: 0 },
           }
         }
@@ -709,7 +777,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
   }
 
   // 曲线命中（点选聚焦用）：各可见线在该 x 处的线性插值 y，取最小 |dy|，
-  // 阈值 14 世界单位（z=1 即 14px；monotone 路径与线性插值近似贴合）
+  // 阈值 14px（monotone 路径与线性插值近似贴合）
   function findNearestCurve(svgX: number, svgY: number): string | null {
     let bestKey: string | null = null
     let bestDy = 14
@@ -741,18 +809,15 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       const vp = viewportRef.current
       if (!vp) return
       const rect = vp.getBoundingClientRect()
-      const cam = camera.current
-      const nearest = findNearestPoint(
-        (clientX - rect.left - cam.x) / cam.z,
-        (clientY - rect.top - cam.y) / cam.z,
-      )
+      const nearest = findNearestPoint(clientX - rect.left, clientY - rect.top)
       if (nearest) {
-        // 屏幕坐标快照入 state：tooltip 渲染期零 ref 访问
+        // 视口坐标快照入 state：tooltip 渲染期零 ref 访问（图框恒定，svg
+        // 用户坐标即视口像素坐标）
         nearest.screen = {
-          x: cam.x + nearest.x * cam.z,
-          y: cam.y + nearest.y * cam.z,
-          vpW: vp.clientWidth || worldRef.current.w * cam.z,
-          vpH: vp.clientHeight || worldRef.current.h * cam.z,
+          x: nearest.x,
+          y: nearest.y,
+          vpW: vp.clientWidth || world.w,
+          vpH: vp.clientHeight || world.h,
         }
       }
       setHoveredPoint(nearest)
@@ -763,8 +828,9 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
 
   // Ctrl/⌘+滚轮光标锚定缩放：原生 non-passive 监听（React 的 onWheel 挂
-  // passive 通道，preventDefault() 无效，手势会被浏览器页面缩放劫持）；
-  // 缩放后即时重算悬浮（tooltip 跟随新点位，不闪不漂）
+  // passive 通道，preventDefault() 无效，手势会被浏览器页面缩放劫持）。
+  // 缩放落定后按新几何重算悬浮（tooltip 跟随新点位，不闪不漂）——窗口
+  // 几何在渲染提交后才就绪，经 pendingHover 在提交后权威重算一次
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
@@ -772,24 +838,30 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const rect = el.getBoundingClientRect()
-      zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - rect.left, e.clientY - rect.top)
-      updateHoverRef.current(e.clientX, e.clientY)
+      zoomAtRef.current(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - rect.left)
+      pendingHoverRef.current = { x: e.clientX, y: e.clientY }
     }
     el.addEventListener("wheel", onWheel, { passive: false })
     return () => el.removeEventListener("wheel", onWheel)
-  }, [zoomAt])
+  }, [])
+  useEffect(() => {
+    if (!pendingHoverRef.current || panningRef.current) return
+    const { x, y } = pendingHoverRef.current
+    pendingHoverRef.current = null
+    updateHoverRef.current(x, y)
+  })
 
-  // 拖拽平移（Graph 同款 4px 死区）：手势中隐藏 tooltip；原地点击且命中
-  // 数据点 → 跳转该轮（与拖拽互斥，不误触）
+  // 拖拽平移（时间窗整体推移，钳制在全程内；全程视图无平移域——内容已铺
+  // 满窗口）：手势中隐藏 tooltip；原地点击且命中数据点 → 跳转该轮（与拖拽
+  // 互斥，不误触）
   const onViewportPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
-    const start = { x: e.clientX, y: e.clientY }
-    const startCam = { ...camera.current }
+    const startX = e.clientX
+    const startWin = win && fullSpan > 0 ? { v0: win[0], v1: win[1] } : null
     panMovedRef.current = false
     const onMove = (ev: PointerEvent) => {
-      const dx = ev.clientX - start.x
-      const dy = ev.clientY - start.y
-      if (!panMovedRef.current && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+      const dx = ev.clientX - startX
+      if (!panMovedRef.current && Math.abs(dx) > 4 && startWin) {
         panMovedRef.current = true
         panningRef.current = true
         viewportRef.current?.classList.add("run-gesture")
@@ -797,10 +869,10 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
         hoveredRef.current = null
         setHighlightKey(null)
       }
-      if (panMovedRef.current) {
-        camera.current.x = startCam.x + dx
-        camera.current.y = startCam.y + dy
-        applyCamera()
+      if (panMovedRef.current && startWin) {
+        const span = startWin.v1 - startWin.v0
+        const n0 = Math.min(Math.max(startWin.v0 - (dx / plotWidth) * span, minTime), maxTime - span)
+        setWin([n0, n0 + span])
       }
     }
     const onUp = (ev: PointerEvent) => {
@@ -813,15 +885,11 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
         onNavigateToTurn(hoveredRef.current.turn.turnId, hoveredRef.current.turn.member?.taskId ?? null)
       } else {
         // 原地点击未命中数据点：曲线命中 → 点选聚焦（由灰变亮，再点同线取
-        // 消）；空白 → 清除选择。相机逆变换与悬浮命中同款数学
+        // 消）；空白 → 清除选择
         const vp = viewportRef.current
         if (vp) {
           const rect = vp.getBoundingClientRect()
-          const cam = camera.current
-          const key = findNearestCurve(
-            (ev.clientX - rect.left - cam.x) / cam.z,
-            (ev.clientY - rect.top - cam.y) / cam.z,
-          )
+          const key = findNearestCurve(ev.clientX - rect.left, ev.clientY - rect.top)
           setSelectedKey(prev => (key == null ? null : prev === key ? null : key))
         }
       }
@@ -881,6 +949,9 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     return { totalTurns, peakAgent, cachePct: cacheTotal > 0 ? Math.round((cacheHit / cacheTotal) * 100) : 0 }
   })()
 
+  // 当前窗宽相对全程的倍率（工具条读数；全程恒 100%）
+  const ratio = win && fullSpan > 0 ? Math.round(fullSpan / Math.max(win[1] - win[0], 1) * 100) : 100
+
   return (
     <>
     <Card size="sm" className="flex min-h-0 flex-1 flex-col">
@@ -929,8 +1000,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
             onMouseMove={e => updateHoverRef.current(e.clientX, e.clientY)}
             onMouseLeave={() => { setHoveredPoint(null); hoveredRef.current = null; setHighlightKey(null) }}
           >
-            <div ref={cameraRef} data-camera="growth" className="run-camera" style={{ transformOrigin: "0 0" }}>
-              <svg ref={svgRef} data-chart="growth" width={world.w} height={world.h} viewBox={`0 0 ${world.w} ${world.h}`} className="block">
+              <svg data-chart="growth" width={world.w} height={world.h} viewBox={`0 0 ${world.w} ${world.h}`} className="block">
                 <defs>
                   {agentLines.map(line => (
                     <linearGradient key={line.sessionId} id={`areaGrad-${line.sessionId}`} x1="0" y1="0" x2="0" y2="1">
@@ -982,19 +1052,20 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                   if (!line.isRoot && !isActive) return null
                   return (
                     <g key={`area-${line.sessionId}`} opacity={isWeakened ? 0.06 : isActive ? 1 : line.isRoot ? 0.75 : 0.5} clipPath="url(#plotClip)">
-                      <path className="ctx-area-in" d={areaPathStr(line.points)} fill={`url(#areaGrad-${line.sessionId})`} />
+                      <path className="ctx-area-in" d={areaPathStr(line.areaPoints)} fill={`url(#areaGrad-${line.sessionId})`} />
                     </g>
                   )
                 })}
 
                 {/* Agent lines：root 主线粗、子代理细线弱透明；逐轮圆点退役（悬浮
-                    定位环仍在 tooltip 层），单轮子代理保留一个点——在场可证 */}
+                    定位环仍在 tooltip 层），单轮子代理保留一个点——在场可证。
+                    组带 plotClip：初始锚点可能在缩放窗左缘之外（初始轮早于窗口） */}
                 {agentLines.map(line => {
                   const isActive = activeHighlight === line.groupKey
                   const isWeakened = activeHighlight != null && !isActive
                   const d = line.renderPoints.length >= 2 ? monotonePath(line.renderPoints) : ""
                   return (
-                    <g key={line.sessionId} opacity={isWeakened ? 0.12 : 1}>
+                    <g key={line.sessionId} opacity={isWeakened ? 0.12 : 1} clipPath="url(#plotClip)">
                       {d ? (
                         <path
                           d={d}
@@ -1037,8 +1108,15 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
                 {/* Compact event markers with context drop annotation */}
                 {(() => {
-                  // run 视图多 root：各成员的 /compact 标记全画（纵向错位防叠）——仅可见 root
-                  const compactEvts = agentStats.filter(s => s.isRoot && visibleSessions.has(s.sessionId)).flatMap(s => s.events.filter(e => e.type === "compact"))
+                  // run 视图多 root：各成员的 /compact 标记全画（纵向错位防叠）——仅可见 root，
+                  // 且落在当前时间窗内（窗外事件随窗口进出画面）
+                  const compactEvts = agentStats
+                    .filter(s => s.isRoot && visibleSessions.has(s.sessionId))
+                    .flatMap(s => s.events.filter(e => e.type === "compact"))
+                    .filter(e => {
+                      const ts = e.timestamp ? new Date(e.timestamp).getTime() : 0
+                      return ts >= v0 && ts <= v1
+                    })
                   if (compactEvts.length === 0) return null
                   const ICON_Y = PADDING_TOP + 5
                   const LABEL_Y = ICON_Y + 16
@@ -1099,7 +1177,12 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                   }).filter(Boolean)
                 })()}
 
-                {/* Crosshair + 悬浮点定位环（tooltip 本体是 HTML 层——不随图缩放） */}
+                {/* 空窗提示（缩放/平移到无轮次的时间段） */}
+                {emptyWin && (
+                  <text x={PADDING_LEFT + plotWidth / 2} y={PADDING_TOP + plotHeight / 2} textAnchor="middle" fontSize={10} style={{ fill: "var(--ctx-tick)" }}>该时间窗内无轮次</text>
+                )}
+
+                {/* Crosshair + 悬浮点定位环（tooltip 本体是 HTML 层） */}
                 {hoveredPoint && (
                   <g style={{ pointerEvents: "none" }}>
                     <line x1={hoveredPoint.x} y1={PADDING_TOP} x2={hoveredPoint.x} y2={baselineY} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" opacity={0.5} clipPath="url(#plotClip)" />
@@ -1111,11 +1194,10 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
 
 
               </svg>
-            </div>
 
-            {/* HTML 悬浮层：恒定像素尺寸（不随图缩放——SVG 内嵌 tooltip 在 3x 缩放
-                时会放大到遮挡整片图区）、点位右侧 + 右缘自动翻左（不遮被检曲线）、
-                主题化卡片样式（Grafana/Recharts 同款交互形态） */}
+            {/* HTML 悬浮层：恒定像素尺寸（图框恒定，此处为 HTML 覆盖层的天然
+                语义）、点位右侧 + 右缘自动翻左（不遮被检曲线）、主题化卡片样式
+                （Grafana/Recharts 同款交互形态） */}
             {hoveredPoint && (() => {
               const tt = hoveredPoint
               const inputTotal = tt.turn.inputTokens + tt.turn.cacheReadTokens + tt.turn.cacheWriteTokens
@@ -1151,35 +1233,54 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                     <span className="shrink-0 text-[10px] text-muted-foreground">{tt.time}</span>
                   </div>
 
-                  <div className="pt-2">
-                    <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
-                      <div className="h-full bg-amber-500" style={{ width: `${cachePct}%` }} />
-                      <div className="h-full bg-blue-500" style={{ width: `${newInputPct}%` }} />
-                      {cacheWritePct > 0 && <div className="h-full bg-orange-500" style={{ width: `${cacheWritePct}%` }} />}
+                  {tt.isBirth ? (
+                    /* 初始轮（0-token 派发消息）：无 token 计量段——细节 =
+                       消息本体摘要；点击可跳转该 user 轮 */
+                    <div className="space-y-1.5 pt-2">
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium">初始轮</span>
+                        <span className="text-muted-foreground">上下文自此生长{tt.turn.role === "user" ? " · 派发消息" : ""}</span>
+                      </div>
+                      {tt.turn.contentSummary && (
+                        <p className="line-clamp-3 rounded-md border-l-2 border-border bg-muted/50 px-2 py-1 text-[10px] leading-relaxed text-muted-foreground">
+                          {tt.turn.contentSummary}
+                        </p>
+                      )}
+                      <p className="text-[10px] text-muted-foreground">此轮无 token 计量 · 消息全文见 Turns</p>
                     </div>
-                    <div className="flex items-center gap-3 pt-1 text-[10px]">
-                      <span className="text-amber-600 dark:text-amber-400">Cache {cachePct.toFixed(0)}%</span>
-                      <span className="text-blue-600 dark:text-blue-400">Input {newInputPct.toFixed(0)}%</span>
-                      {cacheWritePct > 0 && <span className="text-orange-600 dark:text-orange-400">CW {cacheWritePct.toFixed(0)}%</span>}
-                    </div>
-                  </div>
+                  ) : (
+                    <>
+                      <div className="pt-2">
+                        <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+                          <div className="h-full bg-amber-500" style={{ width: `${cachePct}%` }} />
+                          <div className="h-full bg-blue-500" style={{ width: `${newInputPct}%` }} />
+                          {cacheWritePct > 0 && <div className="h-full bg-orange-500" style={{ width: `${cacheWritePct}%` }} />}
+                        </div>
+                        <div className="flex items-center gap-3 pt-1 text-[10px]">
+                          <span className="text-amber-600 dark:text-amber-400">Cache {cachePct.toFixed(0)}%</span>
+                          <span className="text-blue-600 dark:text-blue-400">Input {newInputPct.toFixed(0)}%</span>
+                          {cacheWritePct > 0 && <span className="text-orange-600 dark:text-orange-400">CW {cacheWritePct.toFixed(0)}%</span>}
+                        </div>
+                      </div>
 
-                  <div className="pt-2">
-                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span>窗口占比（限 {formatTokenCount(agentLimit)}）</span>
-                      <span style={{ color: ctxBarColor }}>{ctxPctDisplay}</span>
-                    </div>
-                    <div className="mt-1 h-1.5 w-full rounded-full bg-muted">
-                      <div className="h-full rounded-full" style={{ width: `${ctxFillPct * 100}%`, backgroundColor: ctxBarColor }} />
-                    </div>
-                  </div>
+                      <div className="pt-2">
+                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span>窗口占比（限 {formatTokenCount(agentLimit)}）</span>
+                          <span style={{ color: ctxBarColor }}>{ctxPctDisplay}</span>
+                        </div>
+                        <div className="mt-1 h-1.5 w-full rounded-full bg-muted">
+                          <div className="h-full rounded-full" style={{ width: `${ctxFillPct * 100}%`, backgroundColor: ctxBarColor }} />
+                        </div>
+                      </div>
 
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-2 text-[11px] text-muted-foreground">
-                    <span>总量 <span className="font-medium text-foreground">{formatTokenCount(tt.tokens)}</span></span>
-                    <span>输入 <span className="font-medium text-foreground">{formatTokenCount(inputTotal)}</span></span>
-                    <span>新输入 <span className="font-medium text-foreground">{formatTokenCount(tt.newInput)}</span></span>
-                    <span>输出 <span className="font-medium text-foreground">{formatTokenCount(tt.turn.outputTokens)}</span></span>
-                  </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-2 text-[11px] text-muted-foreground">
+                        <span>总量 <span className="font-medium text-foreground">{formatTokenCount(tt.tokens)}</span></span>
+                        <span>输入 <span className="font-medium text-foreground">{formatTokenCount(inputTotal)}</span></span>
+                        <span>新输入 <span className="font-medium text-foreground">{formatTokenCount(tt.newInput)}</span></span>
+                        <span>输出 <span className="font-medium text-foreground">{formatTokenCount(tt.turn.outputTokens)}</span></span>
+                      </div>
+                    </>
+                  )}
 
                   <div className="pt-1.5 text-[10px] text-muted-foreground">
                     {tt.turn.model ?? "—"} · {tt.turn.role} · 点击图区跳转该轮
@@ -1215,34 +1316,47 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
           >
             仅 Root
           </button>
+          {agentStats.length > INLINE_GROUPS_MAX && (
+            <button
+              type="button"
+              data-quick-top
+              onClick={() => setVisibleSessions(new Set(topKSessionIds))}
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs transition-all duration-300",
+                topKActive
+                  ? "bg-background font-medium text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {`峰值 Top${FOCUS_TOP_K}`}
+            </button>
+          )}
         </div>
 
-        {/* 玻璃工具条（Graph 同款浮层 chrome）：缩放/适配全程命令式更新，零重渲染 */}
+        {/* 玻璃工具条（Perf 同款浮层 chrome）：时间窗缩放/平移/适配全程 */}
           <div className="run-glass absolute right-3 bottom-3 flex items-center rounded-xl">
             <button
               type="button" title="缩小（Ctrl + 滚轮）" aria-label="缩小"
-              onClick={() => zoomAt(1 / 1.15, undefined, undefined, true)}
+              onClick={() => zoomAt(1 / 1.15)}
               className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
             >
               <ZoomOutIcon className="size-3.5" />
             </button>
-            <button
-              type="button" title="重置缩放" aria-label="重置缩放" data-zoom-label
-              ref={zoomLabelRef}
-              onClick={resetCamera}
-              className="run-tool-btn w-11 text-center text-[11px] tabular-nums text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
-            />
+            <span
+              data-zoom-label title="当前时间窗倍率"
+              className="w-11 text-center text-[11px] tabular-nums text-[#57606a]"
+            >{ratio}%</span>
             <button
               type="button" title="放大（Ctrl + 滚轮）" aria-label="放大"
-              onClick={() => zoomAt(1.15, undefined, undefined, true)}
+              onClick={() => zoomAt(1.15)}
               className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
             >
               <ZoomInIcon className="size-3.5" />
             </button>
             <span className="h-3.5 w-px bg-black/10" aria-hidden />
             <button
-              type="button" title="适配画布" aria-label="适配画布" data-zoom-fit
-              onClick={fitChart}
+              type="button" title="适配全程" aria-label="适配全程" data-zoom-fit
+              onClick={() => setWin(null)}
               className="run-tool-btn flex size-7 items-center justify-center text-[#57606a] hover:bg-black/[0.05] hover:text-[#1f2328]"
             >
               <MaximizeIcon className="size-3.5" />
@@ -1251,9 +1365,33 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
         </div>
 
         {/* 图例胶囊（纯图例职责）：色点/×N；点击整组显隐、悬停联动高亮、chevron
-            展开组详情——数字（峰值/平均/缓存/占比）归 Agent 概览表，曲线归形状 */}
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          {groups.map(g => {
+            展开组详情弹窗——数字（趋势小图/概览卡/组成/事件/缓存）全归弹窗，
+            曲线归形状。大 run（组数超阈值）：行首搜索（按名过滤）+ 折叠区
+            （预览前 N，可见组前置）+ 展开限高滚动 */}
+        <div className="flex shrink-0 flex-col gap-1.5">
+          {legendBig && (
+            <div className="flex items-center gap-2">
+              <input
+                data-legend-search
+                value={legendQuery}
+                onChange={e => setLegendQuery(e.target.value)}
+                placeholder="搜索成员 / 类型…"
+                className="h-7 w-44 shrink-0 rounded-full border border-border bg-background px-3 text-xs outline-none placeholder:text-muted-foreground/60 focus:ring-1 focus:ring-foreground/20"
+              />
+              {legendQueryLower && (
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{matchedGroups.length}/{groups.length}</span>
+              )}
+              {legendExpanded && !legendQueryLower && (
+                <button
+                  type="button"
+                  onClick={() => setLegendExpanded(false)}
+                  className="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                >收起</button>
+              )}
+            </div>
+          )}
+          <ScrollFade className={cn("flex flex-wrap items-center gap-1.5", legendBig && legendShowAll && "max-h-40 overflow-y-auto")}>
+            {shownGroups.map(g => {
             const on = g.visibleCount > 0
             return (
               <span
@@ -1299,231 +1437,440 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
               </span>
             )
           })}
+            {legendBig && !legendShowAll && matchedGroups.length > COLLAPSED_PILLS && (
+              <button
+                type="button"
+                data-legend-expand
+                onClick={() => setLegendExpanded(true)}
+                className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >{`+${matchedGroups.length - COLLAPSED_PILLS}`}</button>
+            )}
+          </ScrollFade>
         </div>
       </CardContent>
     </Card>
 
-    {/* Agent 概览：独立卡片（不嵌在趋势卡里——层级清晰；趋势卡 flex 链不再
-        裁内容，卡片网格全铺开无内滚，页面级滚动接管）；点卡直达组详情（带
-        实例选中），卡片常亮不随图中显隐/选中变化 */}
-    <Card size="sm" data-agent-table className="shrink-0">
-      <CardContent className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-medium text-muted-foreground">Agent 概览</span>
-            <span className="text-xs text-muted-foreground/70">按峰值排序</span>
-          </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-1.5">
-            {[...agentStats].sort((a, b) => b.peak - a.peak).map(s => {
-              const groupKey = contextLegendKeyOf(s)
-              const actor = actors.get(s.sessionId)
-              const winPct = s.maxContextWindowPct
-              const barColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : "#22c55e"
-              return (
-                <div
-                  key={s.sessionId}
-                  data-agent-row
-                  // 卡片常亮：不随图中显隐/选中变化（隐藏组淡出曾在此联动——
-                  // 显隐语义归图与胶囊，概览是恒定参照面板）
-                  className="cursor-pointer rounded-lg border px-3 py-1.5 transition-colors hover:bg-accent/40"
-                  onClick={() => { setDetailKey(groupKey); setDetailSid(s.sessionId) }}
-                >
-                  {/* 名字单行全显：nowrap 不截断（列宽 340px 起容纳常规名），
-                      超长名把右侧指标挤到次行——名字永远完整 */}
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: colorMap.get(groupKey) ?? "#94a3b8" }} />
-                    <span className="whitespace-nowrap text-xs font-medium">{displayLabel(s)}</span>
-                    {s.isRoot && <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px]">root</Badge>}
-                    {!s.isRoot && actor?.nameSource === "step" && (
-                      <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px] text-muted-foreground">派发</Badge>
-                    )}
-                    <span className="ml-auto shrink-0 text-xs font-medium tabular-nums">{formatTokenCount(s.peak)}</span>
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      <span className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
-                        <span className="block h-full rounded-full" style={{ width: `${Math.min(winPct, 100)}%`, backgroundColor: barColor }} />
-                      </span>
-                      <span className="w-13 text-right text-xs tabular-nums">{winPct > 0 ? `${winPct.toFixed(1)}%` : "—"}</span>
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-3 pl-3.5 text-[11px] tabular-nums text-muted-foreground">
-                    <span>{s.totalTurns} 轮</span>
-                    <span>平均 {formatTokenCount(s.average)}</span>
-                    <span>缓存命中 {(s.cacheHitRate * 100).toFixed(0)}%</span>
-                    {onNavigateToTurn && (
-                      <button
-                        type="button"
-                        className="ml-auto shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                        onClick={e => { e.stopPropagation(); onNavigateToTurn(s.turns[0].turnId, s.memberTaskId) }}
-                      >
-                        → Turns
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+    {/* 组详情（第四层）——右侧滑出弹窗 = 该 agent 的上下文档案：胶囊
+        chevron 是唯一入口（默认选中峰值最高实例，实例清单行即切换器）。
+        档案结构：身份行 → 关键四数（峰值/水位/增速/缓存命中）→ 增长趋势
+        小图 → 风险时刻（/compact 落差 + 越限警告，无则隐去）→ 缓存效率
+        （峰值轮构成 + 命中/节省/倍数）→ → Turns */}
 
-        {/* 组详情（第四层：构成下钻）——两个入口一个面板：胶囊 chevron =
-            组视角（这一类 agent 由哪些实例构成、各自贡献多少：实例排行 +
-            成员归因 + 组级 Σ 摘要）；概览卡片点击 = 实例视角（直达该实例
-            详情）。多实例组给构成清单（行即实例切换器），单实例组直开详情；
-            打开即滚动定位（上方 detailRef 契约） */}
-        {detailKey && (() => {
-          const g = groups.find(x => x.key === detailKey)
-          if (!g) return null
-          const members = agentStats
-            .filter(s => g.sessionIds.includes(s.sessionId))
-            .sort((a, b) => b.peak - a.peak)
-          if (members.length === 0) return null
-          const sel = members.find(m => m.sessionId === detailSid) ?? members[0]
-          const sumTurns = members.reduce((s, m) => s + m.totalTurns, 0)
-          const sumPeak = members.reduce((s, m) => s + m.peak, 0)
-          const sumSaved = members.reduce((s, m) => s + m.turns.reduce((x, t) => x + (t.cacheReadTokens ?? 0), 0), 0)
-          return (
-            <div data-agent-detail ref={detailRef} className="animate-in fade-in-0 slide-in-from-bottom-2 space-y-2 rounded-xl border bg-muted/30 p-3 duration-300">
-              <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="size-2 rounded-full" style={{ backgroundColor: g.color }} />
-                <span className="font-medium">{g.label}</span>
-                {members.length > 1 ? (
-                  <>
-                    <Badge variant="outline" className="text-xs">{members.length} 个实例</Badge>
-                    <span className="text-muted-foreground">Σ {sumTurns} 轮 · Σ 峰值 {formatTokenCount(sumPeak)} · Σ 缓存节省 {formatTokenCount(sumSaved)}</span>
-                  </>
-                ) : (
-                  <span className="text-muted-foreground">上下文详情</span>
-                )}
-                <Button variant="ghost" size="sm" className="ml-auto h-5 text-xs" onClick={() => { setDetailKey(null); setDetailSid(null) }}>关闭</Button>
-              </div>
-              {members.length > 1 && (
-                <div data-agent-instances className="space-y-1">
-                  {members.map(m => {
-                    const winPct = m.maxContextWindowPct
-                    const barColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : "#22c55e"
-                    return (
-                      <button
-                        key={m.sessionId} type="button"
-                        onClick={() => setDetailSid(m.sessionId)}
-                        className={cn(
-                          "flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-left text-xs transition-colors",
-                          m.sessionId === sel.sessionId ? "border-foreground/25 bg-accent/50" : "hover:bg-accent/40",
-                        )}
-                      >
-                        <span className="font-medium whitespace-nowrap">{displayLabel(m)}</span>
-                        {m.memberTaskId && <Badge variant="slate" className="text-xs">{m.memberLabel ?? m.memberTaskId}</Badge>}
-                        <span className="text-muted-foreground tabular-nums">{m.totalTurns} 轮</span>
-                        <span className="text-muted-foreground tabular-nums">峰值 {formatTokenCount(m.peak)}</span>
-                        <span className="ml-auto flex items-center gap-1.5">
-                          <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
-                            <span className="block h-full rounded-full" style={{ width: `${Math.min(100, Math.max(2, winPct))}%`, backgroundColor: barColor }} />
-                          </span>
-                          <span className="w-9 text-right tabular-nums text-muted-foreground">{winPct.toFixed(0)}%</span>
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-              <AgentDetail stats={sel} label={displayLabel(sel)} onClose={() => { setDetailKey(null); setDetailSid(null) }} onNavigateToTurn={onNavigateToTurn} />
-            </div>
-          )
-        })()}
-      </CardContent>
-    </Card>
+    <AgentDetailDialog
+      open={detailKey != null}
+      onOpenChange={o => { if (!o) { setDetailKey(null); setDetailSid(null) } }}
+      group={groups.find(x => x.key === detailKey) ?? null}
+      agentStats={agentStats}
+      selectedSid={detailSid}
+      onSelectSid={setDetailSid}
+      displayLabel={displayLabel}
+      actors={actors}
+      onNavigateToTurn={onNavigateToTurn}
+    />
     </>
   )
 }
 
-const EVENT_CONFIG: Record<string, { icon: string; color: string }> = {
-  start: { icon: "🟢", color: "text-green-600 dark:text-green-400" },
-  growth: { icon: "📈", color: "text-blue-600 dark:text-blue-400" },
-  peak: { icon: "⭐", color: "text-yellow-600 dark:text-yellow-400" },
-  warning: { icon: "⚠️", color: "text-red-600 dark:text-red-400" },
-  compact: { icon: "⚡", color: "text-purple-600 dark:text-purple-400" },
-  end: { icon: "🔴", color: "text-gray-600 dark:text-gray-400" },
+/** 详情弹窗内的独立增长趋势小图：逐轮轴（agent 自身轮序，非全局时间轴——
+ *  单 agent 的增长故事按轮读最直观），y = 实际输入（含缓存读），底部琥珀
+ *  带为缓存读份额；曲线自初始锚（0-token 派发轮）从 0 生长——初始轮占
+ *  独立槽位，无独立初始轮时锚在首数据轮处（零宽 riser）；80%/100% 上下文
+ *  窗口参考线 + /compact 标记 + 关键事件点；多实例组以灰线同框对比形态。
+ *  静态图（无缩放——聚焦单 agent 不需要窗口操作，主图的窗口交互在趋势卡上） */
+const TREND_W = 560
+const TREND_H = 220
+const TREND_PAD_L = 46
+const TREND_PAD_R = 14
+const TREND_PAD_T = 14
+const TREND_PAD_B = 20
+
+const TREND_EVENT_COLORS: Record<string, string> = {
+  start: "#22c55e", growth: "#3b82f6", peak: "#eab308", warning: "#ef4444", compact: "#a855f7", end: "#94a3b8",
 }
 
-function AgentDetail({ stats, label, onClose, onNavigateToTurn }: { stats: AgentStats; label: string; onClose: () => void; onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void }) {
-  const peakTurn = stats.turns.reduce((max, t) => t.totalTokens > max.totalTokens ? t : max, stats.turns[0])
-  const peakCacheRead = peakTurn.cacheReadTokens ?? 0
-  const peakRealInput = peakTurn.inputTokens + peakTurn.cacheReadTokens + peakTurn.cacheWriteTokens
-  const peakNewInput = peakTurn.inputTokens
-  const peakCachePct = peakRealInput > 0 ? (peakCacheRead / peakRealInput * 100) : 0
+function AgentTrendChart({ stats, color, peers }: { stats: AgentStats; color: string; peers: AgentStats[] }) {
+  const plotW = TREND_W - TREND_PAD_L - TREND_PAD_R
+  const plotH = TREND_H - TREND_PAD_T - TREND_PAD_B
+  const baselineY = TREND_H - TREND_PAD_B
 
-  const totalSaved = stats.turns.reduce((s, t) => s + (t.cacheReadTokens ?? 0), 0)
-  const totalInput = stats.turns.reduce((s, t) => s + t.totalTokens, 0)
+  // 时间序（缺失回落原序）：agent 自身轮序即 x 轴
+  const turns = useMemo(() => {
+    const arr = stats.turns.map((t, i) => ({ t, i }))
+    arr.sort((a, b) => {
+      const ta = a.t.createdAt ? new Date(a.t.createdAt).getTime() : a.i
+      const tb = b.t.createdAt ? new Date(b.t.createdAt).getTime() : b.i
+      return (ta - tb) || (a.i - b.i)
+    })
+    return arr.map(({ t }) => t)
+  }, [stats])
+  // 初始锚点：context 从 0 生长——初始轮（0-token 派发消息，独立轮号/时刻）
+  // 在轴上占自己的槽位；初始轮即首数据轮（无 0-token 轮）时锚与首数据轮
+  // 同 x——零宽 riser（monotonePath 零宽段直线跳转）。数据轮槽位统一后移
+  const anchorTurn = stats.birth && !turns.includes(stats.birth) ? stats.birth : null
+  const dataAt = anchorTurn ? 1 : 0
+  const slots = anchorTurn ? [anchorTurn, ...turns] : turns
+  const n = slots.length
+  const yOf = (t: TurnRowItem) => t.inputMessagesTokens || t.totalTokens
+  const peak = Math.max(...turns.map(yOf), 1)
+  // y 量程与主图同式（可见峰值 1.15 余量整步上取，钳窗口 1.1 倍——逼近时
+  // 100% 参考线可及）
+  const yMax = Math.min(Math.ceil(peak * 1.15 / 10000) * 10000, stats.contextLimit * 1.1)
+  const xAt = (i: number) => TREND_PAD_L + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW)
+  const yAt = (v: number) => TREND_PAD_T + plotH - (Math.min(v, yMax) / yMax) * plotH
+
+  // 渲染点：初始锚在槽 0（y=0 基线，缓存份额 0；真实初始轮 yOf 亦为 0）
+  const points = [
+    { x: xAt(0), y: yAt(0), cache: 0 },
+    ...turns.map((t, i) => ({ x: xAt(i + dataAt), y: yAt(yOf(t)), cache: Math.min(t.cacheReadTokens ?? 0, yOf(t)) })),
+  ]
+  const renderPoints = turns.length > 160 ? lttb(points, 140) : points
+
+  const yTicks = (() => {
+    const raw = yMax / 4
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)))
+    const norm = raw / mag
+    const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag
+    const ticks: Array<{ y: number; label: string }> = []
+    for (let v = 0; v <= yMax; v += step) ticks.push({ y: yAt(v), label: formatTokenCount(v) })
+    return ticks
+  })()
+
+  const xTicks = (() => {
+    if (n <= 1) return [{ x: xAt(0), label: `#${slots[0]?.turnIndex ?? 0}` }]
+    const target = Math.min(5, n - 1)
+    const ticks: Array<{ x: number; label: string }> = []
+    const seen = new Set<number>()
+    for (let k = 0; k <= target; k++) {
+      const idx = Math.round((k * (n - 1)) / target)
+      if (seen.has(idx)) continue
+      seen.add(idx)
+      ticks.push({ x: xAt(idx), label: `#${slots[idx].turnIndex}` })
+    }
+    return ticks
+  })()
+
+  // 事件点位：turnIndex 直配（start/growth/peak/warning/end 出自 stats 轮）；
+  // /compact 命令轮常 0 token 不在 stats 轮里，回落时间序首个 ≥ 命令时刻的
+  // 轮。槽位 = 数据序 + 初始锚占位数（anchorTurn 时 dataAt=1）
+  const posOfTurnIndex = new Map<number, number>()
+  turns.forEach((t, i) => { if (!posOfTurnIndex.has(t.turnIndex)) posOfTurnIndex.set(t.turnIndex, i + dataAt) })
+  const evtPos = (evt: ContextEvent): number | null => {
+    const direct = posOfTurnIndex.get(evt.turnIndex)
+    if (direct != null) return direct
+    if (!evt.timestamp) return null
+    const ts = new Date(evt.timestamp).getTime()
+    for (let i = 0; i < turns.length; i++) {
+      const at = turns[i].createdAt
+      if (at && new Date(at).getTime() >= ts) return i + dataAt
+    }
+    return turns.length - 1 + dataAt
+  }
+  const markers = stats.events
+    .map(evt => ({ evt, i: evtPos(evt) }))
+    .filter((m): m is { evt: ContextEvent; i: number } => m.i != null)
+
+  const limitY = yAt(stats.contextLimit)
+  const cautionY = yAt(stats.contextLimit * 0.8)
+  const showLimit = stats.contextLimit <= yMax * 1.05
+
+  // 对比实例（灰线）：同管线（时间序 + LTTB + 初始锚——灰线也从 0 生长），
+  // 无标签无事件——形态对比；单轮实例画 riser（与选中实例口径一致）。
+  // y 计算内联（yAt 是每渲染新建闭包，进依赖数组会击穿 memo；量程只随
+  // stats/peers 变化）
+  const peerLines = useMemo(() => peers.map(p => {
+    const arr = p.turns.map((t, i) => ({ t, i }))
+    arr.sort((a, b) => {
+      const ta = a.t.createdAt ? new Date(a.t.createdAt).getTime() : a.i
+      const tb = b.t.createdAt ? new Date(b.t.createdAt).getTime() : b.i
+      return (ta - tb) || (a.i - b.i)
+    })
+    const pn = arr.length
+    const pts = [
+      { x: TREND_PAD_L, y: TREND_PAD_T + plotH },
+      ...arr.map(({ t }, i) => ({
+        x: TREND_PAD_L + ((i + 1) / pn) * plotW,
+        y: TREND_PAD_T + plotH - (Math.min(yOf(t), yMax) / yMax) * plotH,
+      })),
+    ]
+    return { sessionId: p.sessionId, d: monotonePath(pts.length > 161 ? lttb(pts, 140) : pts) }
+  }).filter((x): x is { sessionId: string; d: string } => x != null), [peers, plotW, plotH, yMax])
+
+  // 数据轮 ≥ 1 即有轨迹（初始锚 + 数据点 ≥ 2 点）——riser 也是增长故事
+  const lineD = monotonePath(renderPoints)
+  const areaD = monotonePath(renderPoints)
+  const cacheD = monotonePath(renderPoints.map(p => ({ x: p.x, y: TREND_PAD_T + plotH - (p.cache / yMax) * plotH })))
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge variant={stats.isRoot ? "blue" : "orange"} className="text-xs">{label}</Badge>
-        <Badge variant="outline" className="text-xs">{stats.isRoot ? "主agent" : "subagent"}</Badge>
-        <span className="text-xs text-muted-foreground">{stats.totalTurns} 轮 · 峰值 {formatTokenCount(stats.peak)} · 平均 {formatTokenCount(stats.average)}</span>
-        {onNavigateToTurn && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-5 text-xs"
-            onClick={() => onNavigateToTurn(stats.turns[0].turnId, stats.memberTaskId)}
-          >
-            → Turns
-          </Button>
+    <div className="rounded-xl border bg-card p-2">
+      <svg data-chart="agent-trend" viewBox={`0 0 ${TREND_W} ${TREND_H}`} width="100%" role="img" aria-label="上下文增长趋势" className="block">
+        {/* 网格 + y 刻度 */}
+        {yTicks.map((tick, i) => (
+          <g key={i}>
+            <line x1={TREND_PAD_L} y1={tick.y} x2={TREND_W - TREND_PAD_R} y2={tick.y} stroke="currentColor" strokeOpacity={0.06} />
+            <text x={TREND_PAD_L - 6} y={tick.y + 3} fontSize={9} textAnchor="end" fill="currentColor" fillOpacity={0.5}>{tick.label}</text>
+          </g>
+        ))}
+        {/* x 刻度（agent 自身轮序，标全局轮号——与关键事件行 #N 对位） */}
+        {xTicks.map((tick, i) => (
+          <text key={i} x={tick.x} y={baselineY + 14} fontSize={9} textAnchor="middle" fill="currentColor" fillOpacity={0.5}>{tick.label}</text>
+        ))}
+        <line x1={TREND_PAD_L} y1={baselineY} x2={TREND_W - TREND_PAD_R} y2={baselineY} stroke="currentColor" strokeOpacity={0.15} />
+
+        {/* 上下文窗口参考线（该 agent 精确限） */}
+        {showLimit && (
+          <>
+            <line x1={TREND_PAD_L} y1={limitY} x2={TREND_W - TREND_PAD_R} y2={limitY} stroke="#ef4444" strokeWidth={1} strokeDasharray="5 4" opacity={0.65} />
+            <text x={TREND_W - TREND_PAD_R} y={limitY - 4} fontSize={9} textAnchor="end" fill="#ef4444" opacity={0.8}>100%</text>
+            <line x1={TREND_PAD_L} y1={cautionY} x2={TREND_W - TREND_PAD_R} y2={cautionY} stroke="#eab308" strokeWidth={1} strokeDasharray="5 4" opacity={0.5} />
+            <text x={TREND_W - TREND_PAD_R} y={cautionY - 4} fontSize={9} textAnchor="end" fill="#eab308" opacity={0.75}>80%</text>
+          </>
         )}
-        <Button variant="ghost" size="sm" className="ml-auto h-5 text-xs" onClick={onClose}>关闭</Button>
+
+        {/* 对比实例（组内其他实例，灰线形态对比） */}
+        {peerLines.map(p => (
+          <path key={p.sessionId} d={p.d} fill="none" stroke="#94a3b8" strokeWidth={1} opacity={0.35} />
+        ))}
+
+        {/* 缓存读份额（底部琥珀带）：曲线下沿到缓存份额的堆叠带（数据轮
+            ≥1 即有——初始锚也是轨迹的一部分） */}
+        <>
+          <path d={`${cacheD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill="#eab308" opacity={0.18} />
+          <path d={`${areaD} L ${renderPoints[renderPoints.length - 1].x} ${baselineY} L ${renderPoints[0].x} ${baselineY} Z`} fill={color} opacity={0.12} />
+          <path d={lineD} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        </>
+        {turns.length === 1 && (
+          <circle cx={xAt(dataAt)} cy={yAt(yOf(turns[0]))} r={4} fill={color} />
+        )}
+
+        {/* /compact 标记（纵虚线 + ⚡）与关键事件点 */}
+        {markers.map((m, i) => {
+          const x = xAt(m.i)
+          const c = TREND_EVENT_COLORS[m.evt.type] ?? "#94a3b8"
+          if (m.evt.type === "compact") {
+            return (
+              <g key={`mk-${i}`}>
+                <line x1={x} y1={TREND_PAD_T} x2={x} y2={baselineY} stroke={c} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
+                <text x={x} y={TREND_PAD_T - 3} fontSize={9} textAnchor="middle" fill={c}>⚡</text>
+              </g>
+            )
+          }
+          const y = yAt(yOf(slots[m.i]))
+          return <circle key={`mk-${i}`} cx={x} cy={y} r={m.evt.type === "peak" || m.evt.type === "warning" ? 3.5 : 2.5} fill={c} opacity={0.9} />
+        })}
+      </svg>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 pt-1 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-3 rounded-sm" style={{ backgroundColor: color, opacity: 0.6 }} />实际输入</span>
+        <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-3 rounded-sm bg-yellow-500/40" />缓存读份额</span>
+        {showLimit && <span className="flex items-center gap-1"><span className="inline-block h-0 w-3 border-t border-dashed border-red-500" />窗口上限</span>}
       </div>
+    </div>
+  )
+}
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="space-y-1.5">
-          <span className="text-xs font-medium">上下文组成（第 #{peakTurn.turnIndex} 轮，峰值）</span>
-          <div className="flex h-3 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-l-full bg-yellow-500" style={{ width: `${peakCachePct}%` }} />
-            <div className="h-full rounded-r-full bg-blue-500" style={{ width: `${100 - peakCachePct}%`, minWidth: peakCachePct < 100 ? "2px" : "0" }} />
-          </div>
-          <div className="space-y-0.5 text-xs">
-            <div className="flex items-center justify-between"><span className="text-yellow-600 dark:text-yellow-400">Cache Read</span><span className="tabular-nums">{formatTokenCount(peakCacheRead)}（{peakCachePct.toFixed(0)}%）</span></div>
-            <div className="flex items-center justify-between"><span className="text-blue-600 dark:text-blue-400">New Input</span><span className="tabular-nums">{formatTokenCount(Math.max(peakNewInput, 0))}（{(100 - peakCachePct).toFixed(0)}%）</span></div>
-            <div className="flex items-center justify-between"><span className="text-muted-foreground">Total</span><span className="tabular-nums">{formatTokenCount(peakRealInput)}</span></div>
-          </div>
+/** 组详情弹窗（右侧滑出抽屉）= 该 agent 的上下文档案：胶囊 chevron 是唯一
+ *  入口。自上而下：身份行（组名 + root/subagent/派发徽标 + 轮次；多实例组
+ *  附 Σ 摘要与实例清单——行即切换器）→ 关键四数（峰值 / 窗口水位 / 增速 /
+ *  缓存命中——一次扫读拿全档案骨架）→ 增长趋势小图（逐轮轴 + 缓存份额带 +
+ *  窗口参考线 + /compact 标记，多实例组灰线同框）→ 风险时刻胶囊（只留
+ *  /compact 落差与越限警告——背景事件曲线已表达，无风险整节隐去）→ 缓存
+ *  效率卡（峰值轮构成 = 命中率的解释面 + 命中/节省/无缓存倍数）→ → Turns */
+function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid, onSelectSid, displayLabel, actors, onNavigateToTurn }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  group: LegendGroup | null
+  agentStats: AgentStats[]
+  selectedSid: string | null
+  onSelectSid: (sid: string) => void
+  displayLabel: (s: AgentStats) => string
+  actors: Map<string, RunActor>
+  onNavigateToTurn?: (turnId: string, memberTaskId?: string | null) => void
+}) {
+  const members = useMemo(
+    () => (group ? agentStats.filter(s => group.sessionIds.includes(s.sessionId)).sort((a, b) => b.peak - a.peak) : []),
+    [group, agentStats],
+  )
+  const sel = members.find(m => m.sessionId === selectedSid) ?? members[0] ?? null
+  const sumTurns = members.reduce((s, m) => s + m.totalTurns, 0)
+  const sumPeak = members.reduce((s, m) => s + m.peak, 0)
+  const sumSaved = members.reduce((s, m) => s + m.turns.reduce((x, t) => x + (t.cacheReadTokens ?? 0), 0), 0)
+
+  const body = (() => {
+    if (!group || !sel) return null
+    const actor = actors.get(sel.sessionId)
+    const winPct = sel.maxContextWindowPct
+    const winColor = winPct > 80 ? "#ef4444" : winPct > 50 ? "#eab308" : undefined
+
+    const peakTurn = sel.turns.reduce((max, t) => t.totalTokens > max.totalTokens ? t : max, sel.turns[0])
+    const peakCacheRead = peakTurn.cacheReadTokens ?? 0
+    const peakRealInput = peakTurn.inputTokens + peakTurn.cacheReadTokens + peakTurn.cacheWriteTokens
+    const peakNewInput = peakTurn.inputTokens
+    const peakCachePct = peakRealInput > 0 ? (peakCacheRead / peakRealInput * 100) : 0
+    const totalSaved = sel.turns.reduce((s, t) => s + (t.cacheReadTokens ?? 0), 0)
+    const totalInput = sel.turns.reduce((s, t) => s + t.totalTokens, 0)
+
+    // 风险时刻只留可操作项（/compact 落差 + 越限警告）；start/growth/peak/end
+    // 是背景信息（曲线已表达），不占阅读带宽
+    const riskEvents = sel.events.filter(e => e.type === "compact" || e.type === "warning")
+
+    return (
+      <ScrollFade className="flex-1 space-y-2.5 overflow-y-auto p-4 pt-9">
+        {/* 头：身份一行——组名 + 归属徽标（root/subagent、派发出处）+ 轮次；
+            Σ 摘要仅多实例组 */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
+          <span className="text-sm font-semibold">{group.label}</span>
+          <Badge variant="outline" className="text-[10px]">{sel.isRoot ? "root" : "subagent"}</Badge>
+          {!sel.isRoot && actor?.nameSource === "step" && (
+            <Badge variant="outline" className="text-[10px] text-muted-foreground">派发</Badge>
+          )}
+          {members.length > 1 && <Badge variant="outline" className="text-[10px]">{members.length} 个实例</Badge>}
+          <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">{sel.totalTurns} 轮</span>
         </div>
+        {members.length > 1 && (
+          <div className="text-xs text-muted-foreground">Σ {sumTurns} 轮 · Σ 峰值 {formatTokenCount(sumPeak)} · Σ 缓存节省 {formatTokenCount(sumSaved)}</div>
+        )}
 
-        <div className="space-y-1">
-          <span className="text-xs font-medium">关键事件</span>
-          <div className="run-scroll-fade max-h-44 space-y-1 overflow-y-auto pr-1">
-            {stats.events.map((evt, i) => {
-              const cfg = EVENT_CONFIG[evt.type] ?? EVENT_CONFIG.start
+        {/* 实例清单（多实例组）：行即切换器——先选实例，再看档案 */}
+        {members.length > 1 && (
+          <div data-agent-instances className="space-y-1">
+            {members.map(m => {
+              const mWinPct = m.maxContextWindowPct
+              const mBarColor = mWinPct > 80 ? "#ef4444" : mWinPct > 50 ? "#eab308" : "#22c55e"
               return (
-                <div key={i} className="flex items-center gap-2 rounded border px-2 py-1 text-xs">
-                  <span className={cfg.color}>{cfg.icon}</span>
-                  <span className="font-mono text-muted-foreground">#{evt.turnIndex}</span>
-                  <span className="text-muted-foreground">{formatTimestamp(evt.timestamp)}</span>
-                  <span className="tabular-nums">{formatTokenCount(evt.contextSize)}</span>
-                  <span className="flex-1 truncate">{evt.note ?? evt.type}</span>
-                </div>
+                <button
+                  key={m.sessionId} type="button"
+                  onClick={() => onSelectSid(m.sessionId)}
+                  className={cn(
+                    "flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-left text-xs transition-colors",
+                    m.sessionId === sel.sessionId ? "border-foreground/25 bg-accent/50" : "hover:bg-accent/40",
+                  )}
+                >
+                  <span className="font-medium whitespace-nowrap">{displayLabel(m)}</span>
+                  {m.memberTaskId && <Badge variant="slate" className="text-xs">{m.memberLabel ?? m.memberTaskId}</Badge>}
+                  <span className="text-muted-foreground tabular-nums">{m.totalTurns} 轮</span>
+                  <span className="text-muted-foreground tabular-nums">峰值 {formatTokenCount(m.peak)}</span>
+                  <span className="ml-auto flex items-center gap-1.5">
+                    <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                      <span className="block h-full rounded-full" style={{ width: `${Math.min(100, Math.max(2, mWinPct))}%`, backgroundColor: mBarColor }} />
+                    </span>
+                    <span className="w-9 text-right tabular-nums text-muted-foreground">{mWinPct.toFixed(0)}%</span>
+                  </span>
+                </button>
               )
             })}
           </div>
-        </div>
+        )}
 
-        <div className="space-y-1">
-          <span className="text-xs font-medium">缓存效率</span>
-          <div className="grid grid-cols-3 gap-2 text-xs">
-            <div className="rounded-lg bg-muted/50 p-2 text-center">
-              <div className="text-muted-foreground">命中率</div>
-              <div className="font-medium tabular-nums">{(stats.cacheHitRate * 100).toFixed(0)}%</div>
-            </div>
-            <div className="rounded-lg bg-muted/50 p-2 text-center">
-              <div className="text-muted-foreground">节省</div>
-              <div className="font-medium tabular-nums">{formatTokenCount(totalSaved)}</div>
-            </div>
-            <div className="rounded-lg bg-muted/50 p-2 text-center">
-              <div className="text-muted-foreground">总消耗</div>
-              <div className="font-medium tabular-nums">{formatTokenCount(totalInput)}</div>
+        {/* 关键四数：峰值 / 窗口水位（Context 风险主指标，水位着色）/ 增速
+            （逼近窗口的速度）/ 缓存命中 */}
+        <div data-agent-stats className="grid grid-cols-4 divide-x divide-border rounded-lg border bg-muted/30 text-center">
+          <div className="px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">峰值</div>
+            <div className="text-sm font-semibold tabular-nums">{formatTokenCount(sel.peak)}</div>
+          </div>
+          <div className="px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">窗口水位</div>
+            <div className="text-sm font-semibold tabular-nums" style={winColor ? { color: winColor } : undefined}>
+              {winPct > 0 ? `${winPct.toFixed(1)}%` : "—"}
             </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            如无缓存，总消耗将增加约 {totalInput > 0 ? ((totalSaved + totalInput) / totalInput).toFixed(1) : "1"} 倍
-          </p>
+          <div className="px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">增速</div>
+            <div className="text-sm font-semibold tabular-nums">
+              {formatTokenCount(sel.avgGrowthPerTurn)}<span className="text-[10px] font-normal text-muted-foreground">/轮</span>
+            </div>
+          </div>
+          <div className="px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">缓存命中</div>
+            <div className="text-sm font-semibold tabular-nums">{(sel.cacheHitRate * 100).toFixed(0)}%</div>
+          </div>
         </div>
-      </div>
-    </div>
+
+        {/* 增长趋势（逐轮） */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>增长趋势（逐轮）</span>
+            {members.length > 1 && <span>灰线 = 组内其他实例</span>}
+          </div>
+          <AgentTrendChart stats={sel} color={group.color} peers={members.filter(m => m.sessionId !== sel.sessionId)} />
+        </div>
+
+        {/* 风险时刻：/compact 落差（pre→post ↓%）与越限警告；无风险即整节隐去 */}
+        {riskEvents.length > 0 && (
+          <div data-agent-events className="flex flex-wrap gap-1.5">
+            {riskEvents.map((evt, i) => {
+              if (evt.type === "compact") {
+                const pre = evt.preCompactTokens ?? 0
+                const post = evt.postCompactTokens ?? 0
+                const drop = pre > 0 && post > 0 ? Math.round((1 - post / pre) * 100) : 0
+                return (
+                  <span
+                    key={i} data-agent-event="compact" title={evt.note}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-2 py-1 text-xs tabular-nums text-purple-600 dark:text-purple-400"
+                  >
+                    <span>⚡</span>
+                    <span className="font-mono text-[10px]">#{evt.turnIndex}</span>
+                    <span>{pre > 0 && post > 0 ? `${formatTokenCount(pre)}→${formatTokenCount(post)} ↓-${drop}%` : "/compact"}</span>
+                  </span>
+                )
+              }
+              return (
+                <span
+                  key={i} data-agent-event="warning"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs tabular-nums text-red-600 dark:text-red-400"
+                >
+                  <span>⚠️</span>
+                  <span className="font-mono text-[10px]">#{evt.turnIndex}</span>
+                  <span>{evt.note}</span>
+                </span>
+              )
+            })}
+          </div>
+        )}
+
+        {/* 缓存效率：峰值轮构成（缓存读 vs 新输入——命中率的解释面）+ 全程三数 */}
+        <div data-cache-card className="space-y-1.5 rounded-lg border p-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium">缓存效率</span>
+            <span className="text-[10px] text-muted-foreground">峰值轮 #{peakTurn.turnIndex} 构成</span>
+          </div>
+          <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
+            <div className="h-full bg-yellow-500" style={{ width: `${peakCachePct}%` }} />
+            <div className="h-full bg-blue-500" style={{ width: `${100 - peakCachePct}%`, minWidth: peakCachePct < 100 ? "2px" : "0" }} />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs tabular-nums">
+            <span className="text-yellow-600 dark:text-yellow-400">缓存读 {formatTokenCount(peakCacheRead)}（{peakCachePct.toFixed(0)}%）</span>
+            <span className="text-blue-600 dark:text-blue-400">新输入 {formatTokenCount(Math.max(peakNewInput, 0))}（{(100 - peakCachePct).toFixed(0)}%）</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t pt-1.5 text-xs tabular-nums text-muted-foreground">
+            <span>命中 <span className="font-medium text-foreground">{(sel.cacheHitRate * 100).toFixed(0)}%</span></span>
+            <span>节省 <span className="font-medium text-foreground">{formatTokenCount(totalSaved)}</span></span>
+            <span>无缓存消耗 <span className="font-medium text-foreground">×{totalInput > 0 ? ((totalSaved + totalInput) / totalInput).toFixed(1) : "1"}</span></span>
+          </div>
+        </div>
+
+        {/* 动作：跳转该 agent 的 Turns */}
+        {onNavigateToTurn && (
+          <div className="flex justify-end">
+            <Button
+              variant="outline" size="sm" className="h-6 text-xs"
+              onClick={() => onNavigateToTurn(sel.turns[0].turnId, sel.memberTaskId)}
+            >
+              → Turns
+            </Button>
+          </div>
+        )}
+      </ScrollFade>
+    )
+  })()
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent side="right" data-agent-detail className="flex max-w-full flex-col gap-0 p-0 sm:max-w-[620px]">
+        <DialogTitle className="sr-only">Agent 上下文档案</DialogTitle>
+        <DialogDescription className="sr-only">增长趋势、窗口水位与缓存效率</DialogDescription>
+        {body}
+      </DialogContent>
+    </Dialog>
   )
 }

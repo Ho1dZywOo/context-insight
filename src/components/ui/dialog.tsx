@@ -50,9 +50,13 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  side = "center",
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
+  /** center = 居中弹窗（缺省）；right = 右侧滑出抽屉（inset-y 满高、左缘
+   *  圆角 + 右滑入场——下钻/巡检类常驻阅读面） */
+  side?: "center" | "right"
 }) {
   return (
     <DialogPortal>
@@ -60,8 +64,11 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          className
+          "fixed z-50 grid w-full gap-4 bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none",
+          side === "right"
+            ? "inset-y-0 right-0 h-full max-w-full rounded-none rounded-l-xl border-l data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-right data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-right"
+            : "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-xl max-w-[calc(100%-2rem)] sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          className,
         )}
         {...props}
       >

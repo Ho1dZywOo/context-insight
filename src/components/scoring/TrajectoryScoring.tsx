@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ArrowLeftIcon, LoaderIcon, AlertTriangleIcon, SparklesIcon, SettingsIcon, TargetIcon, FlaskConicalIcon, BotIcon, ShareIcon, PlayIcon, RefreshCwIcon } from 'lucide-react';
 import { sessionViewUrlFor, type ViewUrlFor } from '@/lib/observe/member-url';
+import { useRunHostCaps } from '@/lib/run/host-caps';
 import { BRAND_NAME, BAY_NAME } from '@/lib/branding';
 import { VERSION_DISPLAY } from '@/lib/version';
 import { loadProviderConfig } from '@/lib/ai-provider-config';
@@ -411,6 +412,8 @@ function DimensionCard({ taskId, dim, onJumpToTurn, onAdjudicate, adjBusy }: {
 }
 
 export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpToTurn, urlFor }: { taskId: string; framework?: string; embedded?: boolean; onJumpToTurn?: (turnIndex: number) => void; urlFor?: ViewUrlFor }) {
+  // 宿主能力门控：离线导出档案只读（评审/重算/上报/基线/配置全隐藏）
+  const { offline } = useRunHostCaps();
   const buildUrl = urlFor ?? sessionViewUrlFor;
   const [card, setCard] = useState<Scorecard | null>(null);
   const [state, setState] = useState<'loading' | 'ok' | '404' | 'error'>('loading');
@@ -774,7 +777,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
         <div className="text-center py-16 space-y-2">
           <p className="text-sm text-red-500">评分失败：{error}</p>
           <div className="flex items-center justify-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => void fetchCard(true)}>重试</Button>
+            {!offline && <Button variant="outline" size="sm" onClick={() => void fetchCard(true)}>重试</Button>}
           </div>
         </div>
       )}
@@ -951,7 +954,7 @@ export function TrajectoryScoring({ taskId, framework, embedded = false, onJumpT
     }
   }, [taskId, framework, buildUrl]);
 
-  const actions = (
+  const actions = offline ? null : (
     <div className="flex items-center gap-1.5">
       {/* 评审入口二选一：评审器分段互斥选中（Mate 默认·推荐），单一「运行评审」跑当前段。*/}
       {/* 使用频率排序：评审器+运行（最常用）→ 填报/上报 → 设为基线 → 评分配置（最不常用） */}

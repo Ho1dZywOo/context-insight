@@ -24,6 +24,9 @@ import { act } from 'react';
 import fs from 'node:fs';
 import path from 'node:path';
 import RunDetailPage from '@/app/run/[runId]/page';
+import { RunOfflineHostCapsProvider } from '@/lib/run/host-caps';
+import { createOfflineFetch, type OfflineMemberTurns } from '@/export-view/offline-kernel';
+import { urlKeyOf } from '@/lib/observe/export-html';
 import { parseAndIndex } from '@/lib/run/reader';
 import { buildViewModel } from '@/lib/run/view-model';
 import { attachSessionRefs } from '@/lib/run/session-link';
@@ -129,6 +132,53 @@ function clickNode(labelPart: string) {
   )
   expect(node, `图上应存在含「${labelPart}」的节点`).toBeTruthy()
   node!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+/** 离线宿主渲染：离线内核（静态档案 = 本文件 fixture 的 run 详情 + 空成员
+ *  富轮仓）+ offline caps provider——模拟导出 HTML 里挂载的真实工作台 */
+async function renderOfflinePage() {
+  const archive = { [urlKeyOf('/api/observe/run/minidemo01')]: responseBody };
+  const members: OfflineMemberTurns[] = [
+    { member: { taskId: 'ses_mini_a', label: 'build 执行' }, sessionId: 'ses_mini_a', framework: 'opencode', items: [] },
+  ];
+  const orig = vi.fn(async () => new Response('x'));
+  const offlineFetch = createOfflineFetch(members, archive, 'minidemo01', orig as unknown as typeof fetch);
+  const prevFetch = (globalThis as unknown as { fetch: unknown }).fetch;
+  vi.stubGlobal('fetch', offlineFetch);
+  try {
+    searchState.current = ''
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root!.render(
+        createElement(
+          Suspense,
+          { fallback: null },
+          createElement(
+            RunOfflineHostCapsProvider,
+            null,
+            createElement(RunDetailPage, { params: Promise.resolve({ runId: 'minidemo01' }) }),
+          ),
+        ),
+      )
+    })
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 0))
+    })
+    const body = document.body.textContent ?? ''
+    // 离线宿主：服务端协作动作全隐藏（刷新/导出/上传），工作台数据照常渲染
+    expect(document.querySelector('button[title="立即刷新"]')).toBeNull()
+    expect(document.querySelector('button[title="导出 Markdown"]')).toBeNull()
+    expect(document.querySelector('button[title="导出离线 HTML"]')).toBeNull()
+    expect([...document.querySelectorAll('button')].find(b => b.textContent?.includes('上传到'))).toBeUndefined()
+    expect(body).toContain('Context')
+    expect(body).toContain('minidemo01')
+    // 详情经内核静态档案应答（非原 fetch 直通）
+    expect(orig).not.toHaveBeenCalled()
+  } finally {
+    vi.stubGlobal('fetch', prevFetch)
+  }
 }
 
 afterEach(() => {
@@ -495,13 +545,17 @@ describe('Run 详情页暗色工作台', () => {
     expect(body).toContain('failed')
     expect(body).toContain('工作流')
     expect(body).toContain('minidemo01')
-    // 动作簇：刷新图标钮（title=立即刷新）+ 上传实心药丸；bundle 形态无
-    // MD/HTML 导出钮（solo 专属）
+    // 动作簇：刷新图标钮（title=立即刷新）+ 上传实心药丸；bundle 形态 HTML
+    // 导出全 run 可用（工作台即离线查看器），MD 导出仍 solo 专属
     expect(document.querySelector('button[title="立即刷新"]')).toBeTruthy()
     const upload = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('上传到'))
     expect(upload).toBeTruthy()
     expect(document.querySelector('button[title="导出 Markdown"]')).toBeNull()
-    expect(document.querySelector('button[title="导出离线 HTML"]')).toBeNull()
+    expect(document.querySelector('button[title="导出离线 HTML"]')).toBeTruthy()
+  })
+
+  it('离线宿主（导出 HTML 形态）：服务端协作动作全隐藏，工作台经内核档案照常渲染', async () => {
+    await renderOfflinePage()
   })
 })
 
@@ -1127,12 +1181,27 @@ describe('系统级观测：指标透镜 + Run Trace 时间轴', () => {
     expect(text).toContain('间隙 4%');
     expect(text).toContain('重试等待 12%');
 
-    // 泳道：build 两代各一条（g0 两次尝试两行，g1 一行）；执行条实心 + 验收条描边（ses_mini_b）
+    // 泳道：build 两代各一条（g0 两次尝试共线一行——顺序重试横向续写，g1 一行）；
+    // 执行条实心 + 验收条描边（ses_mini_b）
     expect(document.querySelectorAll('.trace-lane').length).toBe(2);
+    expect(document.querySelectorAll('.trace-row').length).toBe(2);
     expect(document.querySelectorAll('.trace-bar').length).toBe(4);
     expect(document.querySelectorAll('.trace-bar-verify').length).toBe(1);
     // 派发间隙显影：build g0 执行结束（02:01:00）→ 验收开始（02:01:10）一条点状线
     expect(document.querySelectorAll('.trace-gap').length).toBe(1);
+    // 重试等待显影：g0 第 1 次结束 → 第 2 次开始（30s 等待）一条等待虚线；
+    // 尝试徽标共线后仍在（第1次/第2次区分横向续写的尝试）
+    expect(document.querySelectorAll('.trace-wait').length).toBe(1);
+    const svgText = document.querySelector('.run-trace svg')?.textContent ?? '';
+    expect(svgText).toContain('第1次');
+    expect(svgText).toContain('第2次');
+    // 共线契约：g0 两次尝试的执行条同一行——同 y 基线（第1/第2次徽标所在
+    // rect 的 y 相等，此前按尝试叠行 y 差一个行高）
+    const ordRects = Array.from(document.querySelectorAll<SVGRectElement>('.run-trace svg g.trace-bar rect'))
+      .filter(r => r.getAttribute('height') === '8');
+    expect(ordRects.length).toBe(3);  // g0×2 + g1×1
+    const g0Pair = [0, 1].map(i => ordRects[i].getAttribute('y'));
+    expect(g0Pair[0]).toBe(g0Pair[1]);
 
     // 点击执行条 → 选中节点，侧栏从概览切到运行历史 + 时间四元构成块
     await act(async () => {
