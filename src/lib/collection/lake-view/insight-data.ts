@@ -172,17 +172,5 @@ export async function importSession(sid: string, recording: 'capture' | 'native'
   }
 }
 
-// 有界并发 map（评分卡逐会话现算，避免一次性打满事件循环）
-export async function mapBounded<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const i = next++;
-      if (i >= items.length) break;
-      out[i] = await fn(items[i]);
-    }
-  });
-  await Promise.all(workers);
-  return out;
-}
+// 有界并发 map 上抽为共享工具，向后兼容再导出（runs.ts 等旧引用不变）。
+export { mapBounded } from '@/lib/shared/map-bounded';
