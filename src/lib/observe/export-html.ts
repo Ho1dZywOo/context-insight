@@ -52,6 +52,8 @@ export interface RunExportPayload {
 }
 
 interface MemberDetailProjection {
+  /** 成员会话行 id（Prisma Session.id/cuid；turn 详情/搜索归因用，非 taskId） */
+  sessionId?: string | null
   skills?: Array<{ skillName: string }>
   agents?: Array<{ agentName: string | null; isSubagent: boolean }>
 }
@@ -108,19 +110,21 @@ export async function gatherRunExportData(runId: string): Promise<RunExportPaylo
     const urlFor = runMemberUrlFor(runId, m.taskId)
     const enc = encodeURIComponent
 
+    // member-detail 提供会话行 id（sid 是 taskId，两者不同字段）——先取到
+    // 才能填 OfflineMemberTurns.sessionId（契约：成员会话行 id，非 sid）
+    const memberDetailUrl = urlFor("member-detail")
+    const memberDetail = await fetchJson(memberDetailUrl)
+    const md = memberDetail.ok ? memberDetail.body as MemberDetailProjection : null
+
     const memberTurnsUrl = urlFor("member-turns?includeContent=true&includeToolDetail=true&includeMeta=true")
     const turnsRes = await fetchJson(memberTurnsUrl)
     const turnsBody = turnsRes.ok ? turnsRes.body as { items?: OfflineMemberTurns["items"] } : null
     memberTurns.push({
       member: { taskId: m.taskId, label: m.displayName },
-      sessionId: m.taskId,
+      sessionId: md?.sessionId ?? null,
       framework: m.framework,
       items: turnsBody?.items ?? [],
     })
-
-    const memberDetailUrl = urlFor("member-detail")
-    const memberDetail = await fetchJson(memberDetailUrl)
-    const md = memberDetail.ok ? memberDetail.body as MemberDetailProjection : null
 
     await Promise.all([
       archiveIfOk(urlFor("turn-digest")),

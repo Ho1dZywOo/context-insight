@@ -68,6 +68,7 @@ describe('run 工作台离线导出：gather（工作台同一 URL 构造器取�
       if (u.includes('/file-reads')) return Promise.resolve(json({ files: [{ filePath: '/a/b.ts' }, { filePath: '/a/b.ts' }], summary: {} }));
       if (u.includes('/member-detail')) {
         return Promise.resolve(json({
+          sessionId: 'row-1',
           taskId: 'exp-t1',
           skills: [{ skillName: 's1' }],
           agents: [{ agentName: 'a1', isSubagent: true }, { agentName: null, isSubagent: false }],
@@ -103,10 +104,11 @@ describe('run 工作台离线导出：gather（工作台同一 URL 构造器取�
     expect(Object.keys(payload.archive)).toContain(urlKeyOf('/api/observe/run/run%3Aexp/scorecard?taskId=exp-t1&framework=claude-code&member=exp-t1'));
     expect(Object.keys(payload.archive)).toContain(urlKeyOf('/api/observe/run/run%3Aexp/file-restore?filePath=%2Fa%2Fb.ts'));
 
-    // 成员富轮仓：合成器的单一数据源（成员归因 + framework + items 原样）
+    // 成员富轮仓：合成器的单一数据源（成员归因 + framework + items 原样）；
+    // sessionId 取 member-detail 的会话行 id（row-1），而非成员 taskId（exp-t1）
     expect(payload.memberTurns).toEqual([{
       member: { taskId: 'exp-t1', label: expect.any(String) },
-      sessionId: 'exp-t1',
+      sessionId: 'row-1',
       framework: 'claude-code',
       items: [{ turnId: 't0' }],
     }]);

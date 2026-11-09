@@ -387,7 +387,10 @@ function detailOf(members: OfflineMemberTurns[], turnId: string): Record<string,
         compactionTotals,
       )
     }
-    const inputMessagesCount = it.agentName !== "compaction" && inputMessagesJson
+    // 与 turn-detail.ts:346 同口径：compaction 轮优先用重建长度。离线富轮仓
+    // 不携带已存 inputMessagesJson，assistant 轮总走重建——json 可用即取
+    // 重建长度，否则回落存量计数（非 assistant 轮 json 为 null）。
+    const inputMessagesCount = inputMessagesJson
       ? JSON.parse(inputMessagesJson).length
       : it.inputMessagesCount
     return {
