@@ -19,6 +19,7 @@ import { isDshSessionLogName } from '../dsh-bridge/native';
 import type { SubagentRef } from './contract';
 import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage } from '../../shared/types';
 import { normalizeToolResultPayload } from '../../tool-conventions';
+import { detectSkillInvocations } from './skill-invocations';
 
 // Shared scan helpers (claude-format concepts, also reused by the proxy
 // extension layer claude-jsonl-full-context.ts).
@@ -145,6 +146,10 @@ interface ClaudeUsage {
   output_tokens: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  // cpx 捕获扩展（openai/responses 重组器归一写入；claude native wire 无此
+  // 字段）。旧版 cpx 未把它写进 cc-wire-round 信封 → mergedReasoning 恒 0，
+  // 读侧在此兜底恢复（真机实测 codex 捕获 197 reasoning → 落库 0）。
+  reasoning_tokens?: number;
 }
 
 function extractTextContent(content: string | ContentBlock[] | undefined): string | null {
@@ -944,11 +949,14 @@ export function buildAssistantInteraction(
     const cacheWrite = fu.cache_creation_input_tokens ?? 0;
     // inputMessagesTokens = max of thinking line's full input and incremental+cache
     const inputMessagesTokens = Math.max(maxRawInputTokens, incrementalInput + cacheRead + cacheWrite);
+    // usage 块 reasoning 兜底：信封（cc-wire-round.reasoningTokens，权威）缺
+    // 席时读 cpx 写入 usage 块的 reasoning_tokens——覆盖旧版捕获件
+    const reasoningTokens = mergedReasoning > 0 ? mergedReasoning : (fu.reasoning_tokens ?? 0);
     mergedUsage = {
       total: inputMessagesTokens + (fu.output_tokens ?? 0),
       input: incrementalInput,
       output: fu.output_tokens ?? 0,
-      reasoning: mergedReasoning,
+      reasoning: reasoningTokens,
       cacheRead,
       cacheWrite,
       cost: 0,
@@ -957,11 +965,12 @@ export function buildAssistantInteraction(
   } else if (group.lines[0]?.message?.usage) {
     // No final line with cache fields — use first line's cumulative input
     const u0 = group.lines[0].message.usage;
+    const reasoningTokens0 = mergedReasoning > 0 ? mergedReasoning : (u0.reasoning_tokens ?? 0);
     mergedUsage = {
       total: (u0.input_tokens ?? 0) + (u0.output_tokens ?? 0),
       input: u0.input_tokens ?? 0,
       output: u0.output_tokens ?? 0,
-      reasoning: mergedReasoning,
+      reasoning: reasoningTokens0,
       cacheRead: 0,
       cacheWrite: 0,
       cost: 0,
@@ -972,28 +981,11 @@ export function buildAssistantInteraction(
   const mergedContent = textParts.length > 0 ? textParts.join('\n') : null;
   const mergedToolCalls = allToolCalls.length > 0 ? allToolCalls : null;
 
-  // Detect skill invocations from Read tool_use calls to SKILL.md paths
-  // When Claude Code loads a skill, it reads <skill-dir>/SKILL.md — this is the
-  // definitive signal that a skill was invoked in this turn.
-  const skillInvocations: ToolCallInfo[] = [];
-  for (const tc of allToolCalls) {
-    if (tc.toolName === 'Read' && tc.argsJson) {
-      try {
-        const args = JSON.parse(tc.argsJson);
-        const filePath = String(args.file_path ?? '');
-        if (filePath.endsWith('/SKILL.md')) {
-          const skillName = filePath.split('/').slice(-2, -1)[0] || filePath.split('/SKILL.md')[0].split('/').pop() || '';
-          skillInvocations.push({
-            toolCallId: `skill-${tc.toolCallId}`,
-            toolName: `skill/${skillName}`,
-            argsJson: JSON.stringify({ skill: skillName, file_path: filePath }),
-            resultJson: null,
-            state: 'completed',
-          });
-        }
-      } catch { /* ignore */ }
-    }
-  }
+  // 技能加载信号检测（单源 skill-invocations 模块）：claude-code 的 Read
+  // 读 <skill-dir>/SKILL.md + codex 捕获路径的 exec_command 读类命令
+  // （cat/sed/… SKILL.md——codex 无 Read 工具，协议让模型自行读文件）。
+  // 合成 skill/<name> 调用 → turn-split 的 isSkillToolCall → SkillEvent。
+  const skillInvocations = detectSkillInvocations(allToolCalls);
 
   const finalToolCalls = skillInvocations.length > 0
     ? [...allToolCalls, ...skillInvocations]

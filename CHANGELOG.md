@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 ### Fixed
+- 【contextBay 数据源列表 codex 类型空缺】lake 会话导入表的框架徽标分支漏了 codex（与 dsh）——codex 会话上传 contextBay 成功，但数据源列表 type 列恒显「—」（客户实测「type 识别不出来」）。现框架族全覆盖（claude/opencode/cannbot/codex/dsh 五家徽标），RunsTable 徽标色板同步补 dsh；上传链路实测本身全通（捕获行直传 / 原生行 .native 双路径 + meta framework 落仓），缺口只在展示层
+- 【codex 技能使用恒空（Skills 面板零事件）】技能加载信号的 wire 双形状单源化（新模块 `skill-invocations`）：codex 无 Read 工具（0.162 实测工具面仅 exec_command/write_stdin），skills_instructions 协议让模型用 shell 读类命令（cat/sed/head/tail/less/more/nl）自行读 `<skill>/SKILL.md`——此前检测只认 claude-code 的 Read 形，codex 会话模型真实调用技能但 SkillEvent 永不产生（真机复现实锤）。现 claude-jsonl（cpx 捕获路径）与 codex-jsonl（原生 rollout 路径）双接线，合成 `skill/<name>` 调用进 turn-split 既有通道；排除面收敛误报（find/grep/ls 非读类首 token、`cat > path` 重定向写入、claude 的 Bash cat 不认——其技能加载主通道是 Read）
+- 【codex 原生会话工具时长恒 0】codex-jsonl 适配器补 ToolCallInfo 时间戳：function_call 行 ts → startedAt、function_call_output 行 ts → completedAt（经全局 call_id 索引回填）——此前两字段恒缺，turn-split 回落轮时间且 durationMs 恒 0（真机实测原生会话工具时长全 0）
+- 【捕获件 reasoning token 读侧兜底】claude-jsonl 的 mergedUsage 在信封（cc-wire-round.reasoningTokens，权威通道）缺席时回落读 usage 块的 `reasoning_tokens`——旧版 cpx 捕获的存量会话重导入/增量刷新也能恢复思考 token 计数，不再依赖上游发版
 - 【Node 门槛实测收紧至 22.14】engines / 启动器 / start.sh 的 Node 版本门槛从 22.12.0 抬至 22.14.0：better-sqlite3@13 预编译二进制在 22.13 及以下加载即段错误（全新隔离环境对真实发布的 npm 包二分实测——22.12.0 / 22.13.0 SIGSEGV、22.14.0 起探针通过），旧门槛让全新机器装得上包却起不来（停在端口日志后 core dump）；README 安装要求与发包契约测试（engines 断言）同步收紧；报错文案归位——段错误来源是 better-sqlite3@13（此前误写为泛指依赖），commander@15 的 22.12 要求被 22.14 覆盖
 
 ## [1.0.3] - 2026-11-09
