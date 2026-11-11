@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- 【solo run 上传误走 bundle】solo run 页头的上传入口现按底层会话上传（携带 taskId/framework），不再把 `solo:<taskId>` 当作 bundle ID；旧客户端误调 `bundle-upload` 时返回明确指引
 - 【技能加载不再伪造工具调用行】读 SKILL.md 类技能加载（claude Read / codex shell 读类命令）此前会合成 `skill/<name>` 假工具调用混进工具统计——Overview 的工具列表多出 `skill/data-analysis` 等幽灵工具。现 SkillEvent 由 turn-split 单点直出（关联真实工具调用并继承其真实时间戳与时长，此前时长恒 0），工具面只显示真实调用，读 SKILL.md 的真实工具行带技能关联标记
 - 【codex 会话技能原文恢复断链】Skills 面板/Audit 的「SKILL.md 原文」恢复此前只认 Skill 工具注入与 Read 两条通道，codex 的 exec_command（cat 读 SKILL.md）不在其中——正文必在却恢复不出来。现补 shell 读类命令通道（终端输出剥元数据壳后即原文），含行范围截断（head/tail/sed -n）的部分读取标记
 - 【codex 子代理派发进 Audit 对账】Audit 的 Agent 域目标此前只认 task/agent/subagent 三种派发工具，codex 的 spawn_agent 不在内——子代理明明派发了 3 个，Agent 域恒显 0。派发判定统一收归 dispatch-tools 注册表（spawn_agent 自动纳入），事件名取 codex 返回的子代理昵称（与泳道/Execution 一致），无昵称时回落任务书角色名

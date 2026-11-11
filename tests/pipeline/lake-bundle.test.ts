@@ -400,6 +400,17 @@ describe('bundle 导入：物化 → 解压 → run 导入 job → Run 工作台
 
     expect((await route.POST(makeRequest({ action: 'bundle-import' }))).status).toBe(400); // 缺 runId
     expect((await route.POST(makeRequest({ action: 'bundle-upload' }))).status).toBe(400); // 缺 runId
+    const soloRes = await route.POST(makeRequest({
+      action: 'bundle-upload',
+      runId: 'solo:94b6ab9d-b603-4777-910a-24d13e15c9c4',
+      description: '提交人: 张三',
+    }));
+    expect(soloRes.status).toBe(400);
+    expect(await soloRes.json()).toMatchObject({
+      reason: 'solo-run-not-bundle',
+      taskId: '94b6ab9d-b603-4777-910a-24d13e15c9c4',
+      action: 'upload',
+    });
     expect((await route.POST(makeRequest({ action: 'nope' }))).status).toBe(400);
 
     // paradigm 透传 = 精确物化（所在目录 reduction）

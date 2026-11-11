@@ -18,6 +18,7 @@ import { ensureMirrorAsync, lakeProgress, listRemoteDirs, markLakePhase } from '
 import { listParadigms, listRuns, getLakeListing, invalidateCaches } from '@/lib/collection/lake-view/runs';
 import { getScorecard } from '@/lib/collection/lake-view/insight-data';
 import { sessionHref } from '@/lib/shared/session-link';
+import { isSoloRunId, soloTaskIdOf } from '@/lib/run/identity';
 import {
   appendNote, putScorecard, editNote, readRecords, readSubmitInfo, setOpGen,
   readParadigmTarget, setParadigmTarget, NotesConflictError,
@@ -220,6 +221,15 @@ export async function POST(request: NextRequest) {
       const { runId, description, category, opGen } = body as { runId?: string; description?: string; category?: string; opGen?: string };
       if (!runId) {
         return NextResponse.json({ error: 'Missing runId' }, { status: 400 });
+      }
+      if (isSoloRunId(runId)) {
+        const taskId = soloTaskIdOf(runId);
+        return NextResponse.json({
+          error: `Solo run "${runId}" 是会话视图，不能作为 bundle 上传；请改用会话上传（taskId: ${taskId}）`,
+          reason: 'solo-run-not-bundle',
+          taskId,
+          action: 'upload',
+        }, { status: 400 });
       }
       // opGen（任务结果标注）：只认 success/failure，其余值视为未标注
       const opGenValue = opGen === 'success' || opGen === 'failure' ? opGen : undefined;

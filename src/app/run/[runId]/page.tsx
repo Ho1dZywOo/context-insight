@@ -676,9 +676,10 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
                 type="button"
                 className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-foreground px-3.5 text-xs font-medium text-background transition-opacity hover:opacity-85"
                 onClick={() => setUploadOpen(true)}
+                disabled={run.kind === "solo" && !soloMember}
               >
                 <UploadIcon className="size-3.5" />
-                上传到{BAY_NAME}
+                {run.kind === "solo" ? `上传会话到${BAY_NAME}` : `上传到${BAY_NAME}`}
               </button>
             ) : null}
           </div>
@@ -688,8 +689,16 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
           <UploadDialog
             open={uploadOpen}
             onOpenChange={setUploadOpen}
-            kind="run"
-            target={{ runId: run.runId, runName: run.name }}
+            kind={run.kind === "solo" ? "session" : "run"}
+            target={run.kind === "solo" && soloMember ? {
+              taskId: soloMember.taskId,
+              query: run.name,
+              framework: soloMember.framework,
+              model: soloMember.model,
+              startTime: run.startedAt,
+              endTime: run.finishedAt,
+              sourcePath: soloMember.sourcePath,
+            } : { runId: run.runId, runName: run.name }}
           />
         ) : null}
 

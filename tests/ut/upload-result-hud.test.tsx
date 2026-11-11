@@ -146,6 +146,11 @@ describe('上传结果 HUD（组件内单点，全上传面一致）', () => {
 
     // HUD 成功卡（宿主渲染在容器内）
     expect(container!.textContent).toContain(`已上传到 ${BAY_NAME}`)
+    expect(lastUploadBody).toMatchObject({
+      action: 'upload',
+      taskId: SESSION_TARGET.taskId,
+      framework: SESSION_TARGET.framework,
+    })
     // 弹窗即关 + 调用方回调（行内状态用）
     expect(onOpenChange).toHaveBeenCalledWith(false)
     expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ ok: true }))
