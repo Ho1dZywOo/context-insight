@@ -694,7 +694,7 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                               {sa.skillName} · SKILL.md
                               {skillContentData?.source && (
                                 <span className="text-muted-foreground">
-                                  （来源：{skillContentData.source === "skill-tool" ? "Skill 工具注入" : "Read 读取"}，{skillContentData.length} 字符
+                                  （来源：{skillContentData.source === "skill-tool" ? "Skill 工具注入" : skillContentData.source === "shell" ? "Shell 读取" : "Read 读取"}，{skillContentData.length} 字符
                                   {skillContentData.source === "read"
                                     ? skillContentData.fullRead
                                       ? "，判定全文·无 offset/limit"

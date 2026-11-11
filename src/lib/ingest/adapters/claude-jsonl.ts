@@ -19,7 +19,6 @@ import { isDshSessionLogName } from '../dsh-bridge/native';
 import type { SubagentRef } from './contract';
 import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage } from '../../shared/types';
 import { normalizeToolResultPayload } from '../../tool-conventions';
-import { detectSkillInvocations } from './skill-invocations';
 
 // Shared scan helpers (claude-format concepts, also reused by the proxy
 // extension layer claude-jsonl-full-context.ts).
@@ -981,15 +980,9 @@ export function buildAssistantInteraction(
   const mergedContent = textParts.length > 0 ? textParts.join('\n') : null;
   const mergedToolCalls = allToolCalls.length > 0 ? allToolCalls : null;
 
-  // 技能加载信号检测（单源 skill-invocations 模块）：claude-code 的 Read
-  // 读 <skill-dir>/SKILL.md + codex 捕获路径的 exec_command 读类命令
-  // （cat/sed/… SKILL.md——codex 无 Read 工具，协议让模型自行读文件）。
-  // 合成 skill/<name> 调用 → turn-split 的 isSkillToolCall → SkillEvent。
-  const skillInvocations = detectSkillInvocations(allToolCalls);
-
-  const finalToolCalls = skillInvocations.length > 0
-    ? [...allToolCalls, ...skillInvocations]
-    : mergedToolCalls;
+  // B 形技能加载检测（Read 读 / shell 读类命令 cat SKILL.md）在 turn-split
+  // 单点进行——adapter 不再合成 skill/<name> 调用（历史缺陷：假工具行混进
+  // 工具统计、resultJson 恒空断原文恢复链）
 
   // Skip if no content and no tool calls——但携带 usage/finishReason 的空组保留：
   // 现场回归（vbYQjB #1975 后）：subagent 最后一轮 stopReason=length、content=[]、
@@ -1032,7 +1025,7 @@ export function buildAssistantInteraction(
     subagent_name: null,
     subagent_session_id: null,
     subagent_type: null,
-    tool_calls: finalToolCalls,
+    tool_calls: mergedToolCalls,
     usage: mergedUsage,
     model: mergedModel,
     modelID: null,

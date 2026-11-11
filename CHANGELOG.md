@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 ### Fixed
+- 【技能加载不再伪造工具调用行】读 SKILL.md 类技能加载（claude Read / codex shell 读类命令）此前会合成 `skill/<name>` 假工具调用混进工具统计——Overview 的工具列表多出 `skill/data-analysis` 等幽灵工具。现 SkillEvent 由 turn-split 单点直出（关联真实工具调用并继承其真实时间戳与时长，此前时长恒 0），工具面只显示真实调用，读 SKILL.md 的真实工具行带技能关联标记
+- 【codex 会话技能原文恢复断链】Skills 面板/Audit 的「SKILL.md 原文」恢复此前只认 Skill 工具注入与 Read 两条通道，codex 的 exec_command（cat 读 SKILL.md）不在其中——正文必在却恢复不出来。现补 shell 读类命令通道（终端输出剥元数据壳后即原文），含行范围截断（head/tail/sed -n）的部分读取标记
+- 【codex 子代理派发进 Audit 对账】Audit 的 Agent 域目标此前只认 task/agent/subagent 三种派发工具，codex 的 spawn_agent 不在内——子代理明明派发了 3 个，Agent 域恒显 0。派发判定统一收归 dispatch-tools 注册表（spawn_agent 自动纳入），事件名取 codex 返回的子代理昵称（与泳道/Execution 一致），无昵称时回落任务书角色名
+- 【链式命令漏检技能加载】shell 读类命令检测此前只看整条命令的首 token，模型惯用的 `echo '==='; cat …/SKILL.md` 链式命令因首 token 是 echo 整段漏检（真机现场：主代理的 cannbay-report 技能加载丢失）。现按 `;` `&&` `||` `|` 分段独立判定（引号内不切）
 - 【contextBay 数据源列表 codex 类型空缺】lake 会话导入表的框架徽标分支漏了 codex（与 dsh）——codex 会话上传 contextBay 成功，但数据源列表 type 列恒显「—」（客户实测「type 识别不出来」）。现框架族全覆盖（claude/opencode/cannbot/codex/dsh 五家徽标），RunsTable 徽标色板同步补 dsh；上传链路实测本身全通（捕获行直传 / 原生行 .native 双路径 + meta framework 落仓），缺口只在展示层
 - 【codex 技能使用恒空（Skills 面板零事件）】技能加载信号的 wire 双形状单源化（新模块 `skill-invocations`）：codex 无 Read 工具（0.162 实测工具面仅 exec_command/write_stdin），skills_instructions 协议让模型用 shell 读类命令（cat/sed/head/tail/less/more/nl）自行读 `<skill>/SKILL.md`——此前检测只认 claude-code 的 Read 形，codex 会话模型真实调用技能但 SkillEvent 永不产生（真机复现实锤）。现 claude-jsonl（cpx 捕获路径）与 codex-jsonl（原生 rollout 路径）双接线，合成 `skill/<name>` 调用进 turn-split 既有通道；排除面收敛误报（find/grep/ls 非读类首 token、`cat > path` 重定向写入、claude 的 Bash cat 不认——其技能加载主通道是 Read）
 - 【codex 原生会话工具时长恒 0】codex-jsonl 适配器补 ToolCallInfo 时间戳：function_call 行 ts → startedAt、function_call_output 行 ts → completedAt（经全局 call_id 索引回填）——此前两字段恒缺，turn-split 回落轮时间且 durationMs 恒 0（真机实测原生会话工具时长全 0）

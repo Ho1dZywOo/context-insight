@@ -44,10 +44,11 @@ describe('codex 捕获路径（cpx → claude-jsonl → turn-split）', () => {
     skillEvents = result.skillEvents;
   });
 
-  it('exec_command cat SKILL.md 产出技能 load 事件（此前 codex 恒空）', () => {
-    const loads = skillEvents.filter(se => se.skillName === 'cannbay-report');
-    expect(loads.length).toBeGreaterThanOrEqual(1);
-    expect(loads.every(se => se.success)).toBe(true);
+  it('exec_command cat SKILL.md 产出技能使用事件（此前 codex 恒空）', () => {
+    const events = skillEvents.filter(se => se.skillName === 'cannbay-report');
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events.every(se => se.success)).toBe(true);
+    expect(events.every(se => se.eventType === 'use')).toBe(true);
   });
 
   it('exec_command 工具时长 = tool_result 行时刻 − tool_use 行时刻（非 0、非倒挂）', () => {
@@ -57,10 +58,26 @@ describe('codex 捕获路径（cpx → claude-jsonl → turn-split）', () => {
     expect(exec!.durationMs).toBe(50);
   });
 
-  it('合成 skill/cannbay-report 调用与 exec_command 并存于工具行', () => {
-    const synth = toolCalls.find(tc => tc.toolName === 'skill/cannbay-report');
-    expect(synth).toBeDefined();
-    expect(synth!.toolCallId).toBe('skill-call_2b53ddcaabbe43af90b76645');
+  it('B 形技能加载不再合成 skill/<name> 工具行——工具面只有真实调用', () => {
+    expect(toolCalls.some(tc => tc.toolName.startsWith('skill/'))).toBe(false);
+  });
+
+  it('读 SKILL.md 的真实 exec_command 行打 isSkillRelated，SkillEvent 关联源工具并继承时长/时间戳', () => {
+    const source = toolCalls.find(tc => tc.toolCallId === 'call_2b53ddcaabbe43af90b76645');
+    expect(source).toBeDefined();
+    expect(source!.toolName).toBe('exec_command');
+    expect(source!.isSkillRelated).toBe(true);
+
+    const ev = skillEvents.find(se => se.skillName === 'cannbay-report');
+    expect(ev).toBeDefined();
+    expect(ev!.durationMs).toBe(50);
+    expect(ev!.startedAt).toBe(source!.startedAt);
+    expect(ev!.completedAt).toBe(source!.completedAt);
+    expect(JSON.parse(ev!.argsJson!)).toEqual({
+      skill: 'cannbay-report',
+      file_path: expect.stringContaining('/cannbay-report/SKILL.md'),
+      source_tool_call_id: 'call_2b53ddcaabbe43af90b76645',
+    });
   });
 
   it('cc-wire-round.reasoningTokens 信封 → assistant turn reasoning 非零', () => {

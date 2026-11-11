@@ -12,6 +12,7 @@ import { selectSkillContent, type SkillToolCall } from '@/lib/skill-content';
 import { recoverCombinedWorkflowDeclaration, MAIN_AGENT_WORKFLOW_NAME } from '@/lib/sift-audit';
 import { ensureWorkflowExtractPluginLoaded } from '@/lib/workflow-extract-config';
 import { withRouteLog } from '@/lib/api-route';
+import { SHELL_TOOL_NAMES } from '@/lib/tool-conventions';
 
 export const GET = withRouteLog('observe/session/skill-content', async (request: NextRequest) => {
   // 激活部署根的 workflow-extract-plugins.json（server-only fs 加载；幂等）
@@ -70,6 +71,9 @@ export const GET = withRouteLog('observe/session/skill-content', async (request:
         { isSkillRelated: true },
         { AND: [{ toolName: 'Read' }, { argsJson: { contains: 'SKILL.md' } }] },
         { AND: [{ toolName: 'read' }, { argsJson: { contains: 'SKILL.md' } }] },
+        // shell 读类命令（exec_command cat …/SKILL.md——codex 主通道）；
+        // 摄取侧已给源工具行打 isSkillRelated，此分支兜旧数据与大小写变体
+        { AND: [{ toolName: { in: [...SHELL_TOOL_NAMES, 'Bash', 'Shell', 'Exec'] } }, { argsJson: { contains: 'SKILL.md' } }] },
       ],
     },
     select: {

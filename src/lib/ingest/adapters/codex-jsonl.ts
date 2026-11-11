@@ -13,7 +13,6 @@ import { readCaptureHead } from '@/lib/compression';
 import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage } from '../../shared/types';
 import { classifyCodexUserInjection } from './injections/codex';
 import { isRolloutFileName, rolloutSessionIdOf } from './codex-naming';
-import { detectSkillInvocations } from './skill-invocations';
 
 // ── codex 原生会话适配器（agent-source-framework 首个新框架客户）──────
 // 数据源：~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl（codex CLI
@@ -266,15 +265,9 @@ function readSessionFromLines(lines: CodexRolloutLine[]): RawInteraction[] {
       ? usageTs - groupFirstTs
       : null;
 
-    // 技能加载信号检测（skill-invocations 单源）：codex 协议里模型按
-    // skills_instructions 用 exec_command 读类命令（cat/sed/…）读
-    // <skill>/SKILL.md——此前 SkillEvent 恒空（真机实测）。合成 skill/<name>
-    // 调用挂在本组，与 claude 捕获路径同一检测语义。
-    const finalToolCalls = (() => {
-      if (toolCalls.length === 0) return null;
-      const invocations = detectSkillInvocations(toolCalls);
-      return invocations.length > 0 ? [...toolCalls, ...invocations] : toolCalls;
-    })();
+    // B 形技能加载检测（exec_command 读类命令 cat <skill>/SKILL.md）在
+    // turn-split 单点进行——本适配器只产真实工具调用，不合成 skill/<name> 行
+    const finalToolCalls = toolCalls.length > 0 ? toolCalls : null;
 
     result.push({
       role: 'assistant',
