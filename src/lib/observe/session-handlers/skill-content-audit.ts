@@ -13,7 +13,7 @@ import { withRouteLog } from '@/lib/api-route';
 export interface SkillContentAuditItem {
   skillName: string;
   hasContent: boolean;
-  source: 'skill-tool' | 'read' | null;
+  source: 'skill-tool' | 'read' | 'shell' | null;
   length: number;
   lines: number;
   /** 是否判定为读取了完整 SKILL.md（skill-tool 注入恒 true；read 需无 offset/limit 且无截断标记）。 */

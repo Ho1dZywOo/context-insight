@@ -135,7 +135,9 @@ export function LakeSessionTable({ sessions, paradigm, scope, selected, onToggle
                 </TableCell>
                 <TableCell className="px-2 text-xs py-2 align-middle">
                   {/* 同 sid 双记录：捕获条目走 proxy/框架徽标；原生条目靠同 sid
-                      两条目并排即可区分，不加额外徽标 */}
+                      两条目并排即可区分，不加额外徽标。框架族全覆盖
+                      （claude/opencode/cannbot/codex/dsh）——codex 曾漏分支，
+                      捕获上传成功但 type 列恒显「—」（客户实测） */}
                   <span className="inline-flex items-center gap-0.5">
                     {s.framework === "opencode" ? (
                       <Badge variant="blue" className="px-1 text-[10px]">OpenCode</Badge>
@@ -143,6 +145,10 @@ export function LakeSessionTable({ sessions, paradigm, scope, selected, onToggle
                       <Badge variant="green" className="px-1 text-[10px]">CANNBot</Badge>
                     ) : s.framework === "claude-code" ? (
                       <Badge variant="orange" className="px-1 text-[10px]">Claude</Badge>
+                    ) : s.framework === "codex" ? (
+                      <Badge variant="purple" className="px-1 text-[10px]">Codex</Badge>
+                    ) : s.framework === "dsh" ? (
+                      <Badge variant="slate" className="px-1 text-[10px]">DSH</Badge>
                     ) : (
                       <span className="text-muted-foreground">—</span>
                     )}

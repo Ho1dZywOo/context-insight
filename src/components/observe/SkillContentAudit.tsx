@@ -97,10 +97,10 @@ export function SkillContentAudit({ taskId, skillNames, onView, urlFor }: SkillC
             const tip = st === "full"
               ? (item.source === "skill-tool"
                   ? `全文 · Skill 工具注入（框架注入完整 SKILL.md）· ${item.length} 字符 / ${item.lines} 行`
-                  : `判定全文 · Read 读取，无 offset/limit 且无截断标记 · ${item.length} 字符 / 到第 ${item.maxLine} 行（无法完全排除大文件静默截断）`)
+                  : `判定全文 · ${item.source === "shell" ? "Shell 读取（读类命令无行范围）" : "Read 读取，无 offset/limit 且无截断标记"} · ${item.length} 字符${item.source === "shell" ? "" : ` / 到第 ${item.maxLine} 行（无法完全排除大文件静默截断）`}`)
               : st === "partial"
-                ? `部分读取 · Read 读取，检测到 offset/limit 或截断标记 → 仅读到第 ${item.maxLine} 行 · ${item.length} 字符`
-                : `未读取 · 未捕获到 SKILL.md 正文（该 skill 仅被调用未注入，或未通过 Skill 工具/Read 加载）`
+                ? `部分读取 · ${item.source === "shell" ? "Shell 读取，命令带行范围（head/tail/sed）" : "Read 读取，检测到 offset/limit 或截断标记 → 仅读到第 " + item.maxLine + " 行"} · ${item.length} 字符`
+                : `未读取 · 未捕获到 SKILL.md 正文（该 skill 仅被调用未注入，或未通过 Skill 工具/Read/Shell 读取加载）`
             return (
               <Tooltip key={item.skillName}>
                 <TooltipTrigger

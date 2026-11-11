@@ -25,6 +25,7 @@
 //                 多次派发——复用续跑，此时名字取首个派发）
 
 import type { ToolCallRow, TurnRow } from './turn-split';
+import { truncateUtf16Safe } from '../shared/text-strip';
 
 export interface DispatchToolSpec {
   /** 工具名精确匹配（小写归一后比较；claude proxy 的 'Agent' → 'agent'）。 */
@@ -59,7 +60,7 @@ export const DISPATCH_TOOLS: readonly DispatchToolSpec[] = [
     // subagent_session_id / subagent_model / summary；结果 <task id="…" state=…>）
     names: ['task'],
     sessionIdArgKeys: ['subagent_session_id'],
-    agentTypeArgKeys: ['subagent_type'],
+    agentTypeArgKeys: ['subagent_type', 'subagent_name'],
     displayNameArgKeys: ['description', 'subagent_name'],
     contentArgKeys: ['summary', 'description'],
     promptArgKeys: ['prompt'],
@@ -69,7 +70,7 @@ export const DISPATCH_TOOLS: readonly DispatchToolSpec[] = [
     // claude Task 的 proxy 形态（原硬编码 toolName === 'Agent'）
     names: ['agent'],
     sessionIdArgKeys: ['subagent_session_id'],
-    agentTypeArgKeys: ['subagent_type', 'mode'],
+    agentTypeArgKeys: ['subagent_type', 'mode', 'subagent_name'],
     displayNameArgKeys: ['name', 'subagent_name', 'description'],
     contentArgKeys: ['description'],
     promptArgKeys: ['prompt'],
@@ -99,7 +100,7 @@ export const DISPATCH_TOOLS: readonly DispatchToolSpec[] = [
     names: ['subagent'],
     nameIncludes: ['subagent'],
     sessionIdArgKeys: ['sessionID', 'session_id', 'subagent_session_id'],
-    agentTypeArgKeys: ['agent', 'subagent_type'],
+    agentTypeArgKeys: ['agent', 'subagent_type', 'subagent_name'],
     displayNameArgKeys: ['description', 'subagent_name', 'name'],
     contentArgKeys: ['description'],
     promptArgKeys: ['prompt'],
@@ -137,6 +138,8 @@ export interface DispatchRecord {
   displayName: string | null;
   /** 派发内容锚（content 键序 ?? prompt）。 */
   content: string | null;
+  /** 原始任务文本（prompt 通道；角色名提取用——content 键命中时 prompt 仍在）。 */
+  prompt: string | null;
   /** 结果侧提取的子会话 id。 */
   resultSessionId: string | null;
   /** 结果侧展示名 fallback（spawn_agent JSON nickname）。 */
@@ -182,9 +185,49 @@ export function resolveDispatchToolCall(
     agentType: firstStr(spec.agentTypeArgKeys, args),
     displayName: firstStr(spec.displayNameArgKeys, args),
     content: firstStr(spec.contentArgKeys, args) ?? prompt,
+    prompt,
     resultSessionId,
     resultNickname: spec.resultNickname ? nickname : null,
   };
+}
+
+// ── 派发 SkillEvent（turn-split 单点消费）───────────────────────────
+// 派发事件进 Audit 的 agent 域对账（audit-registry 按 name 聚目标）。
+// 门控语义（历史口径保留 + codex 补齐）：
+//   - 非泛型 agentType（claude 'code-reviewer' / opencode 命名型）→ 恒入
+//   - spawn_agent（codex）→ nickname（与 Execution/泳道一致）→ 任务书「角色名」
+//   - 泛型/缺失 identity 的 task·agent·subagent → 需 prompt 带角色信号
+//     （扮演/act-as）；纯杂项派发不产事件（不造噪声对账目标；bridge/
+//     Execution 走注册表不受影响）
+// 名字序：agentType → spawn nickname → 「」角色 → 扮演/act-as 角色 →
+// 展示名截断 → unknown-dispatch（进门但无名）。
+const GENERIC_AGENT_TYPES = new Set(['general-purpose', 'general']);
+
+function promptQuotedRole(prompt: string): string | null {
+  const m = prompt.match(/[「『]([^」』]{1,40})[」』]/);
+  return m ? m[1]! : null;
+}
+
+function promptAgentRole(prompt: string): string | null {
+  let m = prompt.match(/扮演[^。\n]*?["'`]([A-Za-z][\w.-]*)["'`]\s*(?:agent|子代理)/);
+  if (m) return m[1]!;
+  m = prompt.match(/act as (?:the )?["'`]?([A-Za-z][\w.-]*)["'`]?\s*(?:sub)?agent/i);
+  if (m) return m[1]!;
+  return null;
+}
+
+export function dispatchEventOf(rec: DispatchRecord): { skillName: string } | null {
+  if (rec.toolName.toLowerCase() === 'spawn_agent') {
+    const name = rec.resultNickname ?? promptQuotedRole(rec.prompt ?? rec.content ?? '');
+    return name ? { skillName: name } : null;
+  }
+  if (rec.agentType && !GENERIC_AGENT_TYPES.has(rec.agentType)) return { skillName: rec.agentType };
+  const prompt = rec.prompt ?? rec.content ?? '';
+  if (!/扮演|agent/i.test(prompt)) return null;
+  const role = promptAgentRole(prompt);
+  if (role) return { skillName: role };
+  if (rec.displayName) return { skillName: truncateUtf16Safe(rec.displayName, 40) };
+  return { skillName: 'unknown-dispatch' };
 }
 
 // ── Turn 名字回填 ────────────────────────────────────────────────────

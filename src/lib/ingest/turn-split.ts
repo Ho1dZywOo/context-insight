@@ -10,6 +10,8 @@ import type { RawInteraction } from '../shared/types';
 import { truncateUtf16Safe } from '../shared/text-strip';
 import { getContextWindowLimit } from '@/lib/context-window-config';
 import { isContinuationTurn, parseSlashCommandTurn } from '@/lib/shared/command-parser';
+import { detectSkillInvocations, type SkillInvocationInfo } from './skill-invocations';
+import { resolveDispatchToolCall, dispatchEventOf } from './dispatch-tools';
 
 export interface TurnRow {
   id: string;
@@ -126,56 +128,9 @@ function slashSkillInvocation(
   return null;
 }
 
-function isAgentSkillDispatch(toolName: string, argsJson: string | null): boolean {
-  const lower = toolName.toLowerCase();
-  if (lower !== 'agent' && lower !== 'task' && lower !== 'subagent') return false;
-  if (!argsJson) return false;
-  try {
-    const args = JSON.parse(argsJson);
-    const strArg = (...keys: string[]): string | null => {
-      for (const k of keys) {
-        const v = args[k];
-        if (typeof v === 'string' && v) return v;
-      }
-      return null;
-    };
-    const subagentType = strArg('subagent_type', 'subagent_name', 'agent');
-    if (!subagentType) {
-      // opencode 新版工作流派发：subagent_type 是 'general' 或缺失，角色写
-      // 在 prompt 首句（"你在此任务中扮演 …中的 \"<role>\" agent"）——仍算
-      // dispatch（角色可从 prompt 提取），不因 generic type 整个丢弃。
-      return /扮演|agent/i.test(String(args.prompt ?? ''));
-    }
-    // Exclude generic agent types (not skill-driven) — but they fall through
-    // to the prompt-role extraction below via extractDispatchSkillName.
-    if (subagentType === 'general-purpose' || subagentType === 'general') {
-      return /扮演|agent/i.test(String(args.prompt ?? ''));
-    }
-    return true;
-  } catch { return false }
-}
-
-/** 从 task/agent 派发 args 提取角色名：subagent_type 优先；generic/缺失时从
- *  prompt 首句提取（"你在此任务中扮演 X 中的 \"<role>\" agent" / "You will
- *  act as the <role> agent" 形态）。 */
-function extractDispatchSkillName(argsJson: string | null): string {
-  if (!argsJson) return 'unknown-dispatch';
-  try {
-    const args = JSON.parse(argsJson);
-    const subagentType = [args.subagent_type, args.subagent_name, args.agent]
-      .find((v): v is string => typeof v === 'string' && Boolean(v)) ?? null;
-    if (subagentType && subagentType !== 'general-purpose' && subagentType !== 'general') return subagentType;
-    const prompt = typeof args.prompt === 'string' ? args.prompt : '';
-    // 中文形态：扮演 …工作流中的 "developer" agent / `developer` agent
-    let m = prompt.match(/扮演[^。\n]*?["'`]([A-Za-z][\w.-]*)["'`]\s*(?:agent|子代理)/);
-    if (m) return m[1];
-    // 英文形态：act as the "developer" agent / act as the developer agent
-    m = prompt.match(/act as (?:the )?["'`]?([A-Za-z][\w.-]*)["'`]?\s*(?:sub)?agent/i);
-    if (m) return m[1];
-    if (args.description) return truncateUtf16Safe(String(args.description), 40);
-  } catch { /* ignore */ }
-  return 'unknown-dispatch';
-}
+/** 派发事件名（agent 域 Audit 目标）与派发判定统一走 dispatch-tools 注册表
+ *  （单源）——历史缺陷：此处的内联白名单缺 spawn_agent，codex 三次派发零
+ *  事件、Audit agent 域恒空。 */
 
 export function extractErrorMessage(resultJson: string | null): string | null {
   if (!resultJson) return null;
@@ -386,17 +341,34 @@ export function splitIntoTurns(
     }
 
     if (interaction.tool_calls) {
+      // B 形技能加载（读文件即技能）单点检测：关联真实工具调用，事件直出
+      // （不合成 skill/<name> 工具行——历史缺陷：假工具混进工具直方图、
+      // resultJson 恒空断原文恢复链、时间戳塌成轮时间）
+      const bFormByTool = new Map<string, SkillInvocationInfo[]>();
+      for (const inv of detectSkillInvocations(interaction.tool_calls)) {
+        const arr = bFormByTool.get(inv.sourceToolCallId) ?? [];
+        arr.push(inv);
+        bFormByTool.set(inv.sourceToolCallId, arr);
+      }
+
       for (const tc of interaction.tool_calls) {
         const toolCallRowId = generateId();
-        const isSkillRelated = isSkillToolCall(tc.toolName) || isAgentSkillDispatch(tc.toolName, tc.argsJson);
+        const dispatch = resolveDispatchToolCall(tc);
+        // 派发事件门控（泛型 identity 不产事件）与 isSkillRelated 同口径
+        const dispatchEvent = dispatch ? dispatchEventOf(dispatch) : null;
+        const bForm = bFormByTool.get(tc.toolCallId) ?? [];
+        const isSkillRelated = isSkillToolCall(tc.toolName) || dispatchEvent !== null || bForm.length > 0;
         const errMsg = extractErrorMessage(tc.resultJson);
 
         // 工具起止：源携带真实时间戳（ToolCallInfo.startedAt/completedAt，claude-jsonl、
         // opencode v1 part 表与 v2 tool 项 time 字段填充）→ 落真实值 + durationMs；
         // 源没有（如旧导出件）→ 降级为既有行为（复制所属轮时间、durationMs=0），
-        // 路径不劣化
+        // 路径不劣化。SkillEvent 与源工具同一时间口径（含 B 形与派发）。
         const tcStartIso = tc.startedAt != null ? new Date(tc.startedAt).toISOString() : createdAt_ts;
         const tcEndIso = tc.completedAt != null ? new Date(tc.completedAt).toISOString() : (completedAt ?? createdAt_ts);
+        const tcDurationMs = tc.startedAt != null && tc.completedAt != null
+          ? Math.max(0, tc.completedAt - tc.startedAt)
+          : 0;
         const toolCallRow: ToolCallRow = {
           id: toolCallRowId,
           turnId,
@@ -409,38 +381,48 @@ export function splitIntoTurns(
           errorMessage: errMsg,
           startedAt: tcStartIso,
           completedAt: tcEndIso,
-          durationMs: tc.startedAt != null && tc.completedAt != null
-            ? Math.max(0, tc.completedAt - tc.startedAt)
-            : 0,
+          durationMs: tcDurationMs,
           dispatchBridgeId: null,
           isSkillRelated,
         };
 
         toolCalls.push(toolCallRow);
 
-        if (isSkillRelated) {
-          const skillEventRowId = generateId();
-          const isDispatch = isAgentSkillDispatch(tc.toolName, tc.argsJson);
-          const eventType = isDispatch ? 'dispatch' : skillEventTypeOf(tc.toolName);
-          const skillName = isDispatch ? extractDispatchSkillName(tc.argsJson) : extractSkillName(tc.toolName, tc.argsJson);
-          const skillVersion = isDispatch ? null : extractSkillVersion(tc.argsJson);
-          const success = (tc.state === 'ok' || tc.state === 'completed') && !errMsg;
-
-          const skillEventRow: SkillEventRow = {
-            id: skillEventRowId,
+        const success = (tc.state === 'ok' || tc.state === 'completed') && !errMsg;
+        const pushEvent = (skillName: string, eventType: 'load' | 'invoke' | 'use' | 'dispatch', skillVersion: number | null, argsJson: string | null): void => {
+          skillEvents.push({
+            id: generateId(),
             turnId,
             skillName,
             skillVersion,
             eventType,
             success,
             errorMessage: success ? null : (errMsg || tc.state),
-            argsJson: tc.argsJson,
-            startedAt: createdAt_ts,
-            completedAt: completedAt ?? createdAt_ts,
-            durationMs: 0,
-          };
+            argsJson,
+            startedAt: tcStartIso,
+            completedAt: tcEndIso,
+            durationMs: tcDurationMs,
+          });
+        };
 
-          skillEvents.push(skillEventRow);
+        if (dispatchEvent) {
+          pushEvent(dispatchEvent.skillName, 'dispatch', null, tc.argsJson);
+        } else if (isSkillToolCall(tc.toolName)) {
+          pushEvent(
+            extractSkillName(tc.toolName, tc.argsJson),
+            skillEventTypeOf(tc.toolName),
+            extractSkillVersion(tc.argsJson),
+            tc.argsJson,
+          );
+        }
+
+        for (const inv of bForm) {
+          pushEvent(
+            inv.skillName,
+            'use',
+            null,
+            JSON.stringify({ skill: inv.skillName, file_path: inv.filePath, source_tool_call_id: tc.toolCallId }),
+          );
         }
       }
     }

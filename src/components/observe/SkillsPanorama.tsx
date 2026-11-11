@@ -795,7 +795,7 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                         ) : (
                           <>
                             <p className="mb-1 text-[11px] text-muted-foreground">
-                              SKILL.md · 来源 {sc.content.get(selAgg.name)?.source === "skill-tool" ? "Skill 工具注入" : "Read 读取"} · {sc.content.get(selAgg.name)?.length} 字符
+                              SKILL.md · 来源 {sc.content.get(selAgg.name)?.source === "skill-tool" ? "Skill 工具注入" : sc.content.get(selAgg.name)?.source === "shell" ? "Shell 读取" : "Read 读取"} · {sc.content.get(selAgg.name)?.length} 字符
                             </p>
                             <pre className="max-h-60 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap break-words">{sc.content.get(selAgg.name)?.content}</pre>
                           </>

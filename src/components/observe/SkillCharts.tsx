@@ -323,7 +323,7 @@ function SkillsPerAgentChart({ taskId, skillEvents, urlFor }: SkillChartsProps) 
                                   {skill.name} · SKILL.md
                                   {contentData?.source && (
                                     <span className="text-muted-foreground">
-                                      （{contentData.source === "skill-tool" ? "Skill 工具注入" : "Read 读取"}，{contentData.length} 字符）
+                                      （{contentData.source === "skill-tool" ? "Skill 工具注入" : contentData.source === "shell" ? "Shell 读取" : "Read 读取"}，{contentData.length} 字符）
                                     </span>
                                   )}
                                 </span>

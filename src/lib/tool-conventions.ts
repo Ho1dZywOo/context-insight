@@ -262,3 +262,134 @@ export function shellCommandArgsOf(argsJson: string | null): string[] {
   }
   return [];
 }
+
+// ── SKILL.md 读取信号（B 形：读文件即技能加载）────────────────────
+// 摄取侧（ingest/skill-invocations 检测 → SkillEvent）与读取侧
+// （skill-content 原文恢复）共用同一解析：哪些 shell 命令算「读
+// SKILL.md」、路径怎么切技能名、链式命令怎么分段，单点定义。
+// 信号条件（三重收敛，防误报）：
+//   1. 分段后首 token ∈ 读类白名单（cat/sed/head/tail/less/more/nl）
+//   2. 段内含 <path>/SKILL.md 路径 token
+//   3. 路径前紧邻不是 `>`（排除 cat > path/SKILL.md 的写入）
+//   分段符：`;` `&&` `||` `|` 换行（引号内不切——链式命令如
+//   `echo '=== x ==='; cat …/SKILL.md` 的 cat 在第二段，首 token 判定
+//   按段独立进行）
+
+/** shell 读类命令白名单（分段后的首 token，小写归一） */
+const SKILL_MD_READ_COMMANDS = new Set(['cat', 'sed', 'head', 'tail', 'less', 'more', 'nl']);
+
+/** 读类命令的连接文本：codex `cmd` 键 → claude/opencode `command` 键（有序，数组形态拼合） */
+export function shellReadCommandOf(argsJson: string | null): string | null {
+  if (!argsJson) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argsJson);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const args = parsed as Record<string, unknown>;
+  for (const key of ['cmd', 'command']) {
+    const v = args[key];
+    if (typeof v === 'string' && v) return v;
+    if (Array.isArray(v)) {
+      const joined = v.filter(s => typeof s === 'string').join(' ');
+      if (joined) return joined;
+    }
+  }
+  return null;
+}
+
+/** SKILL.md 路径 → 技能名（父目录名；无父目录回落空） */
+export function skillNameOfSkillMdPath(filePath: string): string | null {
+  const norm = filePath.replace(/\\/g, '/');
+  if (!norm.toLowerCase().endsWith('/skill.md')) return null;
+  return norm.split('/').slice(-2, -1)[0] ?? null;
+}
+
+/** 一次 SKILL.md 读取信号的规范化形态 */
+export interface SkillMdRead {
+  skillName: string;
+  filePath: string;
+}
+
+/** 命令文本按链式分段符切片（引号内不切） */
+function splitShellSegments(cmd: string): string[] {
+  const parts: string[] = [];
+  let cur = '';
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (quote) {
+      cur += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === ';' || ch === '\n') {
+      parts.push(cur);
+      cur = '';
+      continue;
+    }
+    if (ch === '|') {
+      parts.push(cur);
+      cur = '';
+      if (cmd[i + 1] === '|') i++;
+      continue;
+    }
+    if (ch === '&' && cmd[i + 1] === '&') {
+      parts.push(cur);
+      cur = '';
+      i++;
+      continue;
+    }
+    cur += ch;
+  }
+  parts.push(cur);
+  return parts.filter(s => s.trim().length > 0);
+}
+
+/**
+ * 命令文本 → SKILL.md 读取信号列表。链式分段后逐段判定（首 token 白名单 +
+ * 段内 SKILL.md 路径 + 重定向写入排除）；一段多路径逐个产出（cat a/SKILL.md
+ * b/SKILL.md = 两次加载），同段去重保序。
+ */
+export function detectSkillMdReads(cmd: string): SkillMdRead[] {
+  const out: SkillMdRead[] = [];
+  const seen = new Set<string>();
+  for (const seg of splitShellSegments(cmd)) {
+    const firstToken = seg.trim().split(/\s+/)[0] ?? '';
+    if (!SKILL_MD_READ_COMMANDS.has(firstToken)) continue;
+    for (const m of seg.matchAll(/[^\s'"`;|&()]+\/SKILL\.md/g)) {
+      const filePath = m[0];
+      const before = seg.slice(0, seg.indexOf(filePath)).trimEnd();
+      if (before.endsWith('>')) continue;
+      const skillName = skillNameOfSkillMdPath(filePath);
+      if (!skillName || seen.has(filePath)) continue;
+      seen.add(filePath);
+      out.push({ skillName, filePath });
+    }
+  }
+  return out;
+}
+
+/** 命令是否带行范围截断（head/tail -N、sed -n 'a,bp'）——读侧 fullRead 判定用 */
+export function shellReadHasRangeLimit(cmd: string): boolean {
+  return /\b(?:head|tail)\b\s+(?:-\s*n?\s*\d+|-\d+\b)/.test(cmd)
+    || /\bsed\b[^;|&\n]*-n\s+['"]?\d+,\d+p/.test(cmd);
+}
+
+/** codex exec_command 输出的终端元数据壳剥离（读侧原文恢复用）：codex 把
+ *  命令输出包在 `Chunk ID: …/Wall time: …/Process exited with code …/
+ *  Original token count: …/Output:` 头之后——SKILL.md 原文恢复只取 Output
+ *  段；无壳（非 codex 形态）原样返回 */
+export function stripExecOutputHeader(content: string): string {
+  if (!content.startsWith('Chunk ID: ')) return content;
+  const marker = '\nOutput:\n';
+  const idx = content.indexOf(marker);
+  return idx >= 0 ? content.slice(idx + marker.length) : content;
+}

@@ -7,7 +7,17 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import { parseReadLines } from './file-restore';
-import { isSkillToolCall, extractSkillName, parseReadToolArgs, unwrapSkillContent } from './tool-conventions';
+import {
+  isSkillToolCall,
+  extractSkillName,
+  parseReadToolArgs,
+  unwrapSkillContent,
+  isShellToolCall,
+  shellReadCommandOf,
+  detectSkillMdReads,
+  shellReadHasRangeLimit,
+  stripExecOutputHeader,
+} from './tool-conventions';
 
 export interface SkillToolCall {
   toolName: string;
@@ -18,11 +28,11 @@ export interface SkillToolCall {
 
 export interface SkillContentResult {
   content: string;
-  source: 'skill-tool' | 'read';
+  source: 'skill-tool' | 'read' | 'shell';
   length: number;
-  /** 是否判定为读取了完整 SKILL.md。skill-tool 注入恒为 true；read 需无 offset/limit 且无截断标记。 */
+  /** 是否判定为读取了完整 SKILL.md。skill-tool 注入恒为 true；read 需无 offset/limit 且无截断标记；shell 需无 head/tail/sed 行范围。 */
   fullRead: boolean;
-  /** read 来源时实际读到的最大行号（文件真实行号）；skill-tool 为 null。 */
+  /** read 来源时实际读到的最大行号（文件真实行号）；其余来源为 null。 */
   maxLine: number | null;
 }
 
@@ -80,6 +90,7 @@ export function selectSkillContent(
 
   const skillToolCandidates: SkillToolCall[] = [];
   const readCandidates: SkillToolCall[] = [];
+  const shellCandidates: { tc: SkillToolCall; fullRead: boolean }[] = [];
 
   for (const tc of toolCalls) {
     const lower = tc.toolName.toLowerCase();
@@ -94,6 +105,16 @@ export function selectSkillContent(
       const fp = parseReadToolArgs(tc.argsJson)?.filePath ?? '';
       const name = extractSkillNameFromReadPath(fp);
       if (name && want(name)) readCandidates.push(tc);
+      continue;
+    }
+    // shell 读类命令（codex 无 read 工具，读 SKILL.md 走 exec_command 的
+    // cat/sed/…——命令解析与摄取侧 detectSkillMdReads 同源）：resultJson 即
+    // 终端输出原文
+    if (isShellToolCall(lower) && tc.argsJson && tc.resultJson) {
+      const cmd = shellReadCommandOf(tc.argsJson);
+      if (cmd && detectSkillMdReads(cmd).some(r => want(r.skillName))) {
+        shellCandidates.push({ tc, fullRead: !shellReadHasRangeLimit(cmd) });
+      }
     }
   }
 
@@ -118,6 +139,22 @@ export function selectSkillContent(
       length: content.length,
       fullRead: !partial,
       maxLine: readMaxLine(best.resultJson!),
+    };
+  }
+
+  if (shellCandidates.length > 0) {
+    const best = shellCandidates.reduce((a, b) =>
+      (b.tc.resultJson?.length ?? 0) > (a.tc.resultJson?.length ?? 0) ? b : a
+    );
+    // shell 读类命令的 resultJson = cat/sed 的终端输出（codex 形态带
+    // Chunk ID/Wall time 元数据头，剥壳后即 SKILL.md 原文）
+    const content = stripExecOutputHeader(best.tc.resultJson!);
+    return {
+      content,
+      source: 'shell',
+      length: content.length,
+      fullRead: best.fullRead,
+      maxLine: null,
     };
   }
 

@@ -35,12 +35,12 @@ slog() { # level module message
   echo "$line" >> "$LAKE_LOG_DIR/insight-$(date -u +%F).log" 2>/dev/null || true
 }
 
-# Node.js version check (>= 22.12.0 required; better-sqlite3@13 / commander@14 need Node 22+)
+# Node.js version check (>= 22.14.0 required; better-sqlite3@13 prebuilt segfaults on <=22.13, commander@15 needs >=22.12)
 NODE_NUM=$(node -e "const [M,m]=process.versions.node.split('.').map(Number);console.log(M*100+(m||0))" 2>/dev/null || echo "0")
-if [ "$NODE_NUM" -lt 2212 ]; then
+if [ "$NODE_NUM" -lt 2214 ]; then
   NODE_VERSION=$(node -v 2>/dev/null || echo "unknown")
-  slog WARN setup "Node.js $NODE_VERSION is not supported. Requires >= 22.12.0." >&2
-  slog WARN setup "better-sqlite3@13 needs Node >= 22; older versions segfault at runtime." >&2
+  slog WARN setup "Node.js $NODE_VERSION is not supported. Requires >= 22.14.0." >&2
+  slog WARN setup "better-sqlite3@13 prebuilt segfaults on Node 22.13 and below (verified by bisection)." >&2
 
   # Try auto-switch via nvm if available
   if command -v nvm &>/dev/null || [ -s "$HOME/.nvm/nvm.sh" ]; then
