@@ -203,12 +203,13 @@ if (args[0] === '--stop') {
 async function startWebUi(rawArgs) {
   const { advanced, killExisting, fresh } = parseFlags(rawArgs)
 
-  // Node 版本检查（>= 22.12，与 engines/ensure-native/start.sh 同门槛；
-  // better-sqlite3@13 / commander@14 等依赖要求 Node ≥22，低版本原生模块
-  // 加载/构造直接段错误）
+  // Node 版本检查（>= 22.14，与 engines/start.sh 同门槛；
+  // better-sqlite3@13 预编译二进制在 22.13 及以下加载/构造直接段错误——
+  // 全新隔离环境实测二分：22.12.0 / 22.13.0 SIGSEGV、22.14.0 起探针通过；
+  // commander@15 要求 >=22.12，被 better-sqlite3 的 22.14 覆盖）
   const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(n => Number.parseInt(n, 10))
-  if (nodeMajor < 22 || (nodeMajor === 22 && (nodeMinor || 0) < 12)) {
-    console.error(`[ctxi] Node.js ${process.versions.node} 不支持，需 >= 22.12.0（better-sqlite3@13 等依赖要求 Node ≥22，低版本会段错误）。`)
+  if (nodeMajor < 22 || (nodeMajor === 22 && (nodeMinor || 0) < 14)) {
+    console.error(`[ctxi] Node.js ${process.versions.node} 不支持，需 >= 22.14.0（better-sqlite3@13 原生二进制在 22.13 及以下段错误）。`)
     console.error('[ctxi] 用 nvm: nvm install 22 && nvm use 22；或 https://nodejs.org 直接装。')
     process.exit(1)
   }

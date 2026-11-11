@@ -46,7 +46,7 @@ npm install -g context-insight
 context-insight            # first run: auto-build + migrate (~30s-2min), then start + open browser
 ```
 
-- Requires Node.js >= 22.12; mainland-China networks can add `--registry=https://registry.npmmirror.com`
+- Requires Node.js >= 22.14; mainland-China networks can add `--registry=https://registry.npmmirror.com`
 - Offline fallback: `npm install -g ./context-insight-<version>.tgz`
 - Writable state lives in `~/.context-insight/`; default port 21025 (auto-increments if occupied)
 - CLI subcommands pass through: `context-insight upload --file … --list` / `sessions`; short alias `ctxi`
@@ -69,7 +69,7 @@ context-insight            # first run: auto-build + migrate (~30s-2min), then s
 ./start.sh -d           # dev mode (hot reload while editing source)
 ```
 
-- Requires Node.js >= 22.12; `./start.sh` also installs the `cpx` capture command (see `../cpx/README.md`)
+- Requires Node.js >= 22.14; `./start.sh` also installs the `cpx` capture command (see `../cpx/README.md`)
 - Open `http://localhost:21025`
 
 Log file locations:

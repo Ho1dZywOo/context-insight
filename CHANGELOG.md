@@ -2,6 +2,11 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [Unreleased]
+
+### Fixed
+- 【Node 门槛实测收紧至 22.14】engines / 启动器 / start.sh 的 Node 版本门槛从 22.12.0 抬至 22.14.0：better-sqlite3@13 预编译二进制在 22.13 及以下加载即段错误（全新隔离环境对真实发布的 npm 包二分实测——22.12.0 / 22.13.0 SIGSEGV、22.14.0 起探针通过），旧门槛让全新机器装得上包却起不来（停在端口日志后 core dump）；README 安装要求与发包契约测试（engines 断言）同步收紧；报错文案归位——段错误来源是 better-sqlite3@13（此前误写为泛指依赖），commander@15 的 22.12 要求被 22.14 覆盖
+
 ## [1.0.3] - 2026-11-09
 
 ### Added
