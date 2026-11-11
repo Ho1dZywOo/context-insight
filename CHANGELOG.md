@@ -2,7 +2,7 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [1.0.4] - 2026-11-11
 
 ### Added
 - 【启动器浏览器熔断】`./start.sh` 服务模式支持 `CONTEXT_NO_BROWSER`：置任意非空值时跳过「Server ready」后的开浏览器（打印地址代替）——与 cpx 侧 `openBrowser` 同名同语义。此前 CI/headless/测试环境跑 start.sh，WSL 分支是绝对路径 exec（`/mnt/c/Windows/System32/cmd.exe`，PATH 桩拦不住），会在用户 Windows 桌面真弹浏览器
