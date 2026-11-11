@@ -504,7 +504,12 @@ else
       mkdir -p "$CONTEXT_HOME_DIR"
       echo "$PORT" > "$INSIGHT_PORT_REGISTRY"
       # WSL: use Windows cmd.exe to open browser
-      if grep -qi microsoft /proc/version 2>/dev/null && [ -x /mnt/c/Windows/System32/cmd.exe ]; then
+      # 浏览器副作用熔断（与 cpx 侧 openBrowser 同名同语义）：CI/headless/测试
+      # 环境显式关闭开浏览器。WSL 分支是绝对路径 exec（PATH 桩拦不住），没有
+      # 该熔断时自动化跑 start.sh 会在用户 Windows 桌面真弹浏览器
+      if [ -n "${CONTEXT_NO_BROWSER:-}" ]; then
+        slog INFO start "Browser opening skipped (CONTEXT_NO_BROWSER set) — open in your local browser: http://localhost:$PORT"
+      elif grep -qi microsoft /proc/version 2>/dev/null && [ -x /mnt/c/Windows/System32/cmd.exe ]; then
         /mnt/c/Windows/System32/cmd.exe /c start "http://localhost:$PORT" 2>/dev/null || true
       elif [ -n "$DISPLAY" ] && command -v xdg-open > /dev/null 2>&1; then
         xdg-open "http://localhost:$PORT" 2>/dev/null || true

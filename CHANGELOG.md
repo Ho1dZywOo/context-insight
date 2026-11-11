@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Added
+- 【启动器浏览器熔断】`./start.sh` 服务模式支持 `CONTEXT_NO_BROWSER`：置任意非空值时跳过「Server ready」后的开浏览器（打印地址代替）——与 cpx 侧 `openBrowser` 同名同语义。此前 CI/headless/测试环境跑 start.sh，WSL 分支是绝对路径 exec（`/mnt/c/Windows/System32/cmd.exe`，PATH 桩拦不住），会在用户 Windows 桌面真弹浏览器
+
 ### Fixed
 - 【技能加载不再伪造工具调用行】读 SKILL.md 类技能加载（claude Read / codex shell 读类命令）此前会合成 `skill/<name>` 假工具调用混进工具统计——Overview 的工具列表多出 `skill/data-analysis` 等幽灵工具。现 SkillEvent 由 turn-split 单点直出（关联真实工具调用并继承其真实时间戳与时长，此前时长恒 0），工具面只显示真实调用，读 SKILL.md 的真实工具行带技能关联标记
 - 【codex 会话技能原文恢复断链】Skills 面板/Audit 的「SKILL.md 原文」恢复此前只认 Skill 工具注入与 Read 两条通道，codex 的 exec_command（cat 读 SKILL.md）不在其中——正文必在却恢复不出来。现补 shell 读类命令通道（终端输出剥元数据壳后即原文），含行范围截断（head/tail/sed -n）的部分读取标记
