@@ -29,6 +29,7 @@ import { buildViewModel } from '@/lib/run/view-model';
 import { attachSessionRefs } from '@/lib/run/session-link';
 import type { SessionRef } from '@/lib/run/model';
 import { soloRunIdOf } from '@/lib/run/identity';
+import { BAY_NAME } from '@/lib/branding';
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -208,6 +209,22 @@ afterEach(() => {
 })
 
 describe('Run 详情页 solo run 渲染（run-first 刀H）', () => {
+  it('页头上传入口走会话上传，不调用 bundle-upload', async () => {
+    await renderPage()
+    const button = [...document.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === `上传会话到${BAY_NAME}`) as HTMLButtonElement | undefined
+    expect(button).toBeTruthy()
+
+    await act(async () => { button!.click() })
+    await act(async () => {})
+    await act(async () => {})
+
+    const dialog = document.querySelector('[role="dialog"]')
+    expect(dialog).toBeTruthy()
+    expect(dialog!.textContent).toContain(`上传到 ${BAY_NAME}`)
+    expect(dialog!.textContent).not.toContain('上传 Run 到')
+  })
+
   it('Overview 首卡身份：会话标签 + runId 常驻（标题位一处呈现）', async () => {
     await renderPage()
     const header = document.body.textContent ?? ''
