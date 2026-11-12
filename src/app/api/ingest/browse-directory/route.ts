@@ -31,13 +31,18 @@ export async function POST(request: NextRequest) {
     const roots = fsRoots();
     const target = dirPath === '' ? roots.rootLevelPath : dirPath;
 
-    // 白名单收紧（CONTEXT_INSIGHT_IMPORT_ROOTS 设置时）先于一切目录读取
-    const pathDecision = checkImportablePath(target);
-    if (!pathDecision.ok) {
-      return NextResponse.json(
-        { error: `Path "${dirPath}" is outside the allowed import roots: ${pathDecision.roots.join(', ')}`, reason: 'path-outside-import-roots' },
-        { status: 403 },
-      );
+    // 根层级是导航入口（win32 虚拟盘符列表 / POSIX '/'），不是真实数据访问：
+    // 白名单不拦导航，否则开了 CONTEXT_INSIGHT_IMPORT_ROOTS 的部署连盘符列表/
+    // 根目录都看不到；真正进入某个盘/目录后（非根层级）才按白名单拦。
+    if (target !== roots.rootLevelPath) {
+      // 白名单收紧（CONTEXT_INSIGHT_IMPORT_ROOTS 设置时）先于一切目录读取
+      const pathDecision = checkImportablePath(target);
+      if (!pathDecision.ok) {
+        return NextResponse.json(
+          { error: `Path "${dirPath}" is outside the allowed import roots: ${pathDecision.roots.join(', ')}`, reason: 'path-outside-import-roots' },
+          { status: 403 },
+        );
+      }
     }
 
     // win32 根层级是虚拟层级（无真实目录），直接返回盘符列表

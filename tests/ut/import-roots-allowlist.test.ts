@@ -163,6 +163,23 @@ describe('路由级 IT：白名单生效时三路由 403，默认时零回归', 
     expect((await res.json()).isDirectory).toBe(true);
   });
 
+  it('browse-directory：白名单开启时根层级仍是导航入口，空串/" /" 200 放行（不透传 403）', async () => {
+    const inside = fs.mkdtempSync(path.join(os.tmpdir(), 'import-roots-root-lv-'));
+    process.env.CONTEXT_INSIGHT_IMPORT_ROOTS = inside;
+    // 空串 = 平台中立的「手动输入留空 = 从根层级浏览」——POSIX 下目标为 '/'，
+    // 是导航入口而非真实数据访问，不得被白名单拦死（否则连根目录都看不到）。
+    const empty = await browseDirectory(post('http://localhost/api/ingest/browse-directory', { dirPath: '' }));
+    expect(empty.status).toBe(200);
+    const emptyBody = await empty.json();
+    expect(emptyBody.isDirectory).toBe(true);
+    expect(emptyBody.currentPath).toBe('/');
+    expect(emptyBody.entries.length).toBeGreaterThan(0);
+    // 显式 '/' 同样不被白名单拦（rootLevelPath 单一真身）
+    const root = await browseDirectory(post('http://localhost/api/ingest/browse-directory', { dirPath: '/' }));
+    expect(root.status).toBe(200);
+    expect((await root.json()).currentPath).toBe('/');
+  });
+
   it('import-file：白名单外路径 403，且先于 file-not-found 404（不触碰文件系统）', async () => {
     const inside = fs.mkdtempSync(path.join(os.tmpdir(), 'import-roots-h-'));
     process.env.CONTEXT_INSIGHT_IMPORT_ROOTS = inside;
