@@ -10,7 +10,7 @@
 // （codex-jsonl.ts）与客户端组件（LocalFileImport 单文件直导）双消费。
 // 两处各持一份正则一旦漂移，同一路径会落不同 taskId（同会话双身份入库）。
 
-export const ROLLOUT_NAME_RE = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$/;
+export const ROLLOUT_NAME_RE = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl(?:\.7z|\.gz)?$/;
 
 export function isRolloutFileName(fileName: string): boolean {
   return ROLLOUT_NAME_RE.test(fileName);

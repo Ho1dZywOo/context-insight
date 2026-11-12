@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import { truncateUtf16Safe } from '@/lib/shared/text-strip';
 import path from 'node:path';
-import { readCaptureHead } from '@/lib/compression';
+import { readCaptureBuffer, readCaptureHead } from '@/lib/compression';
 import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage } from '../../shared/types';
 import { classifyCodexUserInjection } from './injections/codex';
 import { isRolloutFileName, rolloutSessionIdOf } from './codex-naming';
@@ -149,7 +149,20 @@ function parseRolloutBuffer(buf: Buffer, filePathForWarn?: string): CodexRollout
 }
 
 export function parseRolloutLines(filePath: string): CodexRolloutLine[] {
-  return parseRolloutBuffer(fs.readFileSync(filePath), filePath);
+  return parseRolloutBuffer(readCaptureBuffer(filePath), filePath);
+}
+
+function isCodexCandidateFileName(fileName: string): boolean {
+  if (isRolloutFileName(fileName)) return true;
+  const lower = fileName.toLowerCase();
+  return lower.endsWith('.jsonl') || lower.endsWith('.jsonl.7z') || lower.endsWith('.jsonl.gz');
+}
+
+function sessionIdFromCodexFileName(fileName: string): string | null {
+  const rolloutId = rolloutSessionIdOf(fileName);
+  if (rolloutId) return rolloutId;
+  const match = fileName.match(/^(.+?)\.native\.jsonl(?:\.7z|\.gz)?$/i);
+  return match?.[1] ?? null;
 }
 
 function readSessionMeta(lines: CodexRolloutLine[]): SessionMetaInfo {
@@ -439,7 +452,7 @@ function collectRolloutFiles(dirPath: string): string[] {
       const full = path.join(dirPath, entry.name);
       if (entry.isDirectory()) {
         results.push(...collectRolloutFiles(full));
-      } else if (entry.isFile() && isRolloutFileName(entry.name)) {
+      } else if (entry.isFile() && isCodexCandidateFileName(entry.name)) {
         results.push(full);
       }
     }
@@ -451,7 +464,7 @@ function findRolloutFile(dirPath: string, sessionId: string): string | null {
   try {
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isFile() && rolloutSessionIdOf(entry.name) === sessionId) {
+      if (entry.isFile() && sessionIdFromCodexFileName(entry.name) === sessionId) {
         return path.join(dirPath, entry.name);
       }
     }
@@ -483,7 +496,7 @@ function resolveSessionFilePath(filePath: string, sessionId: string): string | n
 // 嵌会话 id；deriveSessionId 契约收完整路径（DSH 的 id 取日志父目录名），
 // 先剥目录再按命名约定提取，认不出返回 null
 export function deriveSessionIdFromPath(filePath: string): string | null {
-  return rolloutSessionIdOf(path.basename(filePath));
+  return sessionIdFromCodexFileName(path.basename(filePath));
 }
 
 export function readSession(filePath: string, sessionId: string): RawInteraction[] {
@@ -512,7 +525,7 @@ export function listSessions(dirPath: string): SessionListItem[] {
 
   const stat = fs.statSync(dirPath);
   const files = stat.isFile()
-    ? (isRolloutFileName(path.basename(dirPath)) ? [dirPath] : [])
+    ? (isCodexCandidateFileName(path.basename(dirPath)) ? [dirPath] : [])
     : collectRolloutFiles(dirPath);
 
   const result: SessionListItem[] = [];
@@ -672,23 +685,53 @@ export function readSubagentInteractions(filePath: string, sessionId: string): R
   // 此前直读目录会静默返回空：子代理轮次丢失、只剩通知 system turn。
   const resolved = resolveSessionFilePath(filePath, sessionId);
   if (!resolved) return [];
-  return readSubagentsInner(resolved, sessionId, 0);
+  const discovered: SubagentRollout[] = [];
+  discoverSubagentRollouts(resolved, sessionId, 0, new Set(), discovered);
+  const result: RawInteraction[] = [];
+  for (const sub of discovered) {
+    const interactions = readSessionFromLines(sub.lines);
+    for (const interaction of interactions) {
+      interaction.subagent_session_id = sub.agent.id;
+      if (sub.agent.nickname) interaction.subagent_name = sub.agent.nickname;
+    }
+    result.push(...interactions);
+  }
+  return result;
 }
 
-function readSubagentsInner(mainFile: string, sessionId: string, depth: number): RawInteraction[] {
-  if (depth > 5) return []; // 嵌套深度上限（防异常环）
+export function listSubagentRolloutFiles(filePath: string, sessionId: string): string[] {
+  const resolved = resolveSessionFilePath(filePath, sessionId);
+  if (!resolved) return [];
+  const discovered: SubagentRollout[] = [];
+  discoverSubagentRollouts(resolved, sessionId, 0, new Set(), discovered);
+  return discovered.map(s => s.filePath);
+}
+
+interface SubagentRollout {
+  agent: SpawnedAgent;
+  filePath: string;
+  lines: CodexRolloutLine[];
+}
+
+function discoverSubagentRollouts(
+  mainFile: string,
+  parentSessionId: string,
+  depth: number,
+  seenFiles: Set<string>,
+  out: SubagentRollout[],
+): void {
+  if (depth > 5) return;
   let lines: CodexRolloutLine[];
   try {
     lines = parseRolloutLines(mainFile);
   } catch {
-    return [];
+    return;
   }
 
-  const agents = extractSpawnedAgents(lines);
-  const result: RawInteraction[] = [];
-  for (const agent of agents) {
+  for (const agent of extractSpawnedAgents(lines)) {
     const childFile = locateRolloutById(mainFile, agent.id);
-    if (!childFile) continue; // 子文件丢失（被清理）：跳过不阻塞，spawn/wait 工具结果仍在主时间线
+    if (!childFile || seenFiles.has(childFile)) continue;
+    seenFiles.add(childFile);
     let childLines: CodexRolloutLine[];
     try {
       childLines = parseRolloutLines(childFile);
@@ -698,17 +741,13 @@ function readSubagentsInner(mainFile: string, sessionId: string, depth: number):
     const childMeta = readSessionMeta(childLines);
     // 交叉验证：parent_thread_id 必须指回主会话（防同 uuid 误配）；无声明时
     // 以 spawn 输出为准（老版本文件）
-    if (childMeta.parentThreadId && childMeta.parentThreadId !== sessionId) continue;
-
-    const interactions = readSessionFromLines(childLines);
-    const nickname = childMeta.agentNickname ?? agent.nickname;
-    for (const it of interactions) {
-      it.subagent_session_id = agent.id;
-      if (nickname) it.subagent_name = nickname;
-    }
-    result.push(...interactions);
+    if (childMeta.parentThreadId && childMeta.parentThreadId !== parentSessionId) continue;
+    out.push({
+      agent: { id: agent.id, nickname: childMeta.agentNickname ?? agent.nickname },
+      filePath: childFile,
+      lines: childLines,
+    });
     // 嵌套 spawn：孙代理并入（打各自的标）
-    result.push(...readSubagentsInner(childFile, agent.id, depth + 1));
+    discoverSubagentRollouts(childFile, agent.id, depth + 1, seenFiles, out);
   }
-  return result;
 }
