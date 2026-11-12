@@ -8,13 +8,15 @@
 
 import type { PrismaClient } from "@prisma/client";
 import type { AuditLayerInfo } from "@/lib/sift-audit-types";
-import { extractSkillNameFromArgs } from "@/lib/skill-event-grouping";
 // 客户端安全核心（无 fs）：本文件被 session page 的客户端组件 import，凡引入的模块都进
 // client bundle——fs 读 JSON 的加载器在 workflow-extract-config.ts（server-only，路由入口
 // 调 ensureWorkflowExtractPluginLoaded 激活），此处只引类型/默认值/holder。
 import { DEFAULT_PLUGIN, getWorkflowExtractPlugin } from "@/lib/workflow-extract-plugin";
 import { buildAgentRoleNameMap } from "@/lib/agent-role-name-map";
 import { unwrapSkillContent } from "@/lib/tool-conventions";
+// skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
+// client bundle 安全；Audit 对账与 Skills 面板共用同一恢复词表，通道扩展不再双头漂移。
+import { selectSkillContent } from "@/lib/skill-content";
 // dispatch-tools 是纯模块（唯一导入为 type-only，无 fs/db）——client bundle 安全；
 // 派发工具判定单点：task/agent/subagent/spawn_agent 及注册表未来形态自动纳入。
 import { dispatchSpecOf } from "@/lib/ingest/dispatch-tools";
@@ -61,6 +63,23 @@ export function stripSkillRuntimeTail(content: string): string {
   );
   // 删行遗留的 3+ 连续换行收敛为段间空行（正常 markdown 无三连空行，无标记原文不变）
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
+/**
+ * 对账落盘用 SKILL.md：恢复正文自带 YAML frontmatter（read/shell 通道的
+ * cat/Read 原文保留 `---\nname:`）则原样返回，否则注入合成头（skill-tool
+ * 通道剥协议壳后无头）。sift 的 parse_skill_md 需 frontmatter 才能解析指令。
+ * frontmatter 识别收紧（块体 ≤30 行且含 name: 键）：防把正文首部的 `---`
+ * 分隔线误判成 frontmatter 而漏注入。名字行对齐请求名（transcript 锚点用
+ * 事件技能名切段，声明名与锚点名不一致会切段落空；name 是元数据键非指令）。
+ */
+export function ensureSkillFrontmatter(body: string, name: string): string {
+  const m = body.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (m && m[1].split("\n").length <= 30 && /^\s*name\s*:/m.test(m[1])) {
+    const aligned = body.replace(m[1], m[1].replace(/^\s*name\s*:.*$/m, `name: ${name}`));
+    return aligned.endsWith("\n") ? aligned : `${aligned}\n`;
+  }
+  return `---\nname: ${name}\ndescription: recovered from session\n---\n${body}\n`;
 }
 
 /** 一个 ToolCall 是不是"带正文的 skill invoke 调用"（区别于 task/agent dispatch）。 */
@@ -240,6 +259,26 @@ export async function buildStructuredRecords(
     byTurn.set(tc.turnId, arr);
   }
 
+  // B 形技能加载（Read/shell 读 SKILL.md，无 skill 工具调用行）在 transcript 补合成
+  // Skill 锚点：sift --kind skill 按 Skill 调用切段（structured reader 把 name=skill
+  // 归一成 Skill、input.skill 即技能名），B 形会话缺锚点 → 切段为空直接 exit 2。
+  // DB 不合成工具行（turn-split 单点否决过：合成行污染工具统计）；transcript 是
+  // 审计视图的协议适配，合成只发生在序列化出口。锚点排在源工具调用之前（调用→读取）。
+  // A 形（skill 工具族）的真实工具调用即天然锚点，无 source_tool_call_id 不双锚。
+  const bFormEvents = await prisma.skillEvent.findMany({
+    where: { eventType: "use", turn: { sessionId } },
+    select: { turnId: true, argsJson: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const anchorsByToolCallId = new Map<string, Array<{ skill: string }>>();
+  for (const se of bFormEvents) {
+    const a = parseArgs(se.argsJson);
+    if (typeof a.source_tool_call_id !== "string" || typeof a.skill !== "string") continue;
+    const arr = anchorsByToolCallId.get(a.source_tool_call_id) ?? [];
+    arr.push({ skill: a.skill });
+    anchorsByToolCallId.set(a.source_tool_call_id, arr);
+  }
+
   const records = turns.map((t) => {
     const rec: Record<string, unknown> = {
       role: t.role,
@@ -270,7 +309,11 @@ export async function buildStructuredRecords(
       // 推进/修复),sift 层3 用它构建"派发-回报对"喂 step 判官(缺席式误判的洗冤证据 +
       // "传递≠达成"的验收结论依据)。sift reader 原生支持 tool_calls[].result。
       // 派发判定走注册表（task/agent/subagent/spawn_agent 及未来形态单点纳入）。
-      rec.tool_calls = tcs.map((tc) => {
+      const calls: Array<Record<string, unknown>> = [];
+      for (const tc of tcs) {
+        for (const anchor of anchorsByToolCallId.get(tc.toolCallId) ?? []) {
+          calls.push({ name: "skill", input: { skill: anchor.skill } });
+        }
         const call: Record<string, unknown> = {
           name: tc.toolName,
           input: parseArgs(tc.argsJson),
@@ -278,8 +321,9 @@ export async function buildStructuredRecords(
         if (dispatchSpecOf(tc.toolName) !== null && tc.resultJson) {
           call.result = tc.resultJson.slice(0, 4096);
         }
-        return call;
-      });
+        calls.push(call);
+      }
+      rec.tool_calls = calls;
     }
     return rec;
   });
@@ -466,9 +510,10 @@ export async function recoverPlanFileDeclaration(
 }
 
 /**
- * 找主 agent 的 workflow skill name：主 agent（isSubagent=false）的首个 Skill invoke 事件。
- * S1 → ops-registry-invoke-glacier，S2 → ops-registry-invoke-workflow。
- * 主 agent 通常先 invoke workflow skill（编排规程），再按它 dispatch 子 agent。
+ * 找主 agent 的 workflow skill name：主 agent（isSubagent=false）的首个 Skill
+ * invoke/use 事件。S1 → ops-registry-invoke-glacier，S2 → ops-registry-invoke-workflow；
+ * B 形会话（codex 无 skill 工具，Read/shell 读 SKILL.md → turn-split 合成 use 事件）
+ * 同样可解。主 agent 通常先 invoke workflow skill（编排规程），再按它 dispatch 子 agent。
  * 比旧方案（turn0 ≥500 反查磁盘）更通用——不依赖 turn0 是注入型还是短用户任务。
  */
 export async function resolveWorkflowSkillName(
@@ -476,7 +521,7 @@ export async function resolveWorkflowSkillName(
   prisma: PrismaClient,
 ): Promise<string | null> {
   const se = await prisma.skillEvent.findFirst({
-    where: { eventType: "invoke", turn: { sessionId, isSubagent: false } },
+    where: { eventType: { in: ["invoke", "use"] }, turn: { sessionId, isSubagent: false } },
     orderBy: { createdAt: "asc" },
   });
   return se?.skillName ?? null;
@@ -652,9 +697,14 @@ export function assembleCombinedDeclaration(layers: AuditLayerInfo[]): {
 }
 
 /**
- * 按 session + skillName 恢复该 skill 的纯 SKILL.md 正文：
- * 找该 session 内这个 skill 的 invoke SkillEvent → 同 turn 里按 argsJson.name 匹配的
- * skill ToolCall → 从 resultJson 剥 <skill_content>。
+ * 按 session + skillName 恢复该 skill 的纯 SKILL.md 正文，委托 selectSkillContent
+ * 三通道单点（skill-tool `<skill_content>` / Read `<content>` / shell 读类命令
+ * 终端输出）——与 Skills 面板「SKILL.md 原文」同一恢复路径。
+ *
+ * 候选工具调用面与 skill-content-audit handler 同宽：isSkillRelated（B 形
+ * Read/shell 读取摄取时已标记）+ 兜底 Read+SKILL.md 命中。
+ * 历史缺陷（codex 客户现场）：本函数此前自带一套 invoke 事件 + skill 工具族的
+ * 平行词表，B 形会话（无 read 工具、cat 读 SKILL.md、eventType=use）全链 404。
  * 找不到 / 无正文 → null。
  */
 export async function recoverSkillBody(
@@ -662,21 +712,18 @@ export async function recoverSkillBody(
   skillName: string,
   prisma: PrismaClient,
 ): Promise<string | null> {
-  const se = await prisma.skillEvent.findFirst({
-    where: { skillName, eventType: "invoke", turn: { sessionId } },
+  const toolCalls = await prisma.toolCall.findMany({
+    where: {
+      turn: { sessionId },
+      OR: [
+        { isSkillRelated: true },
+        { toolName: { in: ["Read", "read"] }, argsJson: { contains: "SKILL.md" } },
+      ],
+    },
+    select: { toolName: true, argsJson: true, resultJson: true, startedAt: true },
     orderBy: { createdAt: "asc" },
   });
-  if (!se) return null;
-
-  const tcs = await prisma.toolCall.findMany({
-    where: { turnId: se.turnId, isSkillRelated: true },
-  });
-  const candidates = tcs.filter((tc) => isSkillInvokeToolCall(tc.toolName));
-  const byName = candidates.find((tc) => extractSkillNameFromArgs(tc.argsJson) === skillName);
-  const tc = byName ?? candidates[0];
-  if (!tc?.resultJson) return null;
-
-  return stripSkillContent(tc.resultJson);
+  return selectSkillContent(toolCalls, skillName)?.content ?? null;
 }
 
 /**

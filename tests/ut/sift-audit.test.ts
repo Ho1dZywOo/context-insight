@@ -20,6 +20,7 @@ import {
   buildAuditArgs,
   buildStructuredRecords,
   buildTranscriptArgs,
+  ensureSkillFrontmatter,
   auditKindsForEvents,
   isDispatchOnlyAgent,
   dispatchOnlySkillNames,
@@ -86,6 +87,30 @@ describe("stripSkillContent", () => {
   });
 });
 
+describe("ensureSkillFrontmatter", () => {
+  it("正文无 frontmatter（skill-tool 通道剥壳后）→ 注入合成头", () => {
+    const out = ensureSkillFrontmatter("# 规程正文", "acme-crash-debug");
+    expect(out.startsWith("---\nname: acme-crash-debug\ndescription: recovered from session\n---\n")).toBe(true);
+    expect(out).toContain("# 规程正文");
+  });
+
+  it("正文自带 frontmatter（read/shell 通道原文）→ 不双头，名字对齐锚点名", () => {
+    const body = '---\nname: "cannbay-report"\ndescription: "审计报告格式规范"\n---\n\n# 规范正文\n';
+    const out = ensureSkillFrontmatter(body, "cannbay-report");
+    expect((out.match(/^---$/gm) ?? []).length).toBe(2);
+    expect(out).toContain("name: cannbay-report");
+    expect(out).toContain("description: \"审计报告格式规范\"");
+    expect(out).toContain("# 规范正文");
+  });
+
+  it("正文首部 `---` 是分隔线（无 name: 键）→ 误判防护，仍注入合成头", () => {
+    const body = "---\n\n# 标题不是 frontmatter\n\n---\n\n正文";
+    const out = ensureSkillFrontmatter(body, "x");
+    expect(out.startsWith("---\nname: x\n")).toBe(true);
+    expect((out.match(/^---$/gm) ?? []).length).toBe(4); // 合成头 2 + 原文 2
+  });
+});
+
 describe("recoverSkillBody", () => {
   const SID = "ses_cuid_1";
 
@@ -133,6 +158,33 @@ describe("recoverSkillBody", () => {
       ],
     });
     expect(await recoverSkillBody(SID, "want", prisma)).toBe("RIGHT");
+  });
+
+  it("B 形 shell 通道（codex exec_command cat SKILL.md）→ 剥终端壳与横幅返回正文（历史 404 根因）", async () => {
+    // 真机形态：无 skill 工具调用行，SkillEvent 为 use 形；恢复须走 shell 通道
+    const prisma = makePrisma({
+      toolCalls: [
+        {
+          toolName: "exec_command",
+          argsJson: JSON.stringify({ cmd: "echo '======== cannbay-report/SKILL.md ========'; cat /home/u/.codex/skills/cannbay-report/SKILL.md" }),
+          resultJson: "Chunk ID: 9014f0\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 410\nOutput:\n======== cannbay-report/SKILL.md ========\n# CANNbay 审计报告规范\n\n五个必备章节。\n",
+        },
+      ],
+    });
+    expect(await recoverSkillBody(SID, "cannbay-report", prisma)).toBe("# CANNbay 审计报告规范\n\n五个必备章节。\n");
+  });
+
+  it("B 形 read 通道（opencode read SKILL.md）→ 剥行号返回正文", async () => {
+    const prisma = makePrisma({
+      toolCalls: [
+        {
+          toolName: "read",
+          argsJson: '{"file_path":"/home/u/.agents/skills/data-analysis/SKILL.md"}',
+          resultJson: "<content>\n1: # 数据分析技能\n2: \n3: 按步骤执行。\n</content>",
+        },
+      ],
+    });
+    expect(await recoverSkillBody(SID, "data-analysis", prisma)).toBe("# 数据分析技能\n\n按步骤执行。");
   });
 });
 
@@ -542,6 +594,13 @@ describe("resolveWorkflowSkillName + recoverWorkflowDeclaration", () => {
     expect(await resolveWorkflowSkillName("ses_1", prisma)).toBeNull();
   });
 
+  it("resolveWorkflowSkillName → B 形 use 事件（codex Read/shell 读 SKILL.md）同样可解", async () => {
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue({ skillName: "cannbay-report" }) },
+    } as unknown as PrismaClient;
+    expect(await resolveWorkflowSkillName("ses_1", prisma)).toBe("cannbay-report");
+  });
+
   it("recoverWorkflowDeclaration → skill resources 文件（task-prompts.md）优先", async () => {
     const prisma = makeWfPrisma({
       skillEvent: { skillName: "ops-registry-invoke-workflow" },
@@ -855,9 +914,9 @@ describe("buildStructuredRecords", () => {
       id: string; turnIndex: number; role: string; content: string | null; agentName: string | null;
       isSubagent?: boolean; subagentSessionId?: string | null; parentExecutionId?: string | null;
     }>;
-    toolCalls: Array<{ turnId: string; toolName: string; argsJson: string | null; resultJson: string | null }>;
+    toolCalls: Array<{ turnId: string; toolCallId?: string; toolName: string; argsJson: string | null; resultJson: string | null }>;
     bridges?: Array<{ subagentSessionId: string | null; subagentType: string | null; dispatchTurnId: string | null }>;
-    dispatchEvents?: Array<{ turnId: string; skillName: string }>;
+    dispatchEvents?: Array<{ turnId: string; skillName?: string; argsJson?: string | null }>;
   }) {
     return {
       turn: { findMany: async () => opts.turns },
@@ -891,6 +950,44 @@ describe("buildStructuredRecords", () => {
     expect(tcs[1]).toEqual({ name: "read", input: { file_path: "x.py" } });
     expect("result" in tcs[0]).toBe(false);
     expect("result" in tcs[1]).toBe(false);
+  });
+
+  it("B 形技能加载（use 事件 + source_tool_call_id）→ transcript 在源工具调用前补 Skill 锚点（sift --kind skill 切段前提）", async () => {
+    const prisma = makeStructuredPrisma({
+      turns: [
+        { id: "t1", turnIndex: 0, role: "assistant", content: "读技能", agentName: null },
+      ],
+      toolCalls: [
+        { turnId: "t1", toolCallId: "call_x1", toolName: "exec_command", argsJson: '{"cmd":"cat /home/u/.codex/skills/cannbay-report/SKILL.md"}', resultJson: "OUT" },
+      ],
+      dispatchEvents: [
+        { turnId: "t1", argsJson: '{"skill":"cannbay-report","file_path":"/home/u/.codex/skills/cannbay-report/SKILL.md","source_tool_call_id":"call_x1"}' },
+      ],
+    });
+    const out = await buildStructuredRecords("ses_1", prisma);
+    const tcs = (out.records[0] as Record<string, unknown>).tool_calls as Array<Record<string, unknown>>;
+    // 锚点排在源工具调用之前；input.skill 即事件技能名（structured reader 把 name=skill 归一为 Skill）
+    expect(tcs[0]).toEqual({ name: "skill", input: { skill: "cannbay-report" } });
+    expect(tcs[1]).toMatchObject({ name: "exec_command" });
+    // resultJson 恒不带（非 dispatch 类）
+    expect("result" in tcs[0]).toBe(false);
+  });
+
+  it("A 形（skill 工具族真实调用）不双锚——无 source_tool_call_id 的事件不合成锚点", async () => {
+    const prisma = makeStructuredPrisma({
+      turns: [{ id: "t1", turnIndex: 0, role: "assistant", content: "调 skill", agentName: null }],
+      toolCalls: [
+        { turnId: "t1", toolCallId: "call_a1", toolName: "skill", argsJson: '{"name":"acme-crash-debug"}', resultJson: null },
+      ],
+      dispatchEvents: [
+        // A 形事件 argsJson 是工具原参（无 source_tool_call_id）
+        { turnId: "t1", argsJson: '{"name":"acme-crash-debug"}' },
+      ],
+    });
+    const out = await buildStructuredRecords("ses_1", prisma);
+    const tcs = (out.records[0] as Record<string, unknown>).tool_calls as Array<Record<string, unknown>>;
+    expect(tcs).toHaveLength(1);
+    expect(tcs[0]).toEqual({ name: "skill", input: { name: "acme-crash-debug" } });
   });
 
   it("子代理 turn 的 agent 用角色名（bridge.subagentType），不用任务标题（agentName）——sift --kind agent 切片匹配前提", async () => {

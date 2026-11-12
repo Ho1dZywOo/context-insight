@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sniffImportableFile } from '@/lib/ingest/adapters/registry';
 import { expandHome, checkImportablePath } from '@/lib/ingest/import-paths';
+import { fsRoots } from '@/lib/ingest/browse-roots';
 import { MANIFEST_FILENAMES } from '@/lib/run/model';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,23 +20,43 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { dirPath } = body;
 
-    if (!dirPath) {
+    if (typeof dirPath !== 'string') {
       return NextResponse.json(
         { error: 'Missing required field: dirPath' },
         { status: 400 },
       );
     }
 
-    // 白名单收紧（CONTEXT_INSIGHT_IMPORT_ROOTS 设置时）先于一切目录读取
-    const pathDecision = checkImportablePath(dirPath);
-    if (!pathDecision.ok) {
-      return NextResponse.json(
-        { error: `Path "${dirPath}" is outside the allowed import roots: ${pathDecision.roots.join(', ')}`, reason: 'path-outside-import-roots' },
-        { status: 403 },
-      );
+    // 空串 = 文件系统根层级（win32 盘符列表 / POSIX '/'），平台差异见 browse-roots
+    const roots = fsRoots();
+    const target = dirPath === '' ? roots.rootLevelPath : dirPath;
+
+    // 根层级是导航入口（win32 虚拟盘符列表 / POSIX '/'），不是真实数据访问：
+    // 白名单不拦导航，否则开了 CONTEXT_INSIGHT_IMPORT_ROOTS 的部署连盘符列表/
+    // 根目录都看不到；真正进入某个盘/目录后（非根层级）才按白名单拦。
+    if (target !== roots.rootLevelPath) {
+      // 白名单收紧（CONTEXT_INSIGHT_IMPORT_ROOTS 设置时）先于一切目录读取
+      const pathDecision = checkImportablePath(target);
+      if (!pathDecision.ok) {
+        return NextResponse.json(
+          { error: `Path "${dirPath}" is outside the allowed import roots: ${pathDecision.roots.join(', ')}`, reason: 'path-outside-import-roots' },
+          { status: 403 },
+        );
+      }
     }
 
-    const resolved = path.resolve(expandHome(dirPath));
+    // win32 根层级是虚拟层级（无真实目录），直接返回盘符列表
+    if (roots.isRootLevel(target)) {
+      return NextResponse.json({
+        isDirectory: true,
+        isRootLevel: true,
+        entries: roots.listRootLevel(),
+        currentPath: roots.rootLevelPath,
+        parentPath: null,
+      });
+    }
+
+    const resolved = path.resolve(expandHome(target));
 
     if (!fs.existsSync(resolved)) {
       return NextResponse.json(
@@ -49,7 +70,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         isDirectory: false,
         entries: [],
-        parentPath: path.dirname(resolved),
+        parentPath: roots.parentOf(resolved),
         currentPath: resolved,
       });
     }
@@ -108,7 +129,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       isDirectory: true,
       entries,
-      parentPath: path.dirname(resolved),
+      parentPath: roots.parentOf(resolved),
       currentPath: resolved,
     });
   } catch (error) {

@@ -447,20 +447,13 @@ describe('start.sh 单实例收口 macOS 兜底（proc_cwd：/proc → lsof -d c
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// 启动器浏览器副作用熔断（CONTEXT_NO_BROWSER，PR #33 审查意见）：该 env
-// 置任意非空值即跳过「Server ready 后开浏览器」，打印地址代替。熔断分支必须
-// 位于 WSL 绝对路径 exec（/mnt/c/Windows/System32/cmd.exe）之前——否则 CI/
-// headless/测试环境跑 start.sh 会在用户 Windows 桌面真弹浏览器（cmd.exe 是
-// 绝对路径 exec，PATH 桩拦不住）。launcher-multi-user 测的是 bin/
-// context-insight.mjs 的 openBrowser 链路，盖不住 start.sh 这条内联开浏览器
-// 链路，故需对 start.sh 源码独立上锁。
+// start.sh 浏览器熔断（CONTEXT_NO_BROWSER，与 cpx 侧 openBrowser 同名同义）：
+// 非空即跳过开浏览器、打印地址代替。源码级锁两点——判定存在；且先于 WSL
+// cmd.exe 分支（那是绝对路径 exec，PATH 桩拦不住，只能靠分支顺序拦）。
 describe('start.sh 浏览器副作用熔断（CONTEXT_NO_BROWSER）', () => {
-  it('源码级：熔断判定存在，且位于 WSL cmd.exe 分支之前（拦下绝对路径 exec）', () => {
+  it('熔断判定存在，且位于 WSL cmd.exe 分支之前', () => {
     const src = fs.readFileSync(START_SH, 'utf8');
-    // 熔断 token 存在（非空判定语义与 cpx 侧 openBrowser 同名同义）
     expect(src).toContain('if [ -n "${CONTEXT_NO_BROWSER:-}" ]');
-    // 熔断分支必须先于 WSL 绝对路径 exec：顺序反转（熔断挪到 WSL 分支之后）
-    // 即拦不下 /mnt/c/Windows/System32/cmd.exe，必须红
     const breakerIdx = src.indexOf('CONTEXT_NO_BROWSER');
     const wslIdx = src.indexOf('/mnt/c/Windows/System32/cmd.exe');
     expect(breakerIdx).toBeGreaterThanOrEqual(0);

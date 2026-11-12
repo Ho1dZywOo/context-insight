@@ -272,11 +272,40 @@ describe("audit-skillsift route", () => {
     expect(res.status).toBe(404)
   })
 
-  it("skill 正文恢复不到 → 404", async () => {
+  it("skill 正文恢复不到（无候选工具调用）→ 404", async () => {
     fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.db", framework: "opencode" })
-    fakePrisma.skillEvent.findFirst.mockResolvedValue(null)
+    fakePrisma.toolCall.findMany.mockResolvedValue([])
     const res = await POST(makeRequest({ taskId: "ses_1", skillName: "ghost" }))
     expect(res.status).toBe(404)
+  })
+
+  it("codex shell 通道（exec_command cat SKILL.md）→ 正文恢复 + 终端壳/横幅剥除 + frontmatter 名对齐", async () => {
+    // 真机形态（cpx 捕获 codex-proxy 会话）：resultJson 带 Chunk ID 元数据头，
+    // 正文含模型自印横幅行 + SKILL.md 自带 YAML frontmatter
+    fakePrisma.session.findFirst.mockResolvedValue({
+      id: "ses_cuid_1",
+      sourcePath: "/tmp/codex-capture/cpx-ses_1.jsonl.7z",
+      framework: "codex-proxy",
+    })
+    fakePrisma.toolCall.findMany.mockResolvedValue([
+      {
+        toolName: "exec_command",
+        argsJson: JSON.stringify({ cmd: "echo '======== cannbay-report/SKILL.md ========'; cat /home/u/.codex/skills/cannbay-report/SKILL.md" }),
+        resultJson: 'Chunk ID: 9014f0\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 410\nOutput:\n======== cannbay-report/SKILL.md ========\n---\nname: "cannbay-report"\ndescription: "审计报告格式规范"\n---\n\n# CANNbay 审计报告规范\n\n五个必备章节。\n',
+      },
+    ])
+    fakePrisma.turn.findMany.mockResolvedValue([])
+    spawnMock.mockImplementation(happySpawn())
+
+    const res = await POST(makeRequest({ taskId: "ses_1", skillName: "cannbay-report" }))
+    expect(res.status).toBe(200)
+    await readNdjson(res)
+    // 落盘的 SKILL.md：单头 frontmatter（自带头保留、名字对齐锚点）、无终端壳、无横幅
+    expect(lastWrittenSkillMd).not.toContain("Chunk ID")
+    expect(lastWrittenSkillMd).not.toContain("========")
+    expect((lastWrittenSkillMd?.match(/^---$/gm) ?? []).length).toBe(2)
+    expect(lastWrittenSkillMd).toContain('name: cannbay-report')
+    expect(lastWrittenSkillMd).toContain("# CANNbay 审计报告规范")
   })
 
   it("sift 不在 PATH（spawn ENOENT）→ NDJSON error 事件", async () => {

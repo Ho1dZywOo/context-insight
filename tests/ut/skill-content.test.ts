@@ -11,10 +11,85 @@ import {
   extractSkillNameFromReadPath,
   stripSkillPreamble,
   selectSkillContent,
+  skillMdReadsOfToolCall,
   type SkillToolCall,
 } from '../../src/lib/skill-content.ts';
 
 const t = (n: number) => new Date(n);
+
+describe('skillMdReadsOfToolCall（三通道单点分类器）', () => {
+  it('shell 通道：剥 codex 终端元数据壳 + 模型自印横幅 → SKILL.md 原文', () => {
+    const tc: SkillToolCall = {
+      toolName: 'exec_command',
+      argsJson: JSON.stringify({ cmd: "echo '======== cannbay-report/SKILL.md ========'; cat /home/u/.codex/skills/cannbay-report/SKILL.md" }),
+      resultJson: 'Chunk ID: 9014f0\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 410\nOutput:\n======== cannbay-report/SKILL.md ========\n---\nname: "cannbay-report"\n---\n\n# 规范\n',
+      startedAt: t(1),
+    };
+    const reads = skillMdReadsOfToolCall(tc);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({ skillName: 'cannbay-report', source: 'shell', fullRead: true });
+    expect(reads[0].content.startsWith('---\nname: "cannbay-report"')).toBe(true);
+    expect(reads[0].content).not.toContain('Chunk ID');
+    expect(reads[0].content).not.toContain('========');
+  });
+
+  it('shell 通道：head/tail/sed 行范围截断 → fullRead=false', () => {
+    const tc: SkillToolCall = {
+      toolName: 'exec_command',
+      argsJson: JSON.stringify({ cmd: 'head -n 5 /a/foo/SKILL.md' }),
+      resultJson: 'Output:\n# Foo\nbody',
+      startedAt: t(1),
+    };
+    expect(skillMdReadsOfToolCall(tc)[0].fullRead).toBe(false);
+  });
+
+  it('shell 通道：一条命令读多个 SKILL.md → 逐技能产出', () => {
+    const tc: SkillToolCall = {
+      toolName: 'bash',
+      argsJson: JSON.stringify({ cmd: 'cat /a/foo/SKILL.md /b/bar/SKILL.md' }),
+      resultJson: 'OUT',
+      startedAt: t(1),
+    };
+    const reads = skillMdReadsOfToolCall(tc);
+    expect(reads.map(r => r.skillName)).toEqual(['foo', 'bar']);
+  });
+
+  it('非读类 shell 命令（grep/ls/find）→ 空数组', () => {
+    const tc: SkillToolCall = {
+      toolName: 'exec_command',
+      argsJson: JSON.stringify({ cmd: 'grep -r foo /a' }),
+      resultJson: 'OUT',
+      startedAt: t(1),
+    };
+    expect(skillMdReadsOfToolCall(tc)).toEqual([]);
+  });
+
+  it('skill-tool / read 通道：单条产出；无关工具 → 空数组', () => {
+    const skill: SkillToolCall = {
+      toolName: 'skill',
+      argsJson: '{"name":"foo"}',
+      resultJson: '<skill_content name="foo">BODY</skill_content>',
+      startedAt: t(1),
+    };
+    expect(skillMdReadsOfToolCall(skill)).toEqual([
+      { skillName: 'foo', source: 'skill-tool', content: 'BODY', fullRead: true, maxLine: null },
+    ]);
+    const read: SkillToolCall = {
+      toolName: 'read',
+      argsJson: '{"file_path":"/a/foo/SKILL.md"}',
+      resultJson: '<content>\n1: # Foo\n</content>',
+      startedAt: t(1),
+    };
+    expect(skillMdReadsOfToolCall(read).map(r => r.skillName)).toEqual(['foo']);
+    const other: SkillToolCall = {
+      toolName: 'write',
+      argsJson: '{"file_path":"/a/foo/SKILL.md"}',
+      resultJson: null,
+      startedAt: t(1),
+    };
+    expect(skillMdReadsOfToolCall(other)).toEqual([]);
+  });
+});
 
 describe('skill-content', () => {
   describe('extractSkillNameFromReadPath', () => {

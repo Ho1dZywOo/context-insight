@@ -15,10 +15,12 @@ import {
   extractFilePath,
   isSkillInvokeToolCall,
   pickFirstSubstantial,
-  stripSkillContent,
   stripSkillRuntimeTail,
 } from "./sift-audit";
-import { extractSkillNameFromArgs } from "./skill-event-grouping";
+// SKILL.md 正文候选走 skill-content 三通道单点（skill-tool / Read / shell）——
+// codex 无 read 工具，cat 读 SKILL.md 同样入规程候选，词表与摄取/恢复侧共用。
+import { skillMdReadsOfToolCall } from "./skill-content";
+import { isShellToolCall } from "./tool-conventions";
 import { logError } from "@/lib/logger";
 
 /**
@@ -240,6 +242,7 @@ export async function collectWorkflowExtractCandidates(
       .filter((tc) => {
         const tn = tc.toolName.toLowerCase();
         if (isSkillInvokeToolCall(tc.toolName)) return true;
+        if (isShellToolCall(tn) && (tc.argsJson ?? "").includes("SKILL.md")) return true;
         if (tn !== "read") return false;
         const base = basenameOf(extractFilePath(tc.argsJson));
         return PLAN_FILE_EXTENSIONS.some((e) => base.toLowerCase().endsWith(e));
@@ -270,20 +273,22 @@ export async function collectWorkflowExtractCandidates(
         });
       }
       for (const tc of tcByTurn.get(t.id) ?? []) {
-        const tn = tc.toolName.toLowerCase();
-        if (isSkillInvokeToolCall(tc.toolName) && tc.resultJson) {
-          const body = stripSkillContent(tc.resultJson);
-          if (body && body.length >= CANDIDATE_MIN_CHARS) {
-            const name = extractSkillNameFromArgs(tc.argsJson) ?? "skill";
-            regCandidates.push({
-              id: "",
-              layer: "regulation",
-              source: `${name} (SKILL.md)`,
-              content: body,
-              partialRead: false,
-            });
+        // SKILL.md 正文候选（skillMdReadsOfToolCall 三通道单点；skill-tool 通道
+        // 的 <skill_content> 剥壳在此前实现里，现统一走 skill-content）
+        const mdReads = skillMdReadsOfToolCall(tc);
+        if (mdReads.length > 0) {
+          for (const read of mdReads) {
+            if (read.content.length >= CANDIDATE_MIN_CHARS) {
+              regCandidates.push({
+                id: "",
+                layer: "regulation",
+                source: `${read.skillName} (SKILL.md)`,
+                content: read.content,
+                partialRead: !read.fullRead,
+              });
+            }
           }
-        } else if (tn === "read") {
+        } else if (tc.toolName.toLowerCase() === "read") {
           const ex = extractFileContent(tc);
           if (ex && ex.content.length >= CANDIDATE_MIN_CHARS && ex.basename) {
             regCandidates.push({

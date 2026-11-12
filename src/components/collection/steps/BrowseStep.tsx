@@ -73,9 +73,11 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
     <div className="space-y-3 overflow-hidden">
       <div className="flex items-center gap-2 rounded-xl border border-border/50 bg-foreground/[0.02] px-3 py-2.5 text-xs font-medium">
         <FolderIcon className="size-4 text-blue-500 shrink-0" />
-        <span className="flex-1 min-w-0 truncate font-mono text-muted-foreground">{currentDir}</span>
+        <span className="flex-1 min-w-0 truncate font-mono text-muted-foreground">
+          {currentDir || "此电脑（所有盘符）"}
+        </span>
       </div>
-      {parentDir && (
+      {parentDir !== null && (
         <Button variant="ghost" size="sm" onClick={onGoUp} className="gap-1.5">
           <ArrowUpIcon className="size-3.5" />
           Parent directory

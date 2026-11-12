@@ -17,13 +17,14 @@ import {
   detectSkillMdReads,
   shellReadHasRangeLimit,
   stripExecOutputHeader,
+  stripSkillMdBanner,
 } from './tool-conventions';
 
 export interface SkillToolCall {
   toolName: string;
   argsJson: string | null;
   resultJson: string | null;
-  startedAt: Date | null;
+  startedAt?: Date | null;
 }
 
 export interface SkillContentResult {
@@ -82,77 +83,102 @@ function hasReadTruncation(resultJson: string | null): boolean {
   return TRUNCATION_RE.test(resultJson);
 }
 
+/** 单个工具调用承载的 SKILL.md 读取（三通道单点判定：skill-tool / Read / shell）。
+ *  摄取侧检测（skill-invocations）与读侧恢复（Skills 面板、Audit 对账、LLM 声明
+ *  提取）共用通道词表——通道扩展只改这里。
+ *  shell 通道一次命令可读多个 SKILL.md（`cat a/SKILL.md b/SKILL.md`）→ 逐技能
+ *  产出；各条 content 均为整段输出（无回显横幅时不拆段，多技能混读是已知精度极限）。 */
+export interface SkillMdRead {
+  skillName: string;
+  source: 'skill-tool' | 'read' | 'shell';
+  content: string;
+  fullRead: boolean;
+  maxLine: number | null;
+}
+
+export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
+  const lower = tc.toolName.toLowerCase();
+  if (isSkillToolCall(tc.toolName)) {
+    if (!tc.resultJson) return [];
+    const skillName = extractSkillName(tc.toolName, tc.argsJson);
+    if (!skillName) return [];
+    // v2 `<skill_content>` 协议壳优先剥除；v1 纯文本形态回落前言剥离
+    const content = unwrapSkillContent(tc.resultJson) ?? stripSkillPreamble(tc.resultJson);
+    return [{ skillName, source: 'skill-tool', content, fullRead: true, maxLine: null }];
+  }
+  if (lower === 'read' && tc.argsJson && tc.resultJson) {
+    // read 参数键走词表（opencode `path` / Claude Code `file_path` 等同义键）
+    const fp = parseReadToolArgs(tc.argsJson)?.filePath ?? '';
+    const skillName = extractSkillNameFromReadPath(fp);
+    if (!skillName) return [];
+    const partial = hasReadOffsetOrLimit(tc.argsJson) || hasReadTruncation(tc.resultJson);
+    return [{
+      skillName,
+      source: 'read',
+      content: joinReadContent(tc.resultJson),
+      fullRead: !partial,
+      maxLine: readMaxLine(tc.resultJson),
+    }];
+  }
+  if (isShellToolCall(lower) && tc.argsJson && tc.resultJson) {
+    // shell 读类命令（codex 无 read 工具，读 SKILL.md 走 exec_command 的
+    // cat/sed/…——命令解析与摄取侧 detectSkillMdReads 同源）：resultJson 即
+    // 终端输出原文，剥 codex 元数据壳 + 模型自印横幅后即 SKILL.md 原文
+    const cmd = shellReadCommandOf(tc.argsJson);
+    if (!cmd) return [];
+    return detectSkillMdReads(cmd).map(read => ({
+      skillName: read.skillName,
+      source: 'shell' as const,
+      content: stripSkillMdBanner(stripExecOutputHeader(tc.resultJson!)),
+      fullRead: !shellReadHasRangeLimit(cmd),
+      maxLine: null,
+    }));
+  }
+  return [];
+}
+
 export function selectSkillContent(
   toolCalls: SkillToolCall[],
   skillName: string
 ): SkillContentResult | null {
   const want = (n: string) => n === skillName;
 
-  const skillToolCandidates: SkillToolCall[] = [];
-  const readCandidates: SkillToolCall[] = [];
-  const shellCandidates: { tc: SkillToolCall; fullRead: boolean }[] = [];
+  const skillToolCandidates: SkillMdRead[] = [];
+  const readCandidates: SkillMdRead[] = [];
+  const shellCandidates: SkillMdRead[] = [];
 
   for (const tc of toolCalls) {
-    const lower = tc.toolName.toLowerCase();
-    if (isSkillToolCall(tc.toolName)) {
-      if (want(extractSkillName(tc.toolName, tc.argsJson)) && tc.resultJson) {
-        skillToolCandidates.push(tc);
-      }
-      continue;
-    }
-    if (lower === 'read' && tc.argsJson && tc.resultJson) {
-      // read 参数键走词表（opencode `path` / Claude Code `file_path` 等同义键）
-      const fp = parseReadToolArgs(tc.argsJson)?.filePath ?? '';
-      const name = extractSkillNameFromReadPath(fp);
-      if (name && want(name)) readCandidates.push(tc);
-      continue;
-    }
-    // shell 读类命令（codex 无 read 工具，读 SKILL.md 走 exec_command 的
-    // cat/sed/…——命令解析与摄取侧 detectSkillMdReads 同源）：resultJson 即
-    // 终端输出原文
-    if (isShellToolCall(lower) && tc.argsJson && tc.resultJson) {
-      const cmd = shellReadCommandOf(tc.argsJson);
-      if (cmd && detectSkillMdReads(cmd).some(r => want(r.skillName))) {
-        shellCandidates.push({ tc, fullRead: !shellReadHasRangeLimit(cmd) });
-      }
+    for (const r of skillMdReadsOfToolCall(tc)) {
+      if (!want(r.skillName)) continue;
+      if (r.source === 'skill-tool') skillToolCandidates.push(r);
+      else if (r.source === 'read') readCandidates.push(r);
+      else shellCandidates.push(r);
     }
   }
+
+  const bestOf = (arr: SkillMdRead[]) =>
+    arr.reduce((a, b) => (b.content.length > a.content.length ? b : a));
 
   if (skillToolCandidates.length > 0) {
-    const best = skillToolCandidates.reduce((a, b) =>
-      (b.resultJson?.length ?? 0) > (a.resultJson?.length ?? 0) ? b : a
-    );
-    // v2 `<skill_content>` 协议壳优先剥除；v1 纯文本形态回落前言剥离
-    const content = unwrapSkillContent(best.resultJson) ?? stripSkillPreamble(best.resultJson!);
-    return { content, source: 'skill-tool', length: content.length, fullRead: true, maxLine: null };
+    const best = bestOf(skillToolCandidates);
+    return { content: best.content, source: 'skill-tool', length: best.content.length, fullRead: true, maxLine: null };
   }
-
   if (readCandidates.length > 0) {
-    const best = readCandidates.reduce((a, b) =>
-      (b.resultJson?.length ?? 0) > (a.resultJson?.length ?? 0) ? b : a
-    );
-    const content = joinReadContent(best.resultJson!);
-    const partial = hasReadOffsetOrLimit(best.argsJson) || hasReadTruncation(best.resultJson);
+    const best = bestOf(readCandidates);
     return {
-      content,
+      content: best.content,
       source: 'read',
-      length: content.length,
-      fullRead: !partial,
-      maxLine: readMaxLine(best.resultJson!),
+      length: best.content.length,
+      fullRead: best.fullRead,
+      maxLine: best.maxLine,
     };
   }
-
   if (shellCandidates.length > 0) {
-    const best = shellCandidates.reduce((a, b) =>
-      (b.tc.resultJson?.length ?? 0) > (a.tc.resultJson?.length ?? 0) ? b : a
-    );
-    // shell 读类命令的 resultJson = cat/sed 的终端输出（codex 形态带
-    // Chunk ID/Wall time 元数据头，剥壳后即 SKILL.md 原文）
-    const content = stripExecOutputHeader(best.tc.resultJson!);
+    const best = bestOf(shellCandidates);
     return {
-      content,
+      content: best.content,
       source: 'shell',
-      length: content.length,
+      length: best.content.length,
       fullRead: best.fullRead,
       maxLine: null,
     };
