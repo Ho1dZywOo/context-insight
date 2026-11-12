@@ -26,6 +26,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { BRAND_LEGACY_CONFIG_DIRS } from '../branding';
+import { lakeFilesRoot } from './server-config';
 
 const GIT_LFS_VERSION = '3.8.0';
 const GIT_LFS_SHA256: Record<string, string> = {
@@ -83,11 +84,12 @@ function sourceTimeoutMs(url: string): number {
   return 120_000; // env/测试注入源：用户自备，给足时长
 }
 
-/** 私有 bin 目录（~/.context-insight/bin；CONTEXT_PROXY_DIR 重定向优先——
- *  与 cpx 自举产物同位互用，测试隔离同语义）。'.context-insight' 引号字面量
- *  由 pack-cannbot 规则表品牌翻转（cannbot 变体 → ~/.cannbot-insight/bin）。 */
+/** 私有 bin 目录（~/.context-insight/bin；与 proxy/lake 配置文件同根——见
+ *  server-config.ts lakeFilesRoot 的锚定优先级，与 cpx 自举产物同位互用）。
+ *  '.context-insight' 引号字面量由 pack-cannbot 规则表品牌翻转（cannbot
+ *  变体 → ~/.cannbot-insight/bin）。 */
 export function privateLfsBinDir(): string {
-  return path.join(path.dirname(process.env.CONTEXT_PROXY_DIR ?? path.join(os.homedir(), '.context-insight', 'proxy')), 'bin');
+  return path.join(lakeFilesRoot(), 'bin');
 }
 
 /** 可执行件版本号（`git-lfs/3.8.0 (...)` → "3.8.0"）；不可执行/无版本输出 → null */

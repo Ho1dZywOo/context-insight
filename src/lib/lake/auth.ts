@@ -19,6 +19,7 @@
 
 import fs from 'node:fs';
 import { PLATFORM_AUTH_FAILED_CODES, PLATFORM_FORBIDDEN_CODES } from './platform';
+import { lakeFilesRoot } from './server-config';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -39,22 +40,16 @@ export function parseUrlCreds(url: string): { credless: string; auth: PushAuth |
 }
 
 // 凭据存储文件：与 proxy 捕获目录同根（CONTEXT_PROXY_DIR 重定向优先——测试/
-// 多实例隔离；'.context-insight' 引号字面量是 pack-cannbot 品牌翻转点，与
-// lfs-setup.ts 同款纪律）。读首选 lake-auth.json；旧名文件（历史版本产物）
-// 读兜底——存量凭据无感迁移：读旧写新，首次保存即落新文件，旧文件原地保留
-// （避免版本回滚丢凭据）。新文件存在即为权威（用户主动清空不复活旧凭据）。
+// 多实例隔离；见 server-config.ts lakeFilesRoot 的完整优先级）。读首选
+// lake-auth.json；旧名文件（历史版本产物）读兜底——存量凭据无感迁移：读旧
+// 写新，首次保存即落新文件，旧文件原地保留（避免版本回滚丢凭据）。新文件
+// 存在即为权威（用户主动清空不复活旧凭据）。
 export function authFilePath(): string {
-  return path.join(
-    path.dirname(process.env.CONTEXT_PROXY_DIR ?? path.join(os.homedir(), '.context-insight', 'proxy')),
-    'lake-auth.json',
-  );
+  return path.join(lakeFilesRoot(), 'lake-auth.json')
 }
 
 function legacyAuthFilePath(): string {
-  return path.join(
-    path.dirname(process.env.CONTEXT_PROXY_DIR ?? path.join(os.homedir(), '.context-insight', 'proxy')),
-    'cannbay-auth.json',
-  );
+  return path.join(lakeFilesRoot(), 'cannbay-auth.json')
 }
 
 interface StoredEntry {

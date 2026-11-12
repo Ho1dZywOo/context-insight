@@ -111,9 +111,14 @@ const { privateLfsBinDir } = await import('../../src/lib/lake/lfs-setup');
 
 // skip 探测前把私有件前置 PATH：纯私有件机器（无系统 git-lfs、自举产物在
 // ~/.context-insight/bin 在位——生产运行时 ensurePrivateLfsOnPath 同款注入）
-// 上整组照跑，贴近用户现场形态。forks 池进程复用下用例后还原。
+// 上整组照跑，贴近用户现场形态。forks 池进程复用下用例后还原。探测的是
+// 真实机的自举产物：setup.ts 给 worker 设了 CONTEXT_INSIGHT_HOME 隔离目录
+// （lake 配置/凭据以此隔离），私有 bin 探测临时摘掉该变量回落真实 home。
 const SAVED_PATH = process.env.PATH;
+const SAVED_HOME = process.env.CONTEXT_INSIGHT_HOME;
+delete process.env.CONTEXT_INSIGHT_HOME;
 const privBin = privateLfsBinDir();
+process.env.CONTEXT_INSIGHT_HOME = SAVED_HOME;
 if (fs.existsSync(path.join(privBin, 'git-lfs')) && !(process.env.PATH ?? '').split(path.delimiter).includes(privBin)) {
   process.env.PATH = `${privBin}${path.delimiter}${process.env.PATH ?? ''}`;
 }
