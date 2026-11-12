@@ -118,13 +118,15 @@ interface ParadigmDirsState {
 /** 范式目录下拉数据源（打开即拉，双通路共享单源）：全仓顶层目录即范式
  *  注册表；根级会话目录（缺省上传位，<sid>/ 形态）不进下拉——统一布局下
  *  会话与 bundle 都可上传至任意顶层目录（目录即目录，不按资产类型分区）。 */
-function useParadigmDirs(open: boolean): ParadigmDirsState {
+function useParadigmDirs(open: boolean): ParadigmDirsState & { reload: () => void } {
   const [state, setState] = useState<ParadigmDirsState>({ dirs: [], loading: false, error: null })
-  // 打开即重置（render-phase prop 变化模式）：清目录 + 置 loading，拉取结果
-  // 由 effect 异步落——避免 effect 体内同步 setState 的级联渲染
-  const [wasOpen, setWasOpen] = useState(false)
-  if (open !== wasOpen) {
-    setWasOpen(open)
+  // 重载序号：打开沿之外的第二触发源（配置保存后刷新 / 手动重试）
+  const [reloadSeq, setReloadSeq] = useState(0)
+  // 打开或重载即重置（render-phase prop 变化模式）：清目录 + 置 loading，
+  // 拉取结果由 effect 异步落——避免 effect 体内同步 setState 的级联渲染
+  const [seen, setSeen] = useState({ open: false, seq: 0 })
+  if (open !== seen.open || reloadSeq !== seen.seq) {
+    setSeen({ open, seq: reloadSeq })
     if (open) setState({ dirs: [], loading: true, error: null })
   }
   useEffect(() => {
@@ -145,15 +147,22 @@ function useParadigmDirs(open: boolean): ParadigmDirsState {
       })
       .catch(() => { if (active) setState({ dirs: [], loading: false, error: '范式目录列表加载失败，请重试' }) })
     return () => { active = false }
-  }, [open])
-  return state
+  }, [open, reloadSeq])
+  return { ...state, reload: () => setReloadSeq(s => s + 1) }
 }
 
-/** 凭据预检（双通路共享）：打开即检服务端配置远端——已配置但缺凭据直接弹
- *  引导（免填完表单才在提交时撞 no-credentials）；未配置静默（提交时拦）。 */
+/** 凭据预检（双通路共享）：打开即检服务端配置远端——未配置直接弹引导
+ *  （配置先行：无远端则范式列表拉不到、上传按钮被门禁锁死，先配置再填表）；
+ *  已配置但缺凭据同样弹引导（免填完表单才在提交时撞 no-credentials）。
+ *  弹窗续流由 flow 区分：open-precheck（打开沿/手动重试触发）保存后重载
+ *  范式列表；submit-retry（提交时安全网）保存后自动续传。 */
+type TokenPromptFlow = 'open-precheck' | 'submit-retry'
+
 function useCredentialPrecheck(open: boolean) {
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenReason, setTokenReason] = useState<LakeTokenReason>('no-credentials')
+  const [tokenFlow, setTokenFlow] = useState<TokenPromptFlow>('open-precheck')
+  const [checkSeq, setCheckSeq] = useState(0)
   useEffect(() => {
     if (!open) return
     let active = true
@@ -161,19 +170,28 @@ function useCredentialPrecheck(open: boolean) {
       try {
         const st = await serverLakeConfigStatus()
         if (!active) return
-        if (!st.configured) return
+        if (!st.configured) {
+          setTokenReason('unconfigured')
+          setTokenFlow('open-precheck')
+          setTokenDialogOpen(true)
+          return
+        }
         const res = await fetch('/api/settings/lake-auth')
         const data = await res.json() as { remotes?: StoredRemoteInfo[] }
         if (!active) return
         if (!findStoredAuthEntry(data.remotes ?? [], st.address)) {
           setTokenReason('no-credentials')
+          setTokenFlow('open-precheck')
           setTokenDialogOpen(true)
         }
       } catch { /* 状态读取失败不阻塞上传弹窗 */ }
     })()
     return () => { active = false }
-  }, [open])
-  return { tokenDialogOpen, setTokenDialogOpen, tokenReason, setTokenReason }
+  }, [open, checkSeq])
+  return {
+    tokenDialogOpen, setTokenDialogOpen, tokenReason, setTokenReason, tokenFlow, setTokenFlow,
+    recheck: () => setCheckSeq(s => s + 1),
+  }
 }
 
 /** 上传表单状态（双通路共享）：打开即重置 + 预填——render-phase prop 变化
@@ -217,11 +235,12 @@ type UploadForm = ReturnType<typeof useUploadForm>
 
 /** 共享表单（会话/run 双通路同款字段与校验）：范式目录* / 提交人* / 内容描述 /
  *  任务结果*；baseline 勾选为会话专有（范式基准会话，位置即身份）。 */
-function UploadFormFields({ form, withBaseline, descPlaceholder, disabled }: {
+function UploadFormFields({ form, withBaseline, descPlaceholder, disabled, onRetry }: {
   form: UploadForm
   withBaseline?: boolean
   descPlaceholder?: string
   disabled?: boolean
+  onRetry?: () => void
 }) {
   return (
     <>
@@ -242,7 +261,20 @@ function UploadFormFields({ form, withBaseline, descPlaceholder, disabled }: {
             <option key={d} value={d}>{d}</option>
           ))}
         </select>
-        {form.paradigm.error && <p className="text-xs text-red-500">{form.paradigm.error}</p>}
+        {form.paradigm.error && (
+          <p className="text-xs text-red-500">
+            {form.paradigm.error}
+            {!form.paradigm.loading && onRetry && (
+              <button
+                type="button"
+                className="ml-2 underline underline-offset-2 hover:opacity-80"
+                onClick={onRetry}
+              >
+                重试
+              </button>
+            )}
+          </p>
+        )}
         {withBaseline && (
           <label
             className={
@@ -383,6 +415,7 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
     const server = await serverLakeConfigStatus()
     if (!server.configured) {
       cred.setTokenReason('unconfigured')
+      cred.setTokenFlow('submit-retry')
       cred.setTokenDialogOpen(true)
       return
     }
@@ -411,6 +444,7 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
       if (!res.ok && isCredentialErrorCode(data.code)) {
         message = `${message} —— 请在弹窗中配置凭据后重试`
         cred.setTokenReason(data.code)
+        cred.setTokenFlow('submit-retry')
         cred.setTokenDialogOpen(true)
       }
       // 原生会话同步结果独立呈现（捕获行已上传成功，原生结果不影响 ok）
@@ -453,7 +487,13 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
           <DialogTitle>上传到 {BAY_NAME}</DialogTitle>
           <DialogDescription>会话经数据治理后上传至数据仓，可随时重新导入</DialogDescription>
         </DialogHeader>
-        <UploadFormFields form={form} withBaseline descPlaceholder="选填，预填会话首问，可修改" disabled={uploading} />
+        <UploadFormFields
+          form={form}
+          withBaseline
+          descPlaceholder="选填，预填会话首问，可修改"
+          disabled={uploading}
+          onRetry={() => { cred.recheck(); form.paradigm.reload() }}
+        />
         {isProxyTarget && (
           <div className="space-y-1.5">
             <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -499,8 +539,22 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
           </Button>
         </DialogFooter>
       </DialogContent>
-      {/* 令牌引导弹窗（叠加在上传弹窗之上；保存成功自动收起，表单保留可重试） */}
-      <LakeTokenDialog open={cred.tokenDialogOpen} onOpenChange={cred.setTokenDialogOpen} reason={cred.tokenReason} onSaved={() => { if (cred.tokenReason === 'unconfigured') { cred.setTokenDialogOpen(false); handleUpload() } }} />
+      {/* 令牌引导弹窗（叠加在上传弹窗之上）：open-precheck（打开即检/手动重试）
+          保存后重载范式列表——表单就绪待填；submit-retry（提交时安全网）保存后
+          自动续传（回执被续传取代）；凭据错误语境保存后走既有手动重试 */}
+      <LakeTokenDialog
+        open={cred.tokenDialogOpen}
+        onOpenChange={cred.setTokenDialogOpen}
+        reason={cred.tokenReason}
+        onSaved={() => {
+          if (cred.tokenFlow === 'submit-retry' && cred.tokenReason === 'unconfigured') {
+            cred.setTokenDialogOpen(false)
+            handleUpload()
+          } else if (cred.tokenFlow === 'open-precheck') {
+            form.paradigm.reload()
+          }
+        }}
+      />
     </Dialog>
   )
 }
@@ -526,6 +580,7 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
     const server = await serverLakeConfigStatus()
     if (!server.configured) {
       cred.setTokenReason('unconfigured')
+      cred.setTokenFlow('submit-retry')
       cred.setTokenDialogOpen(true)
       return
     }
@@ -554,6 +609,7 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
         if (isCredentialErrorCode(data.code)) {
           message = `${message} —— 请在弹窗中配置凭据后重试`
           cred.setTokenReason(data.code)
+          cred.setTokenFlow('submit-retry')
           cred.setTokenDialogOpen(true)
         }
         // 失败：HUD 报错 + 弹窗驻留明细
@@ -605,7 +661,12 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
         <div className="text-sm bg-muted/50 px-3 py-2 rounded-md truncate" title={runId}>
           {runName || runId}
         </div>
-        <UploadFormFields form={form} descPlaceholder="选填，预填 run 名称，可修改" disabled={uploading} />
+        <UploadFormFields
+          form={form}
+          descPlaceholder="选填，预填 run 名称，可修改"
+          disabled={uploading}
+          onRetry={() => { cred.recheck(); form.paradigm.reload() }}
+        />
         <div className="text-xs text-muted-foreground space-y-1">
           <p>包里的对话记录会先做敏感信息清洗，洗不干净的会拒绝上传</p>
         </div>
@@ -648,8 +709,21 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
           </Button>
         </DialogFooter>
       </DialogContent>
-      {/* 令牌引导弹窗（与会话体同款；保存成功自动收起，表单保留可重试） */}
-      <LakeTokenDialog open={cred.tokenDialogOpen} onOpenChange={cred.setTokenDialogOpen} reason={cred.tokenReason} onSaved={() => { if (cred.tokenReason === 'unconfigured') { cred.setTokenDialogOpen(false); startUpload() } }} />
+      {/* 令牌引导弹窗（与会话体同款：open-precheck 保存后重载范式列表，
+          submit-retry 保存后自动续传） */}
+      <LakeTokenDialog
+        open={cred.tokenDialogOpen}
+        onOpenChange={cred.setTokenDialogOpen}
+        reason={cred.tokenReason}
+        onSaved={() => {
+          if (cred.tokenFlow === 'submit-retry' && cred.tokenReason === 'unconfigured') {
+            cred.setTokenDialogOpen(false)
+            startUpload()
+          } else if (cred.tokenFlow === 'open-precheck') {
+            form.paradigm.reload()
+          }
+        }}
+      />
     </Dialog>
   )
 }

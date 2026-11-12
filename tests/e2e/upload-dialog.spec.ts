@@ -6,16 +6,18 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// 上传到 contextBay 对话框（run 头部的常驻药丸 → UploadDialog）：表单字段
-// 契约（提交人 / 内容描述 / 任务结果）与取消出口。只锁开合与字段在场，
-// 不发起真实上传（远端仓依赖不属于 E2E 被测面）。语料 = minidemo01。
+// 上传到 contextBay 对话框（run 头部的常驻药丸 → UploadDialog）：未配置
+// 配置先行（先弹「连接数据仓」引导）、引导取消后表单字段契约（提交人 /
+// 内容描述 / 任务结果）与取消出口。只锁开合与字段在场，不发起真实上传
+// （远端仓依赖不属于 E2E 被测面；boot server 无 lake-config.json = 未配置
+// 态，正是配置先行的被测场景）。语料 = minidemo01。
 
 import { expect, test } from "./fixtures";
 import { E2E_RUN_ID } from "./constants";
 import { RunWorkbenchPO } from "./support/pom/RunWorkbenchPO";
 
 test.describe("上传对话框", () => {
-  test("run 头部药丸 → 上传表单字段在场，取消可关", async ({ page }) => {
+  test("run 头部药丸 → 未配置先弹配置引导，取消后表单在场，关闭可退", async ({ page }) => {
     const run = new RunWorkbenchPO(page);
     await run.goto(E2E_RUN_ID);
     await run.expectTabActive("overview");
@@ -23,6 +25,14 @@ test.describe("上传对话框", () => {
     // 头部药丸（BAY_NAME 常驻文本）
     await page.getByRole("button", { name: "上传到contextBay" }).click();
 
+    // 未配置 → 配置先行：先弹「连接数据仓」引导（地址 + 推送凭据），
+    // 不再是修复前的死表单（范式列表加载失败 + 上传按钮锁死）
+    const configDialog = page.getByRole("dialog", { name: "连接数据仓" });
+    await expect(configDialog).toBeVisible();
+    await configDialog.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(configDialog).toHaveCount(0);
+
+    // 引导取消后上传表单仍在场（嵌套模态关闭，表单回到可访问树）
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
     // 共享表单件（会话/run 双通路同款：范式目录* / 提交人* / 内容描述 /
