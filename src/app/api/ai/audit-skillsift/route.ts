@@ -14,6 +14,7 @@ import { prisma } from "@/lib/db"
 import {
   recoverSkillBody,
   recoverCombinedWorkflowDeclaration,
+  ensureSkillFrontmatter,
   buildAuditArgs,
   buildStructuredRecords,
   buildTranscriptArgs,
@@ -107,14 +108,14 @@ export async function POST(req: Request) {
       : String(skillName).replace(/[^a-zA-Z0-9._-]/g, "_")
     const skillPath = path.join(skillTmp, safeName)
     fs.mkdirSync(skillPath, { recursive: true })
-    // 恢复的正文无 YAML frontmatter，而 sift 的 parse_skill_md 要 `---\nname:` 才能
-    // 得名（--kind skill 切段用它匹配 transcript 里 input.skill；--kind root 不按 name 切、
-    // name 无意义，但 parse_skill_md 仍需 frontmatter 才解析指令）。注入：root 用固定名，
-    // skill 用真实 skillName（与 transcript input.skill 对得上）。
+    // sift 的 parse_skill_md 要 `---\nname:` 才能解析指令；--kind skill 切段用
+    // SKILL.md 名匹配 transcript 里 Skill 锚点的 input.skill。frontmatter 由
+    // ensureSkillFrontmatter 单点保证：正文自带（read/shell 通道原文保留头）则
+    // 对齐名字，缺则注入合成头（root 用固定名，skill 用真实 skillName）。
     const declName = auditKind === "root" ? "main-agent-workflow" : skillName
     fs.writeFileSync(
       path.join(skillPath, "SKILL.md"),
-      `---\nname: ${declName}\ndescription: recovered from session\n---\n${body}\n`,
+      ensureSkillFrontmatter(body, declName),
     )
 
     const outputDir = path.join(skillTmp, "out")

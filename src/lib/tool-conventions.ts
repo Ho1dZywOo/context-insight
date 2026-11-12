@@ -393,3 +393,11 @@ export function stripExecOutputHeader(content: string): string {
   const idx = content.indexOf(marker);
   return idx >= 0 ? content.slice(idx + marker.length) : content;
 }
+
+/** 剥模型自印的 SKILL.md 分隔横幅（`echo '======== <skill>/SKILL.md ========'; cat …`
+ * 的回显行——终端壳剥除后正文首行的余渣）。只剥首部含 SKILL.md 字样的横幅行：
+ * 纯 `=` 的 setext 标题下划线不含字样、不误伤。无横幅 → 原样。 */
+export function stripSkillMdBanner(content: string): string {
+  return content.replace(/^={3,}[ \t]*\S*SKILL\.md\S*[ \t]*={3,}[ \t]*\r?\n/, '');
+}
+

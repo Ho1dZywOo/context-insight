@@ -108,6 +108,42 @@ describe("collectWorkflowExtractCandidates（确定性收集，零领域启发�
     expect(c.plan).toHaveLength(0);
   });
 
+  it("B 形 shell 通道（codex exec_command cat SKILL.md）→ 规程候选（两步查询为它取 resultJson）", async () => {
+    const body = "# CANNbay 审计报告规范\n\n五个必备章节。\n" + "x".repeat(120);
+    const shellTc = {
+      id: "tc-shell",
+      turnId: "t0",
+      toolName: "exec_command",
+      argsJson: JSON.stringify({ cmd: "cat /home/u/.codex/skills/cannbay-report/SKILL.md" }),
+      resultJson: `Chunk ID: 9014f0\nWall time: 0.0000 seconds\nOutput:\n${body}`,
+    };
+    const prisma = {
+      skillEvent: {
+        findFirst: vi.fn().mockResolvedValueOnce({ turnId: "t9" }),
+      },
+      turn: {
+        findUnique: vi.fn().mockResolvedValue({ turnIndex: 5 }),
+        findMany: vi.fn().mockResolvedValue([
+          { id: "t0", turnIndex: 0, role: "user", content: "短任务", agentName: null },
+        ]),
+      },
+      toolCall: {
+        findMany: vi.fn().mockImplementation(async (args: { where?: { turnId?: unknown; turn?: unknown; id?: { in?: string[] } } }) => {
+          const w = args?.where ?? {};
+          if (w.id) return [shellTc].filter((r) => w.id!.in?.includes(r.id)).map((r) => ({ id: r.id, resultJson: r.resultJson }));
+          if (w.turnId) return [shellTc];
+          if (w.turn) return [];
+          return [];
+        }),
+      },
+    } as unknown as PrismaClient;
+    const c = await collectWorkflowExtractCandidates("ses_1", prisma);
+    expect(c.regulation).toHaveLength(1);
+    expect(c.regulation[0].source).toBe("cannbay-report (SKILL.md)");
+    expect(c.regulation[0].content.startsWith("# CANNbay 审计报告规范")).toBe(true);
+    expect(c.regulation[0].content).not.toContain("Chunk ID");
+  });
+
   it("计划候选：非 .md/.txt 排除 + 同文件多次读合并（readCount）+ 部分读取标记；todowrite 不入候选", async () => {
     const todosTc = {
       toolName: "todowrite",
