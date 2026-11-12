@@ -259,7 +259,8 @@ export function ImportDialog() {
   }
 
   function handleBrowseFromInput() {
-    browseDirectory(filePath.trim() || "/");
+    // 空串 = 文件系统根层级（服务端契约：win32 盘符列表 / POSIX '/'）
+    browseDirectory(filePath.trim());
   }
 
   function handleQuickJump(dirPath: string) {
@@ -1048,7 +1049,7 @@ export function ImportDialog() {
             loading={browseLoading}
             error={error}
             onEntryClick={handleDirEntryClick}
-            onGoUp={() => { if (parentDir) browseDirectory(parentDir); }}
+            onGoUp={() => { if (parentDir !== null) browseDirectory(parentDir); }}
             onBack={() => { setStep("input"); setError(null); }}
           />
         )}
