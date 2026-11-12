@@ -14,6 +14,7 @@
 - 【启动器浏览器熔断】`./start.sh` 服务模式支持 `CONTEXT_NO_BROWSER`：置任意非空值时跳过「Server ready」后的开浏览器（打印地址代替）——与 cpx 侧 `openBrowser` 同名同语义。此前 CI/headless/测试环境跑 start.sh，WSL 分支是绝对路径 exec（`/mnt/c/Windows/System32/cmd.exe`，PATH 桩拦不住），会在用户 Windows 桌面真弹浏览器
 
 ### Fixed
+- 【Codex apply_patch 丢失导致 Context 回到 1970】Codex `custom_tool_call/custom_tool_call_output`（`apply_patch`）此前未被解析，后续 usage 被保留成无时间空 turn，Context 时间轴被拉到 1970。现按 call_id 生成并回填工具调用；Context 同时忽略 epoch/非法时间戳
 - 【Codex 会话 contextBay 往返失效】Codex 原生会话上传后物化为 `<sid>.native.jsonl.7z`，重新导入此前被固定送进 claude 适配器并创建 0-turn placeholder。现按文件内容选择 Codex 适配器、透明解压 `.7z/.gz`、识别 `.native` 命名；上传时同时收集并压缩 `spawn_agent` 引用的子代理 rollout，回拉后主会话与子代理均恢复
 - 【solo run 上传误走 bundle】solo run 页头的上传入口现按底层会话上传（携带 taskId/framework），不再把 `solo:<taskId>` 当作 bundle ID；旧客户端误调 `bundle-upload` 时返回明确指引
 - 【技能加载不再伪造工具调用行】读 SKILL.md 类技能加载（claude Read / codex shell 读类命令）此前会合成 `skill/<name>` 假工具调用混进工具统计——Overview 的工具列表多出 `skill/data-analysis` 等幽灵工具。现 SkillEvent 由 turn-split 单点直出（关联真实工具调用并继承其真实时间戳与时长，此前时长恒 0），工具面只显示真实调用，读 SKILL.md 的真实工具行带技能关联标记

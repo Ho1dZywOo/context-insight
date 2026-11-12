@@ -197,6 +197,56 @@ describe('codex-jsonl readSession 状态机', () => {
     expect(webTurn!.tool_calls![0].resultJson).toContain('completed');
   });
 
+  it('custom_tool_call/output：apply_patch 工具调用可生成并回填结果', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-custom-tool-'));
+    const file = path.join(root, `rollout-2026-11-12T15-00-00-${MAIN}.jsonl`);
+    const startedAt = '2026-11-12T07:00:01.000Z';
+    const usageAt = '2026-11-12T07:00:02.000Z';
+    const completedAt = '2026-11-12T07:00:03.000Z';
+    fs.writeFileSync(file, [
+      JSON.stringify({
+        timestamp: '2026-11-12T07:00:00.000Z', ordinal: 0, type: 'session_meta',
+        payload: { id: MAIN, session_id: MAIN, timestamp: '2026-11-12T07:00:00.000Z', cli_version: '0.167.0', thread_source: 'user' },
+      }),
+      JSON.stringify({ timestamp: '2026-11-12T07:00:00.100Z', ordinal: 1, type: 'turn_context', payload: { model: 'test-model' } }),
+      JSON.stringify({
+        timestamp: startedAt, ordinal: 2, type: 'response_item',
+        payload: {
+          type: 'custom_tool_call', id: 'ctc_call_patch', status: 'completed', call_id: 'call_patch',
+          name: 'apply_patch', input: '*** Begin Patch\n*** Add File: a.py\n+print(1)\n*** End Patch\n',
+        },
+      }),
+      JSON.stringify({
+        timestamp: usageAt, ordinal: 3, type: 'token_usage_record',
+        payload: { usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } },
+      }),
+      JSON.stringify({
+        timestamp: completedAt, ordinal: 4, type: 'response_item',
+        payload: { type: 'custom_tool_call_output', id: 'ctco_patch', call_id: 'call_patch', output: 'Success. Updated a.py' },
+      }),
+    ].join('\n') + '\n');
+    try {
+      const turns = readSession(file, MAIN);
+      expect(turns).toHaveLength(1);
+      const turn = turns[0];
+      expect(turn.timestamp).toBe(startedAt);
+      expect(turn.timeInfo?.created).toBe(Date.parse(startedAt));
+      expect(turn.usage?.total).toBe(120);
+      expect(turn.tool_calls).toHaveLength(1);
+      expect(turn.tool_calls![0]).toMatchObject({
+        toolCallId: 'call_patch',
+        toolName: 'apply_patch',
+        state: 'completed',
+        startedAt: Date.parse(startedAt),
+        completedAt: Date.parse(completedAt),
+        resultJson: 'Success. Updated a.py',
+      });
+      expect(turn.tool_calls![0].argsJson).toContain('*** Begin Patch');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('未知 payload 跳过 + 损坏行容错（fixture 内置锁）', () => {
     // 主 fixture 含 future_unknown_item 与一行坏 JSON——上两条断言能通过即证明
     // 没有炸；这里显式锁 interactions 数不受污染（9 原始行 - 2 静态注入）
