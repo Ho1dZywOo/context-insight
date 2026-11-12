@@ -685,48 +685,53 @@ export function readSubagentInteractions(filePath: string, sessionId: string): R
   // 此前直读目录会静默返回空：子代理轮次丢失、只剩通知 system turn。
   const resolved = resolveSessionFilePath(filePath, sessionId);
   if (!resolved) return [];
-  return readSubagentsInner(resolved, sessionId, 0);
+  const discovered: SubagentRollout[] = [];
+  discoverSubagentRollouts(resolved, sessionId, 0, new Set(), discovered);
+  const result: RawInteraction[] = [];
+  for (const sub of discovered) {
+    const interactions = readSessionFromLines(sub.lines);
+    for (const interaction of interactions) {
+      interaction.subagent_session_id = sub.agent.id;
+      if (sub.agent.nickname) interaction.subagent_name = sub.agent.nickname;
+    }
+    result.push(...interactions);
+  }
+  return result;
 }
 
 export function listSubagentRolloutFiles(filePath: string, sessionId: string): string[] {
   const resolved = resolveSessionFilePath(filePath, sessionId);
   if (!resolved) return [];
-  const files: string[] = [];
-  const seen = new Set<string>();
-  const walk = (mainFile: string, depth: number): void => {
-    if (depth > 5) return;
-    let lines: CodexRolloutLine[];
-    try {
-      lines = parseRolloutLines(mainFile);
-    } catch {
-      return;
-    }
-    for (const agent of extractSpawnedAgents(lines)) {
-      const childFile = locateRolloutById(mainFile, agent.id);
-      if (!childFile || seen.has(childFile)) continue;
-      seen.add(childFile);
-      files.push(childFile);
-      walk(childFile, depth + 1);
-    }
-  };
-  walk(resolved, 0);
-  return files;
+  const discovered: SubagentRollout[] = [];
+  discoverSubagentRollouts(resolved, sessionId, 0, new Set(), discovered);
+  return discovered.map(s => s.filePath);
 }
 
-function readSubagentsInner(mainFile: string, sessionId: string, depth: number): RawInteraction[] {
-  if (depth > 5) return []; // 嵌套深度上限（防异常环）
+interface SubagentRollout {
+  agent: SpawnedAgent;
+  filePath: string;
+  lines: CodexRolloutLine[];
+}
+
+function discoverSubagentRollouts(
+  mainFile: string,
+  parentSessionId: string,
+  depth: number,
+  seenFiles: Set<string>,
+  out: SubagentRollout[],
+): void {
+  if (depth > 5) return;
   let lines: CodexRolloutLine[];
   try {
     lines = parseRolloutLines(mainFile);
   } catch {
-    return [];
+    return;
   }
 
-  const agents = extractSpawnedAgents(lines);
-  const result: RawInteraction[] = [];
-  for (const agent of agents) {
+  for (const agent of extractSpawnedAgents(lines)) {
     const childFile = locateRolloutById(mainFile, agent.id);
-    if (!childFile) continue; // 子文件丢失（被清理）：跳过不阻塞，spawn/wait 工具结果仍在主时间线
+    if (!childFile || seenFiles.has(childFile)) continue;
+    seenFiles.add(childFile);
     let childLines: CodexRolloutLine[];
     try {
       childLines = parseRolloutLines(childFile);
@@ -736,17 +741,13 @@ function readSubagentsInner(mainFile: string, sessionId: string, depth: number):
     const childMeta = readSessionMeta(childLines);
     // 交叉验证：parent_thread_id 必须指回主会话（防同 uuid 误配）；无声明时
     // 以 spawn 输出为准（老版本文件）
-    if (childMeta.parentThreadId && childMeta.parentThreadId !== sessionId) continue;
-
-    const interactions = readSessionFromLines(childLines);
-    const nickname = childMeta.agentNickname ?? agent.nickname;
-    for (const it of interactions) {
-      it.subagent_session_id = agent.id;
-      if (nickname) it.subagent_name = nickname;
-    }
-    result.push(...interactions);
+    if (childMeta.parentThreadId && childMeta.parentThreadId !== parentSessionId) continue;
+    out.push({
+      agent: { id: agent.id, nickname: childMeta.agentNickname ?? agent.nickname },
+      filePath: childFile,
+      lines: childLines,
+    });
     // 嵌套 spawn：孙代理并入（打各自的标）
-    result.push(...readSubagentsInner(childFile, agent.id, depth + 1));
+    discoverSubagentRollouts(childFile, agent.id, depth + 1, seenFiles, out);
   }
-  return result;
 }

@@ -641,6 +641,34 @@ describe('codex 原生会话：上传 contextBay → 7z 物化 → 重新导入'
   });
 });
 
+describe('lake 未知格式物化件：内容探测失败仍保留占位降级', () => {
+  const EMPTY_SID = 'codex-lake-empty-0001';
+  const EMPTY_FILE = path.join(FIXTURES, `${EMPTY_SID}.jsonl`);
+
+  it('source resolution 失败时回退 claude-jsonl placeholder，不把整次 lake 导入打成异常', async () => {
+    fs.writeFileSync(EMPTY_FILE, '{"unknown":"record"}\n');
+    const stale = await prisma.session.findMany({ where: { taskId: EMPTY_SID }, select: { id: true } });
+    if (stale.length > 0) await cascadeDeleteSessionRows(prisma, stale.map(s => s.id));
+    const row = await prisma.session.create({
+      data: {
+        taskId: EMPTY_SID,
+        label: 'empty codex source',
+        framework: 'codex',
+        sourcePath: EMPTY_FILE,
+        startTime: new Date('2026-11-12T08:00:00.000Z'),
+      },
+    });
+    await lake.uploadLakeSession(prisma, EMPTY_SID, '提交人: 测试者\n内容描述: 空文件往返', undefined, 'others', false, 'failure', 'codex');
+    await cascadeDeleteSessionRows(prisma, [row.id]);
+
+    const imported = await lake.importLakeSession(EMPTY_SID, prisma, undefined, 'native');
+    expect(imported.imported).toBe(true);
+    const after = await prisma.session.findFirst({ where: { taskId: EMPTY_SID } });
+    expect(after?.label).toBe('（捕获中，暂无内容）');
+    if (after) await cascadeDeleteSessionRows(prisma, [after.id]);
+  });
+});
+
 describe('lake route', () => {
   it('action=list 返回会话列表', async () => {
     const res = await route.POST(makeRequest({ action: 'list' }));

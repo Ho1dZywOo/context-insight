@@ -26,6 +26,7 @@ import {
   listSessions,
   readSession,
   readSubagentInteractions,
+  listSubagentRolloutFiles,
   extractVersion,
 } from '@/lib/ingest/adapters/codex-jsonl';
 import {
@@ -220,6 +221,26 @@ describe('codex-jsonl 子代理发现（spawn 输出 + parent_thread_id 交叉�
     expect(kepler).toHaveLength(3);
     expect(euclid.every(s => s.subagent_name === 'Euclid')).toBe(true);
     expect(kepler.every(s => s.subagent_name === 'Kepler')).toBe(true);
+  });
+
+  it('listSubagentRolloutFiles：parent_thread_id 不匹配的文件不进入上传集合', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-sub-parent-'));
+    const mainCopy = path.join(root, path.basename(mainFile));
+    const wrongSub = path.join(root, path.basename(sub1File));
+    fs.copyFileSync(mainFile, mainCopy);
+    const wrongLines = fs.readFileSync(sub1File, 'utf-8').split('\n').map(line => {
+      if (!line.trim()) return line;
+      const row = JSON.parse(line) as { type?: string; payload?: { parent_thread_id?: string } };
+      if (row.type === 'session_meta' && row.payload) row.payload.parent_thread_id = 'not-the-main-session';
+      return JSON.stringify(row);
+    });
+    fs.writeFileSync(wrongSub, wrongLines.join('\n'));
+    try {
+      expect(listSubagentRolloutFiles(mainCopy, MAIN)).toEqual([]);
+      expect(readSubagentInteractions(mainCopy, MAIN)).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('目录路径与文件路径同结果（回归锁：UI「列表选择→导入」传 sessions 根目录）', () => {

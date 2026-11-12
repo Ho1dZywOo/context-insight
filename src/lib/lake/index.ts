@@ -24,7 +24,7 @@ import { exportSessionToClaudeJsonl, xLake } from './export';
 import { readEnvelope, readEnvelopeWithLegacy, envelopeFields } from '../shared/envelope';
 import { readCaptureText, ensure7z, compressCaptureFile, decompressToPlain } from '@/lib/compression';
 import { importSession } from '@/lib/ingest/data-service';
-import { resolveSource } from '@/lib/ingest/adapters/registry';
+import { resolveSource, SourceResolutionError } from '@/lib/ingest/adapters/registry';
 import { listSubagentRolloutFiles as listCodexSubagentRolloutFiles } from '@/lib/ingest/adapters/codex-jsonl';
 import {
   resolveNativeCounterpart,
@@ -75,7 +75,13 @@ export async function importLakeSession(sid: string, prisma: PrismaLike, remote?
     // 「零手工安装」
     if ((remote ?? defaultLakeRemote()).lfs) await ensureLfsBootstrapForRead();
     const mainJsonl = materializeSession(sid, remote, recording);
-    const sourceType = resolveSource('jsonl', mainJsonl).sourceType;
+    let sourceType = 'claude-jsonl';
+    try {
+      sourceType = resolveSource('jsonl', mainJsonl).sourceType;
+    } catch (e) {
+      if (!(e instanceof SourceResolutionError)) throw e;
+      impLog.warn('lake import source unresolved; falling back to claude-jsonl placeholder path', { sid, error: e.message });
+    }
     const result = await importSession(mainJsonl, sid, prisma, mainJsonl, sourceType);
     // x_lake 补列（docs/lake-schema-spec.md）：核心管线无通道、只存在于
     // 声明里的列（Turn.ttftMs/temperature/maxTokens/modelId/providerId、
