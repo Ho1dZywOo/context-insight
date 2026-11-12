@@ -18,6 +18,7 @@ import zlib from 'node:zlib';
 import { PrismaClient } from '@prisma/client';
 import { NextRequest } from 'next/server';
 import { importSession } from '../../src/lib/ingest/data-service.ts';
+import { cascadeDeleteSessionRows } from '../../src/lib/ingest/session-cascade.ts';
 import { withDbRaceRetry } from '../db-race';
 import { materializeV1Fixture } from '../helpers/materialize-v1-fixture';
 import { seedLakeConfig, switchLakeConfig } from '../helpers/lake-env';
@@ -528,6 +529,115 @@ describe('lake 无 jsonl 源兜底：DB 导出上传（v1 .db 快照会话 / 源
     expect(asst?.latencyMs).toBe(latBefore);
     // 来源标注不误标代理捕获：version 不以 -proxy 结尾（无 proxy 徽标）
     expect(session?.version == null || !session!.version!.endsWith('-proxy')).toBe(true);
+  });
+});
+
+describe('codex 原生会话：上传 contextBay → 7z 物化 → 重新导入', () => {
+  const CODEX_SID = 'codex-lake-roundtrip-0001';
+  const CODEX_SUB_SID = '01a1ceb3-58c7-7bc0-bde4-3fa5f60f8a21';
+  const ROLLOUT = path.join(FIXTURES, `rollout-2026-11-12T15-39-40-${CODEX_SID}.jsonl`);
+  const SUB_ROLLOUT = path.join(FIXTURES, `rollout-2026-11-12T15-40-22-${CODEX_SUB_SID}.jsonl`);
+
+  it('按内容选择 codex 适配器，压缩态可读且不创建 placeholder', async () => {
+    fs.writeFileSync(ROLLOUT, [
+      JSON.stringify({
+        timestamp: '2026-11-12T07:39:40.498Z', ordinal: 0, type: 'session_meta',
+        payload: {
+          id: CODEX_SID, session_id: CODEX_SID, timestamp: '2026-11-12T07:39:40.498Z',
+          cwd: '/tmp/codex-roundtrip', originator: 'codex_exec', cli_version: '0.167.0',
+          thread_source: 'user', model_provider: 'test', source: 'exec',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:39:40.500Z', ordinal: 1, type: 'event_msg',
+        payload: { type: 'task_started' },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:39:40.600Z', ordinal: 2, type: 'turn_context',
+        payload: { model: 'deepseek-v4-flash' },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:39:41.000Z', ordinal: 3, type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'codex lake roundtrip' }] },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:39:42.000Z', ordinal: 4, type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'roundtrip ok' }] },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:39:42.050Z', ordinal: 5, type: 'response_item',
+        payload: {
+          type: 'function_call', call_id: 'call_spawn_codex_roundtrip', name: 'spawn_agent',
+          arguments: '{"agent_type":"developer","message":"run subagent check"}',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:39:42.060Z', ordinal: 6, type: 'response_item',
+        payload: {
+          type: 'function_call_output', call_id: 'call_spawn_codex_roundtrip',
+          output: JSON.stringify({ agent_id: CODEX_SUB_SID, nickname: 'Hypatia' }),
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:39:42.100Z', ordinal: 7, type: 'token_usage_record',
+        payload: { usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 10, reasoning_output_tokens: 3, total_tokens: 113 } },
+      }),
+    ].join('\n') + '\n');
+    fs.writeFileSync(SUB_ROLLOUT, [
+      JSON.stringify({
+        timestamp: '2026-11-12T07:40:22.000Z', ordinal: 0, type: 'session_meta',
+        payload: {
+          id: CODEX_SUB_SID, session_id: CODEX_SUB_SID, timestamp: '2026-11-12T07:40:22.000Z',
+          cwd: '/tmp/codex-roundtrip', originator: 'codex_exec', cli_version: '0.167.0',
+          thread_source: 'subagent', parent_thread_id: CODEX_SID, agent_nickname: 'Hypatia', source: 'exec',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:40:22.100Z', ordinal: 1, type: 'turn_context',
+        payload: { model: 'deepseek-v4-flash' },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:40:23.000Z', ordinal: 2, type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'run subagent check' }] },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:40:24.000Z', ordinal: 3, type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'subagent result' }] },
+      }),
+      JSON.stringify({
+        timestamp: '2026-11-12T07:40:24.100Z', ordinal: 4, type: 'token_usage_record',
+        payload: { usage: { input_tokens: 50, output_tokens: 5, total_tokens: 55 } },
+      }),
+    ].join('\n') + '\n');
+
+    const first = await importSession(ROLLOUT, CODEX_SID, prisma, ROLLOUT, 'codex-jsonl');
+    const before = await prisma.session.findUnique({ where: { id: first.sessionId } });
+    expect(before?.framework).toBe('codex');
+    expect(await prisma.turn.count({ where: { sessionId: before!.id } })).toBeGreaterThan(0);
+
+    const uploaded = await lake.uploadLakeSession(
+      prisma, CODEX_SID, '提交人: 测试者\n内容描述: codex 压缩往返', undefined, 'others', false, 'success', 'codex',
+    );
+    expect(uploaded.unchanged).toBe(false);
+    const materialized = mirror.materializeSession(CODEX_SID, undefined, 'native');
+    expect(materialized.endsWith(`${CODEX_SID}.native.jsonl.7z`)).toBe(true);
+    const subagentDir = path.join(mirror.lakeCacheDir(), 'materialized', `${CODEX_SID}.native`, 'subagents');
+    expect(fs.readdirSync(subagentDir).some(n => n.includes(CODEX_SUB_SID) && n.endsWith('.jsonl.7z'))).toBe(true);
+
+    await cascadeDeleteSessionRows(prisma, [before!.id]);
+    const imported = await lake.importLakeSession(CODEX_SID, prisma, undefined, 'native');
+    expect(imported.framework).toBe('codex');
+    expect(imported.version).toBe('0.167.0');
+
+    const after = await prisma.session.findFirst({ where: { taskId: CODEX_SID, framework: 'codex' } });
+    expect(after).toBeTruthy();
+    expect(after!.label).not.toBe('（捕获中，暂无内容）');
+    expect(after!.model).toBe('deepseek-v4-flash');
+    const turns = await prisma.turn.findMany({ where: { sessionId: after!.id }, orderBy: { turnIndex: 'asc' } });
+    expect(turns.some(t => t.role === 'user' && t.content?.includes('codex lake roundtrip'))).toBe(true);
+    expect(turns.some(t => t.role === 'assistant' && t.content?.includes('roundtrip ok'))).toBe(true);
+    expect(after!.totalSubagentCount).toBe(1);
+    expect(turns.some(t => t.isSubagent && t.content?.includes('subagent result'))).toBe(true);
   });
 });
 

@@ -14,7 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { listSessions, listOverview, materializeSession, uploadFolder, listParadigmDirs, ensureLfsBootstrapForRead, type LakeRemote, type LakeSessionEntry, type LakeOverview, type UploadResult, type RecordingClass } from './mirror';
 import { readCcSessionMeta } from '../ingest/proxy-classify';
-import { isProxyVersion } from '../shared/session-format';
+import { agentFrameworkOf, isProxyVersion } from '../shared/session-format';
 import { computeSessionActiveSplit } from '../active-time';
 import { defaultLakeRemote } from './remote';
 import { requirePushCredentials } from './auth';
@@ -24,6 +24,8 @@ import { exportSessionToClaudeJsonl, xLake } from './export';
 import { readEnvelope, readEnvelopeWithLegacy, envelopeFields } from '../shared/envelope';
 import { readCaptureText, ensure7z, compressCaptureFile, decompressToPlain } from '@/lib/compression';
 import { importSession } from '@/lib/ingest/data-service';
+import { resolveSource } from '@/lib/ingest/adapters/registry';
+import { listSubagentRolloutFiles as listCodexSubagentRolloutFiles } from '@/lib/ingest/adapters/codex-jsonl';
 import {
   resolveNativeCounterpart,
   defaultNativeDiscoveryRoots,
@@ -73,7 +75,8 @@ export async function importLakeSession(sid: string, prisma: PrismaLike, remote?
     // 「零手工安装」
     if ((remote ?? defaultLakeRemote()).lfs) await ensureLfsBootstrapForRead();
     const mainJsonl = materializeSession(sid, remote, recording);
-    const result = await importSession(mainJsonl, sid, prisma, mainJsonl, 'claude-jsonl');
+    const sourceType = resolveSource('jsonl', mainJsonl).sourceType;
+    const result = await importSession(mainJsonl, sid, prisma, mainJsonl, sourceType);
     // x_lake 补列（docs/lake-schema-spec.md）：核心管线无通道、只存在于
     // 声明里的列（Turn.ttftMs/temperature/maxTokens/modelId/providerId、
     // ToolCall.errorType/errorMessage/durationMs/startedAt、Session.framework/
@@ -287,6 +290,15 @@ export async function stageInsightSession(
             ensure7z(path.join(dest, entry.name));
           }
         }
+      }
+    }
+    if (agentFrameworkOf(session.framework) === 'codex') {
+      const dest = path.join(sessionDir, 'subagents');
+      for (const subFile of listCodexSubagentRolloutFiles(sourceResolved!, session.taskId)) {
+        fs.mkdirSync(dest, { recursive: true });
+        const target = path.join(dest, path.basename(subFile));
+        fs.copyFileSync(subFile, target);
+        if (target.endsWith('.jsonl') || target.endsWith('.jsonl.gz')) ensure7z(target);
       }
     }
   } else {
