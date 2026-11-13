@@ -302,8 +302,7 @@
   --ctx-label-bg: #1c2530;
 }
 
-/* 曲线入场：pathLength 归一化的描画动画（一次性；组显隐切换重挂时重放，
-   与面积渐显同构成「数据生长」的入场叙事） */
+/* 曲线入场：pathLength 归一化的描画动画（一次性；组显隐切换重挂时重放） */
 @keyframes ctx-line-draw {
   from {
     stroke-dashoffset: 1;
@@ -312,16 +311,6 @@
 
 .ctx-line-draw {
   animation: ctx-line-draw 900ms var(--run-spring) both;
-}
-
-@keyframes ctx-area-in {
-  from {
-    opacity: 0;
-  }
-}
-
-.ctx-area-in {
-  animation: ctx-area-in 700ms ease-out both;
 }
 
 /* 图例胶囊微交互：spring 缓动 + 按压回弹（工具条按钮同款手感） */
@@ -515,8 +504,7 @@
     transform: none;
   }
 
-  .ctx-line-draw,
-  .ctx-area-in {
+  .ctx-line-draw {
     animation: none;
   }
 

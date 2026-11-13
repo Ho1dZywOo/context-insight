@@ -233,7 +233,7 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
 
     expect(container.querySelector('[aria-label="图表模式"]')).toBeNull();
     expect(svg.querySelector('path[fill="none"]')).toBeTruthy();
-    expect(svg.querySelector('path.ctx-area-in')).toBeNull();
+    expect(svg.querySelector('defs linearGradient')).toBeNull();
   });
 
   it('详情弹窗趋势小图（逐轮轴）：主曲线 + 缓存读份额带 + /compact 标记 + 轮号刻度', async () => {
