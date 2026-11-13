@@ -13,6 +13,13 @@ import { readCaptureBuffer, readCaptureHead } from '@/lib/compression';
 import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage } from '../../shared/types';
 import { classifyCodexUserInjection } from './injections/codex';
 import { isRolloutFileName, rolloutSessionIdOf } from './codex-naming';
+import {
+  codexStreamSessionIdOf,
+  codexChunkExitCodeOf,
+  writeStdinSessionIdOf,
+  writeStdinCharsOf,
+  stripExecOutputHeader,
+} from '../../tool-conventions';
 
 // ── codex 原生会话适配器（agent-source-framework 首个新框架客户）──────
 // 数据源：~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl（codex CLI
@@ -472,7 +479,108 @@ function readSessionFromLines(lines: CodexRolloutLine[]): RawInteraction[] {
   // 文件尾部残留组（未收到 usage 的中断响应）
   flushGroup(null, null);
 
+  rollUpStreamingExecs(result);
+
   return result;
+}
+
+// ── 流式 shell 卷回（exec_command + write_stdin → 单一逻辑工具调用）─────────
+// codex 的 exec_command 是流式终端协议：一次逻辑命令被物理拆成 1 个
+// exec_command（首块常只有「Process running with session ID N」块头）+ N 个
+// write_stdin 轮询块（session_id 关联、块间为输出增量 delta）。1:1 映射 wire
+// 形状会让所有下游（Turns 展示、Perf 时长、技能正文恢复、导出）各自再懂一遍
+// 这套传输协议——按「框架行为解释归 adapter」红线，在此单点卷回逻辑形状：
+//   - 属主 exec 吸收其全部轮询块：输出增量按到达序拼接、真实时长到最后一块、
+//     终态取末块退出码
+//   - 交互输入（write_stdin chars 非空）以 `[stdin] …` 行留痕，信息不丢
+//   - 轮询块是传输管道，不再作为工具调用出现；孤儿轮询块（属主不在本文件，
+//     如捕获裁剪起点之前发起）原样保留
+//   - 全部 exec_command 输出剥传输壳（Chunk ID/Wall time/…/Output:）——下游
+//     看到的即终端原文；旧库存量行仍带壳，读侧 stripExecOutputHeader 兼容
+
+interface StreamingExecState {
+  /** 轮询块的输出增量与交互输入留痕（到达序） */
+  parts: string[];
+  /** 会话最后一块到达时刻（真实完成时刻） */
+  lastChunkTs: number | null;
+  /** 末块携带的退出码（running 块 → 维持前值） */
+  exitCode: number | null;
+}
+
+function rollUpStreamingExecs(result: RawInteraction[]): void {
+  const execs: ToolCallInfo[] = [];
+  const ownerBySession = new Map<number, ToolCallInfo>();
+  const stateByOwner = new Map<ToolCallInfo, StreamingExecState>();
+
+  for (const ri of result) {
+    for (const tc of ri.tool_calls ?? []) {
+      if (tc.toolName !== 'exec_command' || tc.resultJson == null) continue;
+      execs.push(tc);
+      const sid = codexStreamSessionIdOf(tc.resultJson);
+      if (sid !== null && !ownerBySession.has(sid)) {
+        ownerBySession.set(sid, tc);
+        stateByOwner.set(tc, {
+          parts: [],
+          lastChunkTs: tc.completedAt ?? null,
+          exitCode: codexChunkExitCodeOf(tc.resultJson),
+        });
+      }
+    }
+  }
+  if (execs.length === 0) return;
+
+  let droppedAny = false;
+  for (const ri of result) {
+    const tcs = ri.tool_calls;
+    if (!tcs || tcs.length === 0) continue;
+    const kept: ToolCallInfo[] = [];
+    let dropped = false;
+    for (const tc of tcs) {
+      const sid = tc.toolName === 'write_stdin' ? writeStdinSessionIdOf(tc.argsJson) : null;
+      const owner = sid !== null ? ownerBySession.get(sid) : undefined;
+      if (owner == null) {
+        kept.push(tc);
+        continue;
+      }
+      dropped = true;
+      droppedAny = true;
+      const st = stateByOwner.get(owner)!;
+      const chars = writeStdinCharsOf(tc.argsJson);
+      if (chars) st.parts.push(`[stdin] ${chars}\n`);
+      if (tc.resultJson != null) st.parts.push(stripExecOutputHeader(tc.resultJson));
+      const exitCode = codexChunkExitCodeOf(tc.resultJson ?? '');
+      if (exitCode !== null) st.exitCode = exitCode;
+      if (tc.completedAt != null && (st.lastChunkTs == null || tc.completedAt > st.lastChunkTs)) {
+        st.lastChunkTs = tc.completedAt;
+      }
+    }
+    if (dropped) ri.tool_calls = kept.length > 0 ? kept : null;
+  }
+
+  for (const tc of execs) {
+    const raw = tc.resultJson ?? '';
+    const st = stateByOwner.get(tc);
+    const exitCode = st != null ? st.exitCode : codexChunkExitCodeOf(raw);
+    tc.resultJson = st != null
+      ? [stripExecOutputHeader(raw), ...st.parts].join('')
+      : stripExecOutputHeader(raw);
+    if (st != null && st.lastChunkTs != null) tc.completedAt = st.lastChunkTs;
+    if (exitCode !== null && exitCode !== 0) tc.state = 'error';
+  }
+
+  // 轮询块被吸收后留下的纯传输空组（无正文/无工具/无 usage）不再作为会话
+  // 事件；带 usage 的空组保留（token 消耗是真实模型轮次，claude 适配器截断
+  // 观测同款先例）
+  if (droppedAny) {
+    for (let i = result.length - 1; i >= 0; i--) {
+      const ri = result[i];
+      const empty =
+        (ri.content == null || ri.content === '') &&
+        (ri.tool_calls == null || ri.tool_calls.length === 0) &&
+        ri.usage == null;
+      if (empty) result.splice(i, 1);
+    }
+  }
 }
 
 // ── 文件定位 ─────────────────────────────────────────────────────────

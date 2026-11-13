@@ -83,11 +83,18 @@ function hasReadTruncation(resultJson: string | null): boolean {
   return TRUNCATION_RE.test(resultJson);
 }
 
+// codex 终端截断标记（Output 超出 max_output_tokens 时打在输出首行——保留在
+// 正文里，模型看得到、 acted upon，是「读到的是截断版」的诚实信号）：
+// shell 通道据此把 fullRead 如实降级
+const SHELL_TRUNCATED_RE = /Warning: truncated output/i;
+
 /** 单个工具调用承载的 SKILL.md 读取（三通道单点判定：skill-tool / Read / shell）。
  *  摄取侧检测（skill-invocations）与读侧恢复（Skills 面板、Audit 对账、LLM 声明
  *  提取）共用通道词表——通道扩展只改这里。
  *  shell 通道一次命令可读多个 SKILL.md（`cat a/SKILL.md b/SKILL.md`）→ 逐技能
- *  产出；各条 content 均为整段输出（无回显横幅时不拆段，多技能混读是已知精度极限）。 */
+ *  产出；各条 content 均为整段输出（无回显横幅时不拆段，多技能混读是已知精度极限）。
+ *  流式 shell（codex exec_command + write_stdin 轮询块）已由 codex-jsonl 适配器
+ *  在摄取时卷回完整输出——本层零流式协议知识。 */
 export interface SkillMdRead {
   skillName: string;
   source: 'skill-tool' | 'read' | 'shell';
@@ -126,11 +133,12 @@ export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
     // 终端输出原文，剥 codex 元数据壳 + 模型自印横幅后即 SKILL.md 原文
     const cmd = shellReadCommandOf(tc.argsJson);
     if (!cmd) return [];
+    const output = stripExecOutputHeader(tc.resultJson);
     return detectSkillMdReads(cmd).map(read => ({
       skillName: read.skillName,
       source: 'shell' as const,
-      content: stripSkillMdBanner(stripExecOutputHeader(tc.resultJson!)),
-      fullRead: !shellReadHasRangeLimit(cmd),
+      content: stripSkillMdBanner(output),
+      fullRead: !shellReadHasRangeLimit(cmd) && !SHELL_TRUNCATED_RE.test(output),
       maxLine: null,
     }));
   }
@@ -150,6 +158,8 @@ export function selectSkillContent(
   for (const tc of toolCalls) {
     for (const r of skillMdReadsOfToolCall(tc)) {
       if (!want(r.skillName)) continue;
+      // 空正文不是恢复（壳行/传输残块）——跳过，让更诚实的高通道或 null 胜出
+      if (r.content.length === 0) continue;
       if (r.source === 'skill-tool') skillToolCandidates.push(r);
       else if (r.source === 'read') readCandidates.push(r);
       else shellCandidates.push(r);

@@ -394,6 +394,46 @@ export function stripExecOutputHeader(content: string): string {
   return idx >= 0 ? content.slice(idx + marker.length) : content;
 }
 
+/** codex 流式 shell：exec_command 首块带「Process running with session ID N」
+ *  （Output 为空或部分增量——命令真实正文在后续 write_stdin 对同一 session
+ *  的轮询块里）。返回会话号供 codex-jsonl 适配器卷回关联；单块完结
+ *  （Process exited，无会话号）→ null。 */
+export function codexStreamSessionIdOf(resultJson: string): number | null {
+  const m = /Process running with session ID (\d+)/.exec(resultJson);
+  return m ? Number(m[1]) : null;
+}
+
+/** codex 流式块头里的退出码（「Process exited with code N」——终态信号，
+ *  卷回时取末块值定 state）；running 块/无标记 → null */
+export function codexChunkExitCodeOf(resultJson: string): number | null {
+  const m = /Process exited with code (-?\d+)/.exec(resultJson);
+  return m ? Number(m[1]) : null;
+}
+
+/** write_stdin 参数里的 session_id（codex 流式 shell 轮询的目标会话），适配器
+ *  卷回时关联属主 exec_command；缺损/非数/坏 JSON → null */
+export function writeStdinSessionIdOf(argsJson: string | null): number | null {
+  if (!argsJson) return null;
+  try {
+    const v = (JSON.parse(argsJson) as Record<string, unknown>)?.session_id;
+    return typeof v === 'number' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** write_stdin 参数里的 chars（送进运行中进程的 stdin——交互输入，如确认
+ *  提示；空串 = 纯轮询）。缺损/非字符串 → null */
+export function writeStdinCharsOf(argsJson: string | null): string | null {
+  if (!argsJson) return null;
+  try {
+    const v = (JSON.parse(argsJson) as Record<string, unknown>)?.chars;
+    return typeof v === 'string' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 剥模型自印的 SKILL.md 分隔横幅（`echo '======== <skill>/SKILL.md ========'; cat …`
  * 的回显行——终端壳剥除后正文首行的余渣）。只剥首部含 SKILL.md 字样的横幅行：
  * 纯 `=` 的 setext 标题下划线不含字样、不误伤。无横幅 → 原样。 */
