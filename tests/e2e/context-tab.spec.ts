@@ -7,8 +7,8 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // Context 面板（ContextTracker 单一源，run 泛化）：上下文增长趋势纯 SVG
-// 曲线（data-chart 契约锚）+ 头部摘要一行（agents/轮次/峰值/缓存命中）+
-// 图表模式分段控件（面积↔折线，aria-pressed 真值断言）+ 图例胶囊 chevron
+// 固定折线（data-chart 契约锚）+ 头部摘要一行（agents/轮次/峰值/缓存命中）+
+// 图例胶囊 chevron
 // 下钻 AgentDetailDialog（档案关键四数：峰值/窗口水位/增速）。语料 =
 // e2e-tools01（3 成员，水位故事完整）。
 
@@ -17,7 +17,7 @@ import { E2E_TOOL_RUN_ID } from "./constants";
 import { RunWorkbenchPO } from "./support/pom/RunWorkbenchPO";
 
 test.describe("Context 面板", () => {
-  test("增长趋势卡：SVG 曲线 + 头部摘要 + 图表模式切换", async ({ page }) => {
+  test("增长趋势卡：固定 SVG 折线 + 头部摘要", async ({ page }) => {
     const run = new RunWorkbenchPO(page);
     await run.goto(E2E_TOOL_RUN_ID, "tab=context");
     await run.expectTabActive("context");
@@ -29,13 +29,9 @@ test.describe("Context 面板", () => {
     // 头部摘要一行：agent 数 · 轮次 · 峰值 · 缓存命中（tabular-nums 真值）
     await expect(panel.getByText(/agents · \d+ 轮次 · 峰值 /).first()).toBeVisible();
 
-    // 图表模式分段控件：面积 → 折线，aria-pressed 翻转（状态真值断言）
-    const areaBtn = panel.getByRole("button", { name: "面积", exact: true });
-    const lineBtn = panel.getByRole("button", { name: "折线", exact: true });
-    await expect(areaBtn).toHaveAttribute("aria-pressed", "true");
-    await lineBtn.click();
-    await expect(lineBtn).toHaveAttribute("aria-pressed", "true");
-    await expect(areaBtn).toHaveAttribute("aria-pressed", "false");
+    // 主趋势图固定折线：不提供面积/折线模式切换，折线路径真实在场
+    await expect(panel.locator('[aria-label="图表模式"]')).toHaveCount(0);
+    await expect(panel.locator('svg[data-chart="growth"] path[fill="none"]').first()).toBeVisible();
   });
 
   test("图例胶囊下钻：chevron 详情 → 档案弹窗关键四数在场", async ({ page }) => {

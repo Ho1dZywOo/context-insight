@@ -227,6 +227,15 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
     expect(document.querySelector('[data-agent-detail]')).toBeNull();
   });
 
+  it('上下文增长趋势固定为折线：无图表模式切换、无面积填充', async () => {
+    const container = await render();
+    const svg = container.querySelector('svg[data-chart="growth"]') as SVGSVGElement;
+
+    expect(container.querySelector('[aria-label="图表模式"]')).toBeNull();
+    expect(svg.querySelector('path[fill="none"]')).toBeTruthy();
+    expect(svg.querySelector('defs linearGradient')).toBeNull();
+  });
+
   it('详情弹窗趋势小图（逐轮轴）：主曲线 + 缓存读份额带 + /compact 标记 + 轮号刻度', async () => {
     const container = await render();
 
@@ -265,17 +274,13 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
   it('增长曲线从 0 生长（初始锚点）：主图与趋势小图首点落基线，随后升到首测量值', async () => {
     const container = await render();
 
-    // 主图：线路径首点 y = 基线（与面积闭合 L 段的 y 同源）——初始轮此前
-    // 被统计过滤（totalTokens<=0），曲线一律从首测量值起步；锚只进绘制
-    // 序列不进命中点，悬浮仍只对真实轮次
+    // 主图：折线首点 y = 基线——初始轮此前被统计过滤（totalTokens<=0），
+    // 曲线一律从首测量值起步；锚只进绘制序列不进命中点，悬浮仍只对真实轮次
     const svg = container.querySelector('svg[data-chart="growth"]') as SVGSVGElement;
     const linePath = svg.querySelector('path[fill="none"]') as SVGPathElement;
-    const areaPath = svg.querySelector('path.ctx-area-in') as SVGPathElement;
     expect(linePath).toBeTruthy();
-    expect(areaPath).toBeTruthy();
-    const baselineY = Number((areaPath.getAttribute('d') ?? '').match(/L [\d.]+,([\d.]+) Z$/)?.[1]);
+    const baselineY = Number(svg.getAttribute('height')) - 40;
     const firstY = Number((linePath.getAttribute('d') ?? '').match(/^M [\d.]+,([\d.]+)/)?.[1]);
-    expect(Number.isFinite(baselineY)).toBe(true);
     expect(firstY).toBe(baselineY);
 
     // 趋势小图：首点 M 46,200（x=TREND_PAD_L=46，y=0 即基线 200）；成员A
@@ -310,10 +315,10 @@ describe('ContextTracker run 泛化（泳道视角：session 即 agent）', () =
 
     // 主图：初始锚在初始轮时刻（≠首数据轮时刻）——首点落基线，随后是真实
     // 曲线段（C，非零宽 L 直跳）
-    const linePath = birthContainer.querySelector('svg[data-chart="growth"] path[fill="none"]') as SVGPathElement;
-    const areaPath = birthContainer.querySelector('path.ctx-area-in') as SVGPathElement;
+    const growthSvg = birthContainer.querySelector('svg[data-chart="growth"]') as SVGSVGElement;
+    const linePath = growthSvg.querySelector('path[fill="none"]') as SVGPathElement;
     const lineD = linePath.getAttribute('d') ?? '';
-    const baselineY = Number((areaPath.getAttribute('d') ?? '').match(/L [\d.]+,([\d.]+) Z$/)?.[1]);
+    const baselineY = Number(growthSvg.getAttribute('height')) - 40;
     expect(Number(lineD.match(/^M [\d.]+,([\d.]+)/)?.[1])).toBe(baselineY);
     expect(/^M [\d.]+,[\d.]+ C /.test(lineD)).toBe(true);
 
