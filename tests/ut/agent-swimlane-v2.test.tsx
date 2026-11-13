@@ -12,7 +12,8 @@
 // 约定改为单击/双击分治——泳道空白小、条子占满横向空间，所以：
 //   单击（任意位置，含条子上）= 测时距两点标记；落点防抖 DBLCLICK_GUARD_MS，
 //     以便让位给双击；
-//   双击条子 = onViewTurns 跳转，并取消双击前置两击挂起的测距点。
+//   双击条子 = onViewTurns 跳转，并取消双击前置两击挂起的测距点；
+//   主泳道承接 subagent 结束的活跃段同样双击跳该 subagent 末轮。
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -40,6 +41,7 @@ function mkAgent(over: {
   isSubagent?: boolean
   agentSessionId?: string
   agentName?: string
+  activeIntervals?: Array<{ start: number; end: number }>
 }): AgentItem {
   return {
     executionId: over.executionId,
@@ -56,7 +58,7 @@ function mkAgent(over: {
     createdAt: new Date(over.span.start).toISOString(),
     latencyMs: over.span.end - over.span.start,
     firstPrompt: null,
-    activeIntervals: null,
+    activeIntervals: over.activeIntervals ?? null,
     span: over.span,
   } as unknown as AgentItem
 }
@@ -107,6 +109,42 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     mkAgent({ executionId: 'subA', span: { start: Date.parse(T0) + 10_000, end: Date.parse(T0) + 60_000 }, agentSessionId: 'ses_g1', agentName: '⑦ group 同步' }),
     mkAgent({ executionId: 'subB', span: { start: Date.parse(T0) + 20_000, end: Date.parse(T0) + 70_000 }, agentSessionId: 'ses_g2', agentName: '⑥ base 切分' }),
   ]
+
+  it('主泳道承接 subagent 结束的活跃段：双击跳该 subagent 最后一轮', async () => {
+    const T = Date.parse(T0)
+    const ownedAgents = [
+      mkAgent({
+        executionId: 'root',
+        span: { start: T, end: T + 600_000 },
+        isSubagent: false,
+        agentName: 'build',
+        activeIntervals: [{ start: T, end: T + 600_000 }],
+      }),
+      mkAgent({
+        executionId: 'subA',
+        span: { start: T + 100_000, end: T + 200_000 },
+        agentSessionId: 'ses_g1',
+        agentName: '⑦ group 同步',
+      }),
+    ]
+    const onViewTurns = vi.fn()
+    const el = await renderV2(ownedAgents, mkBridges([
+      { sub: 'ses_g1', type: 'design-sync-planner', ts: new Date(T + 100_000).toISOString(), resp: new Date(T + 200_000).toISOString() },
+    ]), onViewTurns)
+
+    const rootPieces = [...el.querySelectorAll<HTMLElement>('[data-root-segment]')]
+    expect(rootPieces).toHaveLength(2)
+    expect(rootPieces[0].hasAttribute('data-root-segment-owner')).toBe(false)
+    const handback = el.querySelector<HTMLElement>('[data-root-segment-owner="ses_g1"]')
+    expect(handback).toBe(rootPieces[1])
+    dblclick(handback!)
+
+    expect(onViewTurns).toHaveBeenCalledTimes(1)
+    expect(onViewTurns).toHaveBeenCalledWith('ses_g1', undefined, null, {
+      position: 'last',
+      atMs: T + 200_000,
+    })
+  })
 
   it('双击条子 → onViewTurns(该子代理会话)；前置两击不得落进测距', async () => {
     const onViewTurns = vi.fn()
