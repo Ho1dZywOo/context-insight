@@ -9,7 +9,7 @@
 // run-first 刀H IT（design: docs/design/run-first-architecture/design.md §3，
 // solo 合成层）：真实 prisma 种无主 session → 锁：①solo:<taskId> 详情端点
 // （kind=solo + 退化图 viewModel 单节点 + 成员会话 join）；②观测端点对 solo
-// 作用域可用（turns 合并投影 + member 归因 = 短 taskId 回落）；③同 sid 双行
+// 作用域可用（turns 合并投影 + member 归因 = 主Agent）；③同 sid 双行
 // framework 精确消歧；④member 端点 solo 分支；⑤DELETE 护栏 + 404 语义。
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -102,9 +102,9 @@ describe('run-first 刀H：solo 合成 run（无主 session → solo:<taskId>）
     expect(vm.views).toHaveLength(1);
     expect(vm.views[0].nodeKeys).toHaveLength(1);
     expect(vm.views[0].edges).toHaveLength(0);
-    // 节点 = 短名（taskId ≤12 不截断），attempt 1 次且成员会话已 join（turns=2）
+    // 单主 Agent 节点固定展示 主Agent，不把 session GUID 当节点名
     const node = vm.nodes[0];
-    expect(node.nodeId).toBe(SID);
+    expect(node.nodeId).toBe('主Agent');
     expect(node.attempts).toHaveLength(1);
     expect(node.attempts[0].executeMember.sessionId).toBe(SID);
     expect(node.attempts[0].executeMember.session?.turns).toBe(2);
@@ -112,7 +112,7 @@ describe('run-first 刀H：solo 合成 run（无主 session → solo:<taskId>）
     expect(body.memberStats?.joinedCount).toBe(1);
   });
 
-  it('观测端点对 solo 作用域可用：turns 合并投影 + member 归因短 taskId 回落（>12 截断）', async () => {
+  it('观测端点对 solo 作用域可用：turns 合并投影 + member 归因 主Agent', async () => {
     const res = await runTurnsGET(
       new NextRequest(`http://localhost/api/observe/run/${soloRunIdOf(SID_LONG)}/turns?page=1&pageSize=50`),
       { params: Promise.resolve({ runId: soloRunIdOf(SID_LONG) }) },
@@ -120,7 +120,7 @@ describe('run-first 刀H：solo 合成 run（无主 session → solo:<taskId>）
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.total).toBe(1);
-    expect(body.items[0].member).toEqual({ taskId: SID_LONG, label: 'rfsolo-sessi…' });
+    expect(body.items[0].member).toEqual({ taskId: SID_LONG, label: '主Agent' });
   });
 
   it('同 sid 双行：缺省原生优先，framework 参数精确消歧', async () => {
@@ -137,12 +137,12 @@ describe('run-first 刀H：solo 合成 run（无主 session → solo:<taskId>）
 
   it('member 端点 solo 分支：节点实例按五键取（退化图无跨代 peers/回滚）', async () => {
     const res = await runMemberGET(
-      new NextRequest(`http://localhost/api/observe/run/${soloRunIdOf(SID)}/member?nodeId=${SID}&generation=0`),
+      new NextRequest(`http://localhost/api/observe/run/${soloRunIdOf(SID)}/member?nodeId=${encodeURIComponent('主Agent')}&generation=0`),
       { params: Promise.resolve({ runId: soloRunIdOf(SID) }) },
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.node.nodeId).toBe(SID);
+    expect(body.node.nodeId).toBe('主Agent');
     expect(body.node.attempts[0].executeMember.session.taskId).toBe(SID);
     expect(body.peers).toEqual([]);
     expect(body.rollbacks).toEqual([]);

@@ -17,7 +17,6 @@ import { BUNDLE_SCHEMA, BUNDLE_VERSION } from '@/lib/run/model';
 import { parseAndIndex, type RunIndex } from '@/lib/run/reader';
 import { sessionRefsByTaskIds } from '@/lib/run/session-link';
 import type { SessionRef } from '@/lib/run/model';
-import { memberShortNames } from '@/lib/run/member-rows';
 import { soloRunIdOf } from '@/lib/run/identity';
 
 export interface SoloRunDetail {
@@ -39,14 +38,10 @@ export async function resolveSoloRun(
 }
 
 /** 最小合法 manifest → RunIndex：单 session 成员 + execute 图注解。
- *  nodeId = 成员短名（memberShortNames 无图结构回落 = 短 taskId，与观测归因
- *  同一口径）；attemptResult 恒 succeeded（会话存在即已尝试，节点状态 passed）。
+ *  solo 只有一个主 Agent，nodeId 固定为 主Agent，避免把 session GUID
+ *  当作展示名；attemptResult 恒 succeeded（会话存在即已尝试，节点状态 passed）。
  *  导出供纯函数复用/测试（不触 DB）。 */
 export function soloRunIndex(ref: SessionRef): RunIndex {
-  const [shortName] = memberShortNames([{
-    taskId: ref.taskId, nodeId: null, generation: null, attempt: null,
-    role: null, memberName: null,
-  }]);
   return parseAndIndex({
     schema: BUNDLE_SCHEMA,
     version: BUNDLE_VERSION,
@@ -68,7 +63,7 @@ export function soloRunIndex(ref: SessionRef): RunIndex {
         annotation: {
           graph: {
             role: 'execute',
-            nodeId: shortName ?? ref.taskId,
+            nodeId: '主Agent',
             generation: 0,
             attempt: 1,
             attemptResult: 'succeeded',
