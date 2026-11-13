@@ -23,7 +23,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ROOT = process.env.BUILD_GUARD_ROOT || PROJECT_ROOT;
+// procCwd 报的是内核解析后的真实路径（/proc readlink / lsof 都解了 symlink），
+// ROOT 不 realpath 到同一形态时，进程 cwd 落在符号链接目录下会与 ROOT 恒不
+// 匹配、ownNextPids 空跑、守门静默漏杀。realpath 失败（锚点不存在）保持原值。
+let ROOT = process.env.BUILD_GUARD_ROOT || PROJECT_ROOT;
+try {
+  ROOT = fs.realpathSync.native(ROOT);
+} catch {
+  // 锚定目录不存在时不可能有自家实例，宁可漏杀不误杀
+}
 
 const distDir = (process.env.INSIGHT_DIST_DIR || '').trim();
 if (distDir && distDir !== '.next') process.exit(0);

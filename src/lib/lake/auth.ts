@@ -20,7 +20,6 @@
 import fs from 'node:fs';
 import { PLATFORM_AUTH_FAILED_CODES, PLATFORM_FORBIDDEN_CODES } from './platform';
 import { lakeFilesRoot } from './server-config';
-import os from 'node:os';
 import path from 'node:path';
 
 export interface PushAuth {

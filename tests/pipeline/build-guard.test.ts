@@ -111,6 +111,26 @@ describe('构建守门 build-guard.mjs——行为级', () => {
     }
   }, 10_000);
 
+  it('自家实例落在符号链接目录下仍被停掉（锚定两侧同一规范化）', async () => {
+    // procCwd 报内核解析后的真实路径，BUILD_GUARD_ROOT 若只 path.resolve 不解
+    // symlink，二者在 /tmp→/private/tmp 这类平台 symlink 下永不匹配、守门漏杀
+    const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'build-guard-real-'));
+    const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), 'build-guard-linkdir-'));
+    const linkRoot = path.join(linkParent, 'link');
+    fs.symlinkSync(realRoot, linkRoot);
+    try {
+      const fake = spawnFakeNext(linkRoot, false); // cwd 走 symlink，内核解析到 realRoot
+      const signal = exitedWithSignal(fake);
+      await waitReady(linkRoot);
+      runGuard(linkRoot); // BUILD_GUARD_ROOT 用 symlink 路径，realpath 后与 procCwd 对齐
+      expect(await signal).toBe('SIGTERM');
+    } finally {
+      fs.rmSync(linkRoot, { force: true }); // 仅删 symlink，不删 target
+      fs.rmSync(linkParent, { recursive: true, force: true });
+      fs.rmSync(realRoot, { recursive: true, force: true });
+    }
+  }, 10_000);
+
   it('无关实例（cwd 在包根外）不受波及', async () => {
     const fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'build-guard-scope-'));
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'build-guard-outside-'));
