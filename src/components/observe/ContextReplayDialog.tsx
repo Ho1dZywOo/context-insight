@@ -123,11 +123,15 @@ function computeTimelines(
 }
 
 function displayLabel(s: AgentTimeline, actors: Map<string, RunActor>): string {
-  return actors.get(s.sessionId)!.displayName
+  const actor = actors.get(s.sessionId)
+  if (!actor) return s.isRoot ? "主Agent" : "子Agent"
+  return actor.isRoot ? actor.memberLabel ?? "主Agent" : actor.displayName
 }
 
 function turnDisplayLabel(t: TurnRowItem, actors: Map<string, RunActor>): string {
-  return actors.get(contextAgentKeyOf(t))!.displayName
+  const actor = actors.get(contextAgentKeyOf(t))
+  if (!actor) return t.isSubagent ? "子Agent" : "主Agent"
+  return actor.isRoot ? actor.memberLabel ?? "主Agent" : actor.displayName
 }
 
 interface ContextReplayDialogProps {
@@ -154,7 +158,7 @@ export function ContextReplayDialog({ open, onOpenChange, turns, contextWindowLi
       >
         <DialogTitle className="text-base">⏯ Context Replay — 上下文演变动画</DialogTitle>
         <DialogDescription className="text-xs text-muted-foreground">
-          播放整个会话的上下文窗口变化过程，观察 root agent 和 subagent 的 context 生长与消亡
+          播放整个会话的上下文窗口变化过程，观察主Agent和子Agent的上下文生长与消亡
         </DialogDescription>
         <ContextReplayPlayer
           timelines={timelines}

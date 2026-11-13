@@ -16,7 +16,7 @@
 //
 // 命名规则（唯一裁定）：
 // - 成员/主会话：memberLabel（服务端 memberShortNames 产物，nodeId 逻辑名）
-//   → agentName → "Main Agent"；
+//   → agentName → "主Agent"；
 // - 子代理：类型基名（SUBAGENT_TYPE_ALIASES 归一）+ 同名编号 `#N`
 //   （buildSubagentNumbers 单源，0 token 组也参与）；类型缺失（无桥归因：
 //   嵌套派发/桥锚定失败）回落派发步骤（agentName，即 cpx meta.name /
@@ -84,7 +84,7 @@ export function buildRunActors(turns: RunActorTurn[]): Map<string, RunActor> {
   const actors = new Map<string, RunActor>()
   for (const [key, t] of groups) {
     const isRoot = !t.isSubagent
-    const agentName = t.agentName ?? (isRoot ? "Main Agent" : "Subagent")
+    const agentName = t.agentName ?? (isRoot ? "主Agent" : "子Agent")
     const subagentType = isRoot ? null : t.subagentType ?? null
     const kind: RunActorKind = isRoot ? (t.member ? "member" : "main") : "subagent"
     let baseName: string

@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe('Context Replay main agent naming', () => {
-  it('root turn without agentName uses the canonical Main Agent display name', async () => {
+  it('root turn without agentName uses the canonical 主Agent display name', async () => {
     const turn = {
       turnId: 'turn-root-0', turnIndex: 0, role: 'assistant', contentSummary: 'root response',
       agentName: null, isSubagent: false, subagentName: null, subagentSessionId: null,
@@ -46,10 +46,36 @@ describe('Context Replay main agent naming', () => {
       }));
     });
 
-    expect(document.body.textContent).toContain('Main Agent: 2 input');
+    expect(document.body.textContent).toContain('主Agent: 2 input');
   });
 
-  it('anonymous subagent uses the canonical Subagent display name', async () => {
+  it('root turn with a GUID agentName is still displayed as 主Agent', async () => {
+    const turn = {
+      turnId: 'turn-root-guid', turnIndex: 0, role: 'assistant', contentSummary: 'root response',
+      agentName: '46a30a19-1614-4c77-9f16-1e61e5a80f1e', isSubagent: false,
+      subagentName: null, subagentSessionId: null, parentExecutionId: null,
+      totalTokens: 4, inputTokens: 4, outputTokens: 0, reasoningTokens: 0,
+      cacheReadTokens: 0, cacheWriteTokens: 0, inputMessagesTokens: 4,
+      contextWindowPct: 5.6, latencyMs: 100, createdAt: '2026-11-11T02:45:57.000Z',
+      completedAt: null, model: 'claude-opus-5',
+    } as unknown as TurnRowItem;
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(createElement(ContextReplayDialog, {
+        open: true,
+        onOpenChange: () => {},
+        turns: [turn],
+        contextWindowLimit: 1_000_000,
+      }));
+    });
+
+    expect(document.body.textContent).toContain('主Agent: 4 input');
+  });
+
+  it('anonymous subagent uses the canonical 子Agent display name', async () => {
     const turn = {
       turnId: 'turn-sub-0', turnIndex: 0, role: 'assistant', contentSummary: 'subagent response',
       agentName: null, isSubagent: true, subagentName: null, subagentSessionId: 'sub-anon',
@@ -71,6 +97,6 @@ describe('Context Replay main agent naming', () => {
       }));
     });
 
-    expect(document.body.textContent).toContain('Subagent: 3 input');
+    expect(document.body.textContent).toContain('子Agent: 3 input');
   });
 });

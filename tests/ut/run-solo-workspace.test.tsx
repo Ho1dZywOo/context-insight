@@ -335,7 +335,7 @@ describe('Run 详情页 solo run 渲染（run-first 刀H）', () => {
     expect(document.querySelector('.run-canvas')).toBeTruthy()
     const nodes = document.querySelectorAll('.run-node')
     expect(nodes).toHaveLength(1)
-    expect(nodes[0].textContent).toContain('Main Agent')
+    expect(nodes[0].textContent).toContain('主Agent')
     const graphText = graph!.textContent ?? ''
     expect(graphText).toContain('第 1 次运行')
   })

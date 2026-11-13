@@ -249,7 +249,7 @@ function computeAgentStats(turns: TurnRowItem[], limitOf: (sid: string) => numbe
     const member = agentTurns[0].member ?? null
     const contextLimit = limitOf(sid)
     const subagentType = isRoot ? null : agentTurns[0].subagentType ?? null
-    const agentName = agentTurns[0].agentName ?? (isRoot ? "Main Agent" : "?")
+    const agentName = agentTurns[0].agentName ?? (isRoot ? "主Agent" : "子Agent")
     const realInput = agentTurns.map(t => t.inputMessagesTokens || t.totalTokens)
     const cacheRead = agentTurns.map(t => t.cacheReadTokens ?? 0)
     const ctxPcts = agentTurns.map(t => t.contextWindowPct ?? 0).filter(p => p > 0)
@@ -277,7 +277,7 @@ function computeAgentStats(turns: TurnRowItem[], limitOf: (sid: string) => numbe
     const events: ContextEvent[] = []
 
     if (agentTurns.length > 0) {
-      events.push({ type: "start", turnIndex: agentTurns[0].turnIndex, timestamp: agentTurns[0].createdAt, contextSize: agentTurns[0].totalTokens, note: isRoot ? "Session 启动" : "Subagent 启动" })
+      events.push({ type: "start", turnIndex: agentTurns[0].turnIndex, timestamp: agentTurns[0].createdAt, contextSize: agentTurns[0].totalTokens, note: isRoot ? "Session 启动" : "子Agent 启动" })
     }
 
     for (let i = 1; i < agentTurns.length; i++) {
@@ -305,7 +305,7 @@ function computeAgentStats(turns: TurnRowItem[], limitOf: (sid: string) => numbe
     }
 
     if (agentTurns.length > 0) {
-      events.push({ type: "end", turnIndex: agentTurns[agentTurns.length - 1].turnIndex, timestamp: agentTurns[agentTurns.length - 1].createdAt, contextSize: agentTurns[agentTurns.length - 1].totalTokens, note: isRoot ? "Session 结束" : "Subagent 结束" })
+      events.push({ type: "end", turnIndex: agentTurns[agentTurns.length - 1].turnIndex, timestamp: agentTurns[agentTurns.length - 1].createdAt, contextSize: agentTurns[agentTurns.length - 1].totalTokens, note: isRoot ? "Session 结束" : "子Agent 结束" })
     }
 
     events.sort((a, b) => a.turnIndex - b.turnIndex)
@@ -1298,7 +1298,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
             })()}
           </div>
 
-          {/* 画布内快捷显隐（玻璃分段控件，与右下缩放工具条对仗）：全部 / 仅 Root */}
+          {/* 画布内快捷显隐（玻璃分段控件，与右下缩放工具条对仗）：全部 / 主Agent */}
         <div data-quick-filter role="group" aria-label="显隐快捷" className="run-glass absolute top-3 left-3 flex items-center gap-0.5 rounded-full p-0.5">
           <button
             type="button"
@@ -1322,7 +1322,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            仅 Root
+            主Agent
           </button>
           {agentStats.length > INLINE_GROUPS_MAX && (
             <button
@@ -1727,7 +1727,7 @@ function AgentDetailDialog({ open, onOpenChange, group, agentStats, selectedSid,
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
           <span className="text-sm font-semibold">{group.label}</span>
-          <Badge variant="outline" className="text-[10px]">{sel.isRoot ? "root" : "subagent"}</Badge>
+          <Badge variant="outline" className="text-[10px]">{sel.isRoot ? "主Agent" : "子Agent"}</Badge>
           {!sel.isRoot && actor?.nameSource === "step" && (
             <Badge variant="outline" className="text-[10px] text-muted-foreground">派发</Badge>
           )}

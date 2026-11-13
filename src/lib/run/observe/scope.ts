@@ -27,7 +27,7 @@ const scopeCache = new LruCache<string, ObserveScope>(16, 60_000);
  *  成员位引用（如 execute 兼 verify，罕见）时优先图位结构归因，保证
  *  collectors 的 IN 查询不双计。
  *  solo:<taskId>（刀H）：不读 run-store，直接从 Prisma 合成单成员作用域
- *  （单主 Agent 固定展示为 Main Agent）。 */
+ *  （单主 Agent 固定展示为 主Agent）。 */
 export async function resolveRunScope(runId: string, prisma: PrismaClient): Promise<ObserveScope | null> {
   const cached = scopeCache.get(runId);
   if (cached) return cached;
@@ -43,7 +43,7 @@ export async function resolveRunScope(runId: string, prisma: PrismaClient): Prom
         rowId: ref.rowId,
         taskId,
         framework: ref.framework,
-        label: 'Main Agent',
+        label: '主Agent',
         structure: null,
       }],
     };
