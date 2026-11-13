@@ -132,9 +132,8 @@ describe('统一工作台：run 行混入单表（store → list-service → pag
     // run 行详情链接 → /run/<runId>（详情路由不动）
     const runLink = document.querySelector('a[href="/run/minidemo01"]') as HTMLAnchorElement | null
     expect(runLink).not.toBeNull()
-    // 类型徽标 + 状态徽标（mini-bundle 视图模型汇总口径 = failed）
+    // 类型徽标保留
     expect(document.body.textContent).toContain('Run')
-    expect(document.body.textContent).toContain('failed')
     // 规模副行（节点/会话成员）
     expect(document.body.textContent).toContain('节点')
     // 指标卡首卡：Assets 总量（独立会话 + run 行数）+ 副行 run/session 拆分

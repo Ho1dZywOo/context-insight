@@ -47,9 +47,6 @@ export interface OverviewRunIdentity {
   /** 展示短标题（prompt 自动命名的长文在消费侧截短；全文进 titleHint） */
   title: string
   titleHint?: string | null
-  status: string
-  /** 状态点色 class（如 bg-emerald-500；running 带脉冲） */
-  statusDot: string
   kindLabel: string
   kindVariant: "blue" | "purple"
   incomplete: boolean
@@ -408,10 +405,6 @@ export function OverviewPanels({ identity, metrics, turns, skills, pending = fal
                   {identity.run.title}
                 </h1>
                 <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-foreground/[0.05] px-2.5 py-0.5 text-[11px] font-medium dark:bg-foreground/[0.1]">
-                    <span className={`size-1.5 rounded-full ${identity.run.statusDot}`} aria-hidden />
-                    {identity.run.status}
-                  </span>
                   <Badge variant={identity.run.kindVariant} className="text-[11px]">{identity.run.kindLabel}</Badge>
                   {identity.run.incomplete ? (
                     <Badge variant="yellow" className="text-[11px]">数据不完整</Badge>

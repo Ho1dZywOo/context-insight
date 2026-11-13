@@ -33,16 +33,6 @@ import { computeLlmActiveMs } from "@/lib/session-duration";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
 import { summarizeToolCallErrors } from "@/lib/tool-call-errors";
 
-/** 状态点色（run 身份药丸的 leading dot；running 带脉冲动画） */
-const STATUS_DOT: Record<string, string> = {
-  passed: "bg-emerald-500",
-  failed: "bg-red-500",
-  running: "bg-amber-500 animate-pulse",
-  pending: "bg-muted-foreground/50",
-  carried: "bg-muted-foreground/50",
-  unknown: "bg-amber-500",
-};
-
 /** run 展示短标题：prompt 自动命名的长文按句读截短（先句子边界、再逗号
  *  分句、超长硬截 32 字），全文与 runId 进悬停 */
 function shortRunTitle(name: string | null, runId: string): string {
@@ -124,8 +114,6 @@ export function RunOverviewTab({ runId, run, viewModel, memberStats, totalErrors
       run: {
         title: shortRunTitle(run.name, run.runId),
         titleHint: `${run.name ?? run.runId}\n${run.runId}`,
-        status: run.status,
-        statusDot: STATUS_DOT[run.status] ?? "bg-muted-foreground/50",
         kindLabel: run.kind === "solo" ? "会话" : "工作流",
         kindVariant: run.kind === "solo" ? "blue" as const : "purple" as const,
         incomplete: run.exportDataComplete === false,
