@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- 【上下文增长图模式去重】Context 主趋势图的「面积/折线」切换此前只改变填充样式，数据、坐标和点位完全相同，切换没有信息增益。现移除模式开关与面积填充，主图固定使用折线，便于单 Agent 和多 Agent 精确比较；详情弹窗内的缓存份额带与趋势小图保持不变
 - 【主 Agent 命名与 Context Replay 问号】solo run 此前用短 session GUID 合成成员/nodeId，Context Replay 的 root turn 又会分别回落成 `root` / `?`。现 solo 单主 Agent 的 member label 和 graph nodeId 统一为 `Main Agent`；回放 badge/逐 turn 明细复用 `RunActor` 名称，匿名子代理统一显示 `Subagent`
 - 【移除 run 状态徽标】solo 会话的 `passed` 是“会话已导入”的合成状态，不代表任务成功；workflow run 顶层状态也与工具错误口径混杂。现 Overview 与首页 run 行不再展示 run 状态徽标，保留 Graph 节点状态、重试状态和 Errors 独立统计
 - 【Codex/OpenAI token 口径与 Turn 环比】Codex/OpenAI 的 `input_tokens` 已包含缓存、`output_tokens` 已包含 reasoning，此前 UI 再相加会在 Turn 详情重复计数（左侧权威 total 11.1k、右侧输入 20.9k/输出 647）。现摄取时统一拆成互不重叠的输入/缓存、输出/推理桶；Turn「较上轮」同步改用输入合计与上一 assistant 轮比较，并移除无业务意义的百分比
