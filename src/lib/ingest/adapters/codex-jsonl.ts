@@ -198,14 +198,24 @@ function extractMessageText(content: CodexContentPart[] | undefined): string | n
 
 function mapUsage(u: CodexUsage | undefined): TokenUsage | null {
   if (!u) return null;
-  const input = u.input_tokens ?? 0;
-  const cacheRead = u.cached_input_tokens ?? 0;
-  const cacheWrite = u.cache_write_input_tokens ?? 0;
-  const output = u.output_tokens ?? 0;
-  const reasoning = u.reasoning_output_tokens ?? 0;
-  const inputMessagesTokens = input + cacheRead + cacheWrite;
+  // Responses usage 的 input_tokens 已包含 cached_input_tokens；
+  // cache_write_input_tokens 是非缓存 input 的子集（上游 non_cached_input
+  // 定义为 input-cached，cache write 不额外外挂）。output_tokens 则可能包含
+  // reasoning_output_tokens。落库前拆成互不重叠的输入/输出桶，消费层才能
+  // 继续用 input+cacheRead+cacheWrite、output+reasoning 求和而不重复计数。
+  const inputMessagesTokens = u.input_tokens ?? 0;
+  const cacheRead = Math.min(u.cached_input_tokens ?? 0, inputMessagesTokens);
+  const cacheWrite = Math.min(u.cache_write_input_tokens ?? 0, inputMessagesTokens - cacheRead);
+  const input = Math.max(0, inputMessagesTokens - cacheRead - cacheWrite);
+  const rawOutput = u.output_tokens ?? 0;
+  const reasoning = Math.min(u.reasoning_output_tokens ?? 0, rawOutput);
+  const fromProviderTotal = u.total_tokens != null
+    ? Math.max(0, u.total_tokens - inputMessagesTokens - reasoning)
+    : null;
+  const output = fromProviderTotal ?? Math.max(0, rawOutput - reasoning);
+  const total = u.total_tokens ?? (inputMessagesTokens + output + reasoning);
   return {
-    total: u.total_tokens ?? (inputMessagesTokens + output + reasoning),
+    total,
     input,
     output,
     reasoning,

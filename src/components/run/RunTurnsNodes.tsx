@@ -83,6 +83,8 @@ export interface TurnsBlockTurn {
   subagentType?: string | null;
   totalTokens: number;
   inputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   inputMessagesCount: number;
   createdAt: string | null;
   contextWindowPct: number | null;

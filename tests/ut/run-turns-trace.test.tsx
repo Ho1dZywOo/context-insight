@@ -89,11 +89,24 @@ const turnB2 = {
   ...turnB,
   turnId: 'rop-t-b1', turnIndex: 1, contentSummary: '成员B的第二轮',
 };
+const cacheDelta = { active: false };
+const turnBCache = {
+  ...turnB,
+  inputTokens: 2,
+  cacheReadTokens: 134100,
+  cacheWriteTokens: 308,
+};
+const turnB2Cache = {
+  ...turnB2,
+  inputTokens: 2,
+  cacheReadTokens: 134400,
+  cacheWriteTokens: 308,
+};
 const turnDetailBase = {
   turnIndex: 0, role: 'user', content: null, contentJson: null,
   inputMessagesJson: '[{"role":"user","content":"历史消息"},{"role":"user","content":"新进问题"}]',
   inputMessagesCount: 2, inputMessagesTokens: 120,
-  contextWindowPct: null, agentName: null, subagentName: null, isSubagent: false,
+  contextWindowPct: null, agentName: null, subagentName: null, subagentSessionId: null, isSubagent: false,
   totalTokens: 60, inputTokens: 60, outputTokens: 0, reasoningTokens: 0,
   cacheReadTokens: 0, cacheWriteTokens: 0, latencyMs: 800, ttftMs: null,
   createdAt: '2026-10-13T02:00:10.000Z', completedAt: null, model: 'glm-4.7',
@@ -127,11 +140,13 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     //  中断重试」用例；首轮仍是 rop-t-b0。restFail 打开时补拉段失败
     if (member === 'ses_mini_b') {
       const offset = Number(p.get('offset') ?? -1);
+      const first = cacheDelta.active ? turnBCache : turnB;
+      const second = cacheDelta.active ? turnB2Cache : turnB2;
       if (offset >= 1) {
         if (restFail.current) return { ok: false, json: async () => ({}) };
-        return json({ items: [turnB2], total: 2, page: 1, pageSize: Number(p.get('pageSize') ?? 200), offset });
+        return json({ items: [second], total: 2, page: 1, pageSize: Number(p.get('pageSize') ?? 200), offset });
       }
-      return json({ items: [turnB], total: 2, page: 1, pageSize: Number(p.get('pageSize') ?? 200), offset: null });
+      return json({ items: cacheDelta.active ? [first, second] : [first], total: 2, page: 1, pageSize: Number(p.get('pageSize') ?? 200), offset: null });
     }
     const items = member === 'ses_mini_a' ? [turnA] : [turnA, turnB];
     return json({ items, total: items.length, page: Number(p.get('page') ?? 1), pageSize: Number(p.get('pageSize') ?? 200), offset: null });
@@ -178,7 +193,21 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       return { ok: true, json: () => new Promise(res => { slowDetail.resolve = res }) };
     }
     if (u.pathname.endsWith('rop-t-b1')) {
-      return json({ ...turnDetailBase, turnId: 'rop-t-b1', taskId: 'ses_mini_b', contentSummary: '成员B的第二轮', content: '成员B的第二轮', role: 'assistant' });
+      return json({
+        ...turnDetailBase,
+        turnId: 'rop-t-b1',
+        taskId: 'ses_mini_b',
+        contentSummary: '成员B的第二轮',
+        content: '成员B的第二轮',
+        role: 'assistant',
+        ...(cacheDelta.active ? {
+          inputTokens: 2,
+          cacheReadTokens: 134400,
+          cacheWriteTokens: 308,
+          inputMessagesTokens: 134710,
+          contextWindowPct: 12.8,
+        } : {}),
+      });
     }
     return json(u.pathname.endsWith('rop-t-b0')
       ? { ...turnDetailBase, turnId: 'rop-t-b0', taskId: 'ses_mini_b', contentSummary: '成员B的回应', content: '成员B的回应', role: 'assistant' }
@@ -215,6 +244,7 @@ afterEach(() => {
   root = null;
   document.body.innerHTML = '';
   restFail.current = false;
+  cacheDelta.active = false;
 });
 
 describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
@@ -508,6 +538,18 @@ describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
     } finally {
       Element.prototype.scrollIntoView = origScroll;
     }
+  });
+
+  it('较上轮 Δ 使用与卡片一致的输入口径，且不再显示百分比', async () => {
+    cacheDelta.active = true;
+    await renderPage('?tab=turns&turn=rop-t-b1');
+    await act(async () => { await new Promise(r => setTimeout(r, 40)) });
+    const detail = document.getElementById('turn-detail-top')!;
+    const delta = [...detail.querySelectorAll('span')]
+      .find(el => el.textContent?.includes('较上轮'));
+    // 当前 134400+2+308，上一轮 134100+2+308 → Δ300
+    expect(delta?.textContent).toContain('较上轮 ▲ 300');
+    expect(delta?.textContent).not.toContain('%');
   });
 
   it('跨成员搜索驻留：命中索引替换左列、点命中开 player 不消失、已读降透明、✕ 退出回节点列表', async () => {

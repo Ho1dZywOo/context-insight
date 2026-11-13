@@ -23,7 +23,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readSession as readClaudeSession } from '../../src/lib/ingest/adapters/claude-jsonl.ts';
+import { listSessions as listClaudeSessions, readSession as readClaudeSession } from '../../src/lib/ingest/adapters/claude-jsonl.ts';
 import { readSession as readCodexSession } from '../../src/lib/ingest/adapters/codex-jsonl.ts';
 import { splitIntoTurns, resetIdCounter } from '../../src/lib/ingest/turn-split.ts';
 
@@ -80,10 +80,22 @@ describe('codex 捕获路径（cpx → claude-jsonl → turn-split）', () => {
     });
   });
 
-  it('cc-wire-round.reasoningTokens 信封 → assistant turn reasoning 非零', () => {
+  it('OpenAI/Responses usage 归一：cache 从 input 拆出、reasoning 从 output 拆出', () => {
     const t = turns.find(x => x.role === 'assistant');
     expect(t).toBeDefined();
+    expect(t!.inputTokens + t!.cacheReadTokens).toBe(8204);
+    expect(t!.inputTokens).toBe(1036);
+    expect(t!.cacheReadTokens).toBe(7168);
+    expect(t!.cacheWriteTokens).toBe(0);
+    expect(t!.outputTokens).toBe(133);
     expect(t!.reasoningTokens).toBe(197);
+    expect(t!.totalTokens).toBe(8534);
+  });
+
+  it('会话预览 token 与归一后的 turn 总量同口径', () => {
+    const listed = listClaudeSessions(CAPTURE_FIXTURE);
+    expect(listed).toHaveLength(1);
+    expect(listed[0].totalTokens).toBe(8534 + (8818 + 265));
   });
 });
 

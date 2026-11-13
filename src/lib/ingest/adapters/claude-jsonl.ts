@@ -216,6 +216,28 @@ function mapUsage(usage: ClaudeUsage | undefined, costUsd?: number): TokenUsage 
   };
 }
 
+/** OpenAI/Responses usage 的 input 含 cache read / write，output 含 reasoning；
+ * cache write 是 input 中非 cached 部分的子集。这里拆成与其他 adapter
+ * 一致的互不重叠桶，消费层可继续直接求和。 */
+function normalizeOpenAICompatibleUsage(usage: TokenUsage): TokenUsage {
+  const inputMessagesTokens = usage.inputMessagesTokens;
+  const cacheRead = Math.min(usage.cacheRead, inputMessagesTokens);
+  const cacheWrite = Math.min(usage.cacheWrite, inputMessagesTokens - cacheRead);
+  const input = Math.max(0, inputMessagesTokens - cacheRead - cacheWrite);
+  const reasoning = Math.min(usage.reasoning, usage.output);
+  const output = Math.max(0, usage.output - reasoning);
+  return {
+    ...usage,
+    input,
+    output,
+    reasoning,
+    cacheRead,
+    cacheWrite,
+    inputMessagesTokens,
+    total: inputMessagesTokens + output + reasoning,
+  };
+}
+
 // 文件名 → 会话 id（SourceDescriptor.deriveSessionId 能力的命名层）：.jsonl.7z /
 // .jsonl.gz（压缩态）与 .jsonl（明文）三形态取 stem；proxy 捕获文件的
 // cpx- 前缀剥掉——目录扫描、单文件直导与服务端缺省推导必须落同一 taskId，
@@ -434,7 +456,10 @@ export function listSessions(dirPath: string): SessionListItem[] {
         if (sig != null) seenUsageSigs.add(sig);
         if (!replayed) {
           const u = line.message.usage;
-          totalTokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+          const xb = readEnvelope(line) as XLake | undefined;
+          const openAICompatible = line.source === 'codex-proxy' || xb?.data?.protocol === 'responses';
+          totalTokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0)
+            + (openAICompatible ? 0 : (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0));
         }
       }
     }
@@ -823,6 +848,7 @@ export function buildAssistantInteraction(
   // duration_ms 时把 completed 置 undefined，让 turn-split fallback 到
   // interaction.latency。native 行不受影响（native byte-identical）。
   let isProxy = false;
+  let openAICompatibleUsage = false;
 
   // x_lake cc-db-turn 声明的 reasoning tokens（legacy 通道无此信息，
   // anthropic usage 也没有 reasoning 字段 —— opencode 来源经导出往返的恢复通道）
@@ -850,6 +876,9 @@ export function buildAssistantInteraction(
     // 导入路径（直接文件导入 / refresh 增量刷新）会把真实工具时长打回 0。
     const xbRaw = readEnvelope(al) as XLake | undefined;
     const xbTurn = isTurnPayload(xbRaw) ? xbRaw!.data : null;
+    if (al.source === 'codex-proxy' || xbTurn?.protocol === 'responses') {
+      openAICompatibleUsage = true;
+    }
     const declaredToolCalls = Array.isArray(xbTurn?.toolCalls)
       ? new Map(xbTurn!.toolCalls!.map(d => [d.toolUseId, d]))
       : null;
@@ -946,8 +975,10 @@ export function buildAssistantInteraction(
     const incrementalInput = fu.input_tokens ?? 0;
     const cacheRead = fu.cache_read_input_tokens ?? 0;
     const cacheWrite = fu.cache_creation_input_tokens ?? 0;
-    // inputMessagesTokens = max of thinking line's full input and incremental+cache
-    const inputMessagesTokens = Math.max(maxRawInputTokens, incrementalInput + cacheRead + cacheWrite);
+    // OpenAI/Responses 的 input_tokens 已含缓存；Anthropic 则分列，不能统一相加。
+    const inputMessagesTokens = openAICompatibleUsage
+      ? Math.max(maxRawInputTokens, incrementalInput)
+      : Math.max(maxRawInputTokens, incrementalInput + cacheRead + cacheWrite);
     // usage 块 reasoning 兜底：信封（cc-wire-round.reasoningTokens，权威）缺
     // 席时读 cpx 写入 usage 块的 reasoning_tokens——覆盖旧版捕获件
     const reasoningTokens = mergedReasoning > 0 ? mergedReasoning : (fu.reasoning_tokens ?? 0);
@@ -975,6 +1006,10 @@ export function buildAssistantInteraction(
       cost: 0,
       inputMessagesTokens: u0.input_tokens ?? 0,
     };
+  }
+
+  if (mergedUsage && openAICompatibleUsage) {
+    mergedUsage = normalizeOpenAICompatibleUsage(mergedUsage);
   }
 
   const mergedContent = textParts.length > 0 ? textParts.join('\n') : null;
