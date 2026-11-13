@@ -497,6 +497,17 @@ function readSessionFromLines(lines: CodexRolloutLine[]): RawInteraction[] {
 //     如捕获裁剪起点之前发起）原样保留
 //   - 全部 exec_command 输出剥传输壳（Chunk ID/Wall time/…/Output:）——下游
 //     看到的即终端原文；旧库存量行仍带壳，读侧 stripExecOutputHeader 兼容
+//   - 轮级卷回：纯传输轮（整轮工具全部被吸收的 write_stdin 模型往返）并入
+//     属主 exec 的轮，成为同一「节拍」（agent 的一个完整行为单元 = 动作 +
+//     等待期）——685 个计费往返不再 1:1 映射成 685 轮（其中 342 轮是传输
+//     尸体：无正文无工具，胶片上只剩裸横线）。usage 字段分治：水位族
+//     （input/cacheRead/cacheWrite/inputMessagesTokens）取末次轮询读数、
+//     消耗族（output/reasoning/cost）求和、total 按「每轮 total = input +
+//     output + reasoning」恒等式重建（轮内与会话级一致性都保持）；思考按
+//     到达序并入属主轮正文；timeInfo.completed 延伸到末次轮询。latency
+//     不动（模型生成跨度原值——等待期已由 exec durationMs 承载，turnMs =
+//     latency + maxTool 的 turn-duration 单点不双计）。孤儿轮询轮（属主
+//     不在本文件）与混合轮（吸收了轮询块但还保留其他工具）不参与合并
 
 interface StreamingExecState {
   /** 轮询块的输出增量与交互输入留痕（到达序） */
@@ -511,11 +522,15 @@ function rollUpStreamingExecs(result: RawInteraction[]): void {
   const execs: ToolCallInfo[] = [];
   const ownerBySession = new Map<number, ToolCallInfo>();
   const stateByOwner = new Map<ToolCallInfo, StreamingExecState>();
+  // 轮级卷回索引：属主工具 → 属主交互；属主 → 纯传输轮（到达序）
+  const riOfOwner = new Map<ToolCallInfo, RawInteraction>();
+  const pollsByOwner = new Map<ToolCallInfo, RawInteraction[]>();
 
   for (const ri of result) {
     for (const tc of ri.tool_calls ?? []) {
       if (tc.toolName !== 'exec_command' || tc.resultJson == null) continue;
       execs.push(tc);
+      riOfOwner.set(tc, ri);
       const sid = codexStreamSessionIdOf(tc.resultJson);
       if (sid !== null && !ownerBySession.has(sid)) {
         ownerBySession.set(sid, tc);
@@ -535,6 +550,7 @@ function rollUpStreamingExecs(result: RawInteraction[]): void {
     if (!tcs || tcs.length === 0) continue;
     const kept: ToolCallInfo[] = [];
     let dropped = false;
+    let pollOwner: ToolCallInfo | null = null;
     for (const tc of tcs) {
       const sid = tc.toolName === 'write_stdin' ? writeStdinSessionIdOf(tc.argsJson) : null;
       const owner = sid !== null ? ownerBySession.get(sid) : undefined;
@@ -544,6 +560,7 @@ function rollUpStreamingExecs(result: RawInteraction[]): void {
       }
       dropped = true;
       droppedAny = true;
+      if (pollOwner == null) pollOwner = owner;
       const st = stateByOwner.get(owner)!;
       const chars = writeStdinCharsOf(tc.argsJson);
       if (chars) st.parts.push(`[stdin] ${chars}\n`);
@@ -554,7 +571,15 @@ function rollUpStreamingExecs(result: RawInteraction[]): void {
         st.lastChunkTs = tc.completedAt;
       }
     }
-    if (dropped) ri.tool_calls = kept.length > 0 ? kept : null;
+    if (dropped) {
+      ri.tool_calls = kept.length > 0 ? kept : null;
+      // 纯传输轮（整轮工具全部被吸收、无保留工具）→ 记入属主等待期
+      if (kept.length === 0 && pollOwner != null) {
+        const list = pollsByOwner.get(pollOwner);
+        if (list) list.push(ri);
+        else pollsByOwner.set(pollOwner, [ri]);
+      }
+    }
   }
 
   for (const tc of execs) {
@@ -568,9 +593,61 @@ function rollUpStreamingExecs(result: RawInteraction[]): void {
     if (exitCode !== null && exitCode !== 0) tc.state = 'error';
   }
 
-  // 轮询块被吸收后留下的纯传输空组（无正文/无工具/无 usage）不再作为会话
-  // 事件；带 usage 的空组保留（token 消耗是真实模型轮次，claude 适配器截断
-  // 观测同款先例）
+  // ── 轮级卷回：纯传输轮并入属主轮（节拍 = 动作 + 等待期）────────────────
+  if (pollsByOwner.size > 0) {
+    const merged = new Set<RawInteraction>();
+    for (const [owner, polls] of pollsByOwner) {
+      const ownerRi = riOfOwner.get(owner);
+      if (ownerRi == null) continue;
+      let acc = ownerRi.usage;
+      for (const poll of polls) {
+        // 思考按到达序并入：轮询期间的思考本来就属于这个节拍
+        if (poll.content) {
+          ownerRi.content = ownerRi.content != null
+            ? `${ownerRi.content}\n${poll.content}`
+            : poll.content;
+        }
+        const pu = poll.usage;
+        if (pu != null) {
+          // 字段分治：水位族取末次轮询读数（上下文在等待期末的真实水位），
+          // 消耗族求和（token 是真实产出）
+          const o = acc ?? { total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, inputMessagesTokens: 0 };
+          acc = {
+            ...o,
+            output: o.output + pu.output,
+            reasoning: o.reasoning + pu.reasoning,
+            cost: o.cost + pu.cost,
+            input: pu.input,
+            cacheRead: pu.cacheRead,
+            cacheWrite: pu.cacheWrite,
+            inputMessagesTokens: pu.inputMessagesTokens,
+          };
+        }
+        const pEnd = poll.timeInfo?.completed ?? null;
+        if (pEnd != null && (ownerRi.timeInfo?.completed == null || pEnd > ownerRi.timeInfo.completed)) {
+          ownerRi.timeInfo = { created: ownerRi.timeInfo?.created ?? 0, completed: pEnd };
+        }
+        merged.add(poll);
+      }
+      if (acc != null) {
+        // total 恒等式重建（#39 拆桶口径）：每轮 total = inputMessagesTokens +
+        // output + reasoning，其中 inputMessagesTokens = input + cacheRead +
+        // cacheWrite（原始输入，含缓存）。节拍 total = 末次原始输入水位 + 节拍
+        // 总产出——轮内与会话级一致性都保持
+        acc.total = acc.inputMessagesTokens + acc.output + acc.reasoning;
+        ownerRi.usage = acc;
+      }
+      // latency 不动：模型生成跨度 = 属主轮原值（等待期已由 exec durationMs
+      // 承载，turnMs = latency + maxTool 的分解不双计）
+    }
+    for (let i = result.length - 1; i >= 0; i--) {
+      if (merged.has(result[i])) result.splice(i, 1);
+    }
+  }
+
+  // 纯传输空组（无正文/无工具/无 usage）不再作为会话事件；带 usage 的空组
+  // 保留（token 消耗是真实模型轮次——claude 适配器截断观测同款先例；codex
+  // 的轮询空组已在上方轮级卷回中并入属主轮，走不到这里）
   if (droppedAny) {
     for (let i = result.length - 1; i >= 0; i--) {
       const ri = result[i];

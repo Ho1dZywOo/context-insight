@@ -127,13 +127,25 @@ describe('codex-jsonl 流式 shell 卷回（readSession 适配器单点）', () 
     expect(exec4.state).toBe('completed');
   });
 
-  it('轮询模型轮保留（usage/token 是真实消耗），其工具行已被吸收', () => {
+  it('轮级卷回：纯传输轮并入属主轮成节拍，usage 字段分治（水位取末轮/消耗求和）', () => {
     const assistant = readSession(mainFile, MAIN).filter(ri => ri.role === 'assistant');
-    // 8 个模型轮：reasoning+exec1、poll1、poll2、exec2、exec3、orphan、exec4、input
-    expect(assistant).toHaveLength(8);
-    const pollTurn = assistant.find(ri => ri.usage?.total === 130);
-    expect(pollTurn).toBeTruthy();
-    expect(pollTurn!.tool_calls == null || pollTurn!.tool_calls.length === 0).toBe(true);
+    // 5 个节拍轮：exec1(+poll1+poll2)、exec2、exec3、orphan、exec4(+input)
+    // ——wire 的 8 个模型往返里 3 个是纯传输轮（write_stdin 轮询/交互输入）
+    expect(assistant).toHaveLength(5);
+    // exec1 节拍：水位取末次轮询读数（input=120）、消耗求和（output=50+20+15、
+    // reasoning=10）、total 按恒等式重建（120+85+10）
+    const beat1 = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_exec1'));
+    expect(beat1).toBeTruthy();
+    expect(beat1!.usage).toMatchObject({ input: 120, output: 85, reasoning: 10, total: 215 });
+    // 等待期延伸到末次轮询的 usage 时刻（不再是属主轮自己的冲刷时刻）
+    expect(beat1!.timeInfo?.completed).toBeGreaterThan(beat1!.timeInfo!.created);
+    // exec4 节拍吸收交互输入轮：output=10+5、水位取末轮
+    const beat4 = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_exec4'));
+    expect(beat4!.usage).toMatchObject({ input: 60, output: 15, total: 75 });
+    // 孤儿轮询轮（属主不在本文件）不参与合并：自带 write_stdin 工具行原样保留
+    const orphan = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_orphan'));
+    expect(orphan).toBeTruthy();
+    expect(orphan!.usage?.total).toBe(60);
   });
 });
 
@@ -174,5 +186,50 @@ describe('codex 流式 shell 全链路：import 落库 → 技能原文恢复', 
     expect(body.content).toContain('Stage 1 Golden');
     // sed 行范围 + 终端截断标记 → 部分读取
     expect(body.fullRead).toBe(false);
+  });
+});
+
+describe('codex 流式 shell 轮级卷回：交错双流 + 思考合并（节拍 = 动作 + 等待期）', () => {
+  const INTERLEAVE = '66666666-ffff-4b04-8f7e-abcdef000066';
+  const interleaveFile = path.join(DATA, `rollout-2026-11-10T23-00-00-${INTERLEAVE}.jsonl`);
+
+  it('交错双流（execA → execB → pollA1 → pollB → pollA2）：轮按 session 关联合并而非位置相邻', () => {
+    const assistant = readSession(interleaveFile, INTERLEAVE).filter(ri => ri.role === 'assistant');
+    // 5 个 wire 模型往返 → 2 个节拍轮（A 吸收 pollA1/pollA2，B 吸收 pollB）
+    expect(assistant).toHaveLength(2);
+    const beatA = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_execA'))!;
+    const beatB = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_execB'))!;
+    expect(beatA).toBeTruthy();
+    expect(beatB).toBeTruthy();
+    // 工具面：各流增量拼到各自属主，末块退出码定终态（A 失败 → error，B 成功）
+    expect(beatA.tool_calls![0].resultJson).toContain('A 中间输出');
+    expect(beatA.tool_calls![0].resultJson).toContain('A 失败');
+    expect(beatA.tool_calls![0].resultJson).not.toContain('B 完成');
+    expect(beatA.tool_calls![0].state).toBe('error');
+    expect(beatB.tool_calls![0].resultJson).toContain('B 完成');
+    expect(beatB.tool_calls![0].state).toBe('completed');
+  });
+
+  it('思考按到达序并入属主轮（轮询期间的思考属于这个节拍）', () => {
+    const assistant = readSession(interleaveFile, INTERLEAVE).filter(ri => ri.role === 'assistant');
+    const beatA = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_execA'))!;
+    const beatB = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_execB'))!;
+    // 属主思考在前，轮询思考按到达序随后；跨流思考不得串台
+    expect(beatA.content).toBe('<thinking>先启动 A</thinking>\n<thinking>A 怎么还没完</thinking>');
+    expect(beatB.content).toBe('<thinking>再启动 B</thinking>\n<thinking>B 出结果了</thinking>');
+  });
+
+  it('usage 字段分治：水位族取本流末次轮询读数（与文件位置无关）、消耗族求和、total 恒等式重建', () => {
+    const assistant = readSession(interleaveFile, INTERLEAVE).filter(ri => ri.role === 'assistant');
+    const beatA = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_execA'))!;
+    const beatB = assistant.find(ri => ri.tool_calls?.some(tc => tc.toolCallId === 'call_execB'))!;
+    // A 的末次轮询 pollA2 在文件里晚于 pollB 到达——水位取 190 而非位置相邻值；
+    // pollA2 原始输入 290 = 新输入 190 + 缓存读 100，total 重建基数是原始输入
+    // 水位（含缓存）——错用拆桶后新输入会得 270
+    expect(beatA.usage).toMatchObject({ input: 190, cacheRead: 100, output: 50 + 15 + 5, reasoning: 10, total: 290 + 70 + 10 });
+    expect(beatB.usage).toMatchObject({ input: 200, output: 40 + 10, reasoning: 0, total: 200 + 50 });
+    // completed 延伸到本流末次轮询的冲刷时刻；latency 保持属主轮模型跨度（等待不双计）
+    expect(beatA.timeInfo?.completed).toBe(new Date('2026-11-10T23:01:07.500Z').getTime());
+    expect(beatA.latency).toBe(new Date('2026-11-10T23:00:15.500Z').getTime() - new Date('2026-11-10T23:00:04.000Z').getTime());
   });
 });
