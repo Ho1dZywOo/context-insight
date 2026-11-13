@@ -76,6 +76,12 @@ function formatTimestamp(ts: string | null): string {
   }
 }
 
+function validTimestampMs(ts: string | null): number | null {
+  if (!ts) return null;
+  const ms = new Date(ts).getTime();
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
 interface AgentStats {
   sessionId: string
   agentName: string
@@ -581,13 +587,15 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     const pts: Array<{ turnIndex: number; timestamp: number; inputTokens: number }> = []
     for (const s of filteredStats) {
       for (const t of s.turns) {
-        pts.push({ turnIndex: t.turnIndex, timestamp: t.createdAt ? new Date(t.createdAt).getTime() : 0, inputTokens: t.inputMessagesTokens })
+        const timestamp = validTimestampMs(t.createdAt)
+        if (timestamp != null) pts.push({ turnIndex: t.turnIndex, timestamp, inputTokens: t.inputMessagesTokens })
       }
       // 初始轮入时间域：run 时间线自派发消息起算（曲线原点锚可及），但
       // 不占 y 量程（inputTokens=0）也不进命中/悬浮域（allPoints 只供
       // minTime/maxTime/globalMaxInput）
-      if (s.birth?.createdAt) {
-        pts.push({ turnIndex: s.birth.turnIndex, timestamp: new Date(s.birth.createdAt).getTime(), inputTokens: 0 })
+      const birthTimestamp = validTimestampMs(s.birth?.createdAt ?? null)
+      if (s.birth && birthTimestamp != null) {
+        pts.push({ turnIndex: s.birth.turnIndex, timestamp: birthTimestamp, inputTokens: 0 })
       }
     }
     return pts
@@ -612,8 +620,8 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
     const winTurns: TurnRowItem[] = []
     for (const s of filteredStats) {
       for (const t of s.turns) {
-        const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0
-        if (ts >= v0 && ts <= v1) winTurns.push(t)
+        const ts = validTimestampMs(t.createdAt)
+        if (ts != null && ts >= v0 && ts <= v1) winTurns.push(t)
       }
     }
     const winMaxInput = winTurns.length > 0 ? Math.max(...winTurns.map(t => t.inputMessagesTokens), 1) : globalMaxInput
@@ -670,11 +678,11 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       const isRoot = s.isRoot
       const points = s.turns
         .filter(t => {
-          const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0
-          return ts >= v0 && ts <= v1
+          const ts = validTimestampMs(t.createdAt)
+          return ts != null && ts >= v0 && ts <= v1
         })
         .map(t => ({
-          x: toXFn(t.createdAt ? new Date(t.createdAt).getTime() : 0),
+          x: toXFn(validTimestampMs(t.createdAt)!),
           y: toYFn(t.inputMessagesTokens),
           tokens: t.totalTokens,
           cacheRead: t.cacheReadTokens,
@@ -691,7 +699,7 @@ function GrowthChart({ agentStats, contextWindowLimit, displayLabel, actors, onN
       // 同 x，零宽 riser；monotonePath 零宽段直线跳转）；单轮 agent 不锚
       // （保留在场点口径）。锚只进绘制序列（线 + 面积）与命中域，统计口径
       // 不动。x 取 min(birth, 首点)——序列保单调（原始轮序异常时不出回拐）
-      const birthTs = s.birth?.createdAt ? new Date(s.birth.createdAt).getTime() : null
+      const birthTs = validTimestampMs(s.birth?.createdAt ?? null)
       const anchor = points.length >= 2
         ? { x: Math.min(birthTs != null ? toXFn(birthTs) : points[0].x, points[0].x), y: toYFn(0) }
         : null

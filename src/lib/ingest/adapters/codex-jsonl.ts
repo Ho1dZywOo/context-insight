@@ -405,6 +405,20 @@ function readSessionFromLines(lines: CodexRolloutLine[]): RawInteraction[] {
           };
           toolCalls.push(tc);
           if (callId) toolCallIndex.set(callId, tc);
+        } else if (itemType === 'custom_tool_call') {
+          markGroupStart(line);
+          const callId = typeof payload.call_id === 'string' ? payload.call_id : '';
+          const input = payload.input;
+          const tc: ToolCallInfo = {
+            toolCallId: callId,
+            toolName: typeof payload.name === 'string' ? payload.name : 'custom_tool',
+            argsJson: typeof input === 'string' ? input : (input == null ? null : JSON.stringify(input)),
+            resultJson: null,
+            state: typeof payload.status === 'string' ? payload.status : 'completed',
+            startedAt: toMillis(line.timestamp),
+          };
+          toolCalls.push(tc);
+          if (callId) toolCallIndex.set(callId, tc);
         } else if (itemType === 'function_call_output') {
           // 输出晚于组冲刷到达：经全局索引回填
           const callId = typeof payload.call_id === 'string' ? payload.call_id : '';
@@ -417,6 +431,15 @@ function readSessionFromLines(lines: CodexRolloutLine[]): RawInteraction[] {
             tc.completedAt = toMillis(line.timestamp) ?? tc.completedAt ?? null;
           }
           // 未知 call_id（前文调用缺失/被裁剪）：丢弃，原文在盘上
+        } else if (itemType === 'custom_tool_call_output') {
+          const callId = typeof payload.call_id === 'string' ? payload.call_id : '';
+          const tc = callId ? toolCallIndex.get(callId) : undefined;
+          if (tc) {
+            const out = payload.output;
+            tc.resultJson = typeof out === 'string' ? out : (out != null ? JSON.stringify(out) : null);
+            tc.completedAt = toMillis(line.timestamp) ?? tc.completedAt ?? null;
+            tc.state = 'completed';
+          }
         } else if (itemType === 'web_search_call') {
           markGroupStart(line);
           const action = (payload.action ?? {}) as { type?: string; query?: string };
