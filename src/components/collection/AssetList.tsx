@@ -66,15 +66,6 @@ const KIND_LABELS: Record<AssetKindFilter, string> = {
   run: 'Runs',
 };
 
-const RUN_STATUS_DOT: Record<string, string> = {
-  passed: 'bg-green-500',
-  failed: 'bg-red-500',
-  running: 'bg-orange-500 animate-pulse',
-  pending: 'bg-gray-400',
-  carried: 'bg-slate-400',
-  unknown: 'bg-yellow-500',
-};
-
 const FRAMEWORK_LABELS: Record<string, string> = {
   opencode: 'OpenCode',
   'claude-code': 'Claude',
@@ -433,7 +424,6 @@ export function AssetList({
         </span>
       )
       : <span>—</span>
-    const statusDot = RUN_STATUS_DOT[item.status] ?? 'bg-gray-400'
     return (
       <div
         key={item.key}
@@ -450,10 +440,6 @@ export function AssetList({
             >
               {item.name ?? item.runId}
             </Link>
-            <span data-run-status={item.status} className="inline-flex shrink-0 items-center gap-1 rounded-full bg-foreground/[0.04] px-1.5 py-px text-[10px] text-muted-foreground">
-              <span className={`size-1.5 rounded-full ${statusDot}`} />
-              {item.status}
-            </span>
             {!item.exportDataComplete && (
               <span className="shrink-0 text-[10px] text-yellow-600 dark:text-yellow-400" title="导出数据不完整（exportDataComplete=false）">数据不完整</span>
             )}

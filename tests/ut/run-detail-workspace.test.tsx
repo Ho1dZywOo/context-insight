@@ -661,12 +661,11 @@ describe('Run 详情页暗色工作台', () => {
     expect(body).toContain('v1.0')
     // 品牌区是回工作台首页的链接
     expect(document.querySelector('a[href="/"]')).toBeTruthy()
-    // Overview 首卡：run 名为标题（h1 + 悬停全名/runId），状态药丸 +
-    // kind 徽标 + runId mono 一处呈现
+    // Overview 首卡：run 名为标题（h1 + 悬停全名/runId），kind 徽标 +
+    // runId mono 一处呈现
     const h1 = document.querySelector('h1') as HTMLElement | null
     expect(h1).toBeTruthy()
     expect(h1!.getAttribute('title')).toContain('minidemo01')
-    expect(body).toContain('failed')
     expect(body).toContain('工作流')
     expect(body).toContain('minidemo01')
     // 动作簇：刷新图标钮（title=立即刷新）+ 上传实心药丸；bundle 形态 HTML
