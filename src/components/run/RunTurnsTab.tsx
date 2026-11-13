@@ -535,10 +535,18 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn, searchQuer
     if (!shownDetail) return null;
     const idx = ownerTurnsSorted.findIndex(t => t.turnId === shownDetail.turnId);
     for (let i = idx - 1; i >= 0; i--) {
-      if (ownerTurnsSorted[i].subagentSessionId === shownDetail.subagentSessionId) return ownerTurnsSorted[i];
+      const prev = ownerTurnsSorted[i];
+      if (prev.role === 'assistant' && prev.subagentSessionId === shownDetail.subagentSessionId) return prev;
     }
     return null;
   }, [shownDetail, ownerTurnsSorted]);
+
+  const prevTotalInputTokens = useMemo(() => {
+    if (!prevSameAgent) return null;
+    return prevSameAgent.inputTokens
+      + (prevSameAgent.cacheReadTokens ?? 0)
+      + (prevSameAgent.cacheWriteTokens ?? 0);
+  }, [prevSameAgent]);
 
   const subagentLabel = useMemo(() => {
     if (!shownDetail?.isSubagent) return undefined;
@@ -862,7 +870,7 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn, searchQuer
               onSelectTurn={handleSelectTurn}
               onPrevTurn={() => walk(-1)}
               onNextTurn={() => walk(1)}
-              prevInputTokens={prevSameAgent?.inputTokens ?? null}
+              prevTotalInputTokens={prevTotalInputTokens}
               prevInputMessagesCount={prevSameAgent?.inputMessagesCount ?? null}
               subagentLabel={subagentLabel}
             />
@@ -875,7 +883,7 @@ export function RunTurnsTab({ runId, viewModel, turnId, onSelectTurn, searchQuer
               onSelectTurn={handleSelectTurn}
               onPrevTurn={() => walk(-1)}
               onNextTurn={() => walk(1)}
-              prevInputTokens={prevSameAgent?.inputTokens ?? null}
+              prevTotalInputTokens={prevTotalInputTokens}
               prevInputMessagesCount={prevSameAgent?.inputMessagesCount ?? null}
               subagentLabel={subagentLabel}
             />

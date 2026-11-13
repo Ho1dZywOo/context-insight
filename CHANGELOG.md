@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- 【Codex/OpenAI token 口径与 Turn 环比】Codex/OpenAI 的 `input_tokens` 已包含缓存、`output_tokens` 已包含 reasoning，此前 UI 再相加会在 Turn 详情重复计数（左侧权威 total 11.1k、右侧输入 20.9k/输出 647）。现摄取时统一拆成互不重叠的输入/缓存、输出/推理桶；Turn「较上轮」同步改用输入合计与上一 assistant 轮比较，并移除无业务意义的百分比
 - 【构建重写产物下的运行实例新旧代码混跑】运行中的服务器对 `.next` 被构建重写无感知，此后一直执行启动那一刻的旧代码（数据错乱、零报错、重启即愈——E2E 门禁与手跑 `npm run build` 都会触发）。现 E2E 构建改走独立产物目录 `.next-e2e`；`npm run build` 前自动停掉本仓运行中的实例（构建失效的实例继续跑就是事故源）；服务端启动日志自报版本与构建号——进程跑的是哪个构建，从此可直接对账
 - 【上传弹窗未配置数据仓成死表单】数据仓地址 / 令牌未配置时打开「上传到 contextBay」（主页行内 / run 页头两入口同病）：范式目录列表因无远端拉取失败、上传按钮被门禁锁死，弹窗内又无处配置——只能关掉绕道设置页。现配置先行：未配置时打开上传弹窗即弹「连接数据仓」引导（远端地址 + 推送凭据，一次保存全机生效），保存后范式目录自动加载、原地继续上传；引导取消后范式列表旁给「重试」入口（重跑预检 + 重载列表）
 - 【Audit 对账恢复不到 B 形技能正文（codex）】Audit 的 skill 对账此前自带一套与摄取/展示侧平行的恢复词表（只认 invoke 事件 + skill 工具族 `<skill_content>`），codex 等 B 形会话（无 read/skill 工具，模型用 exec_command cat 读 SKILL.md → turn-split 合成 use 事件）全链 404（客户现场：`所选成员均恢复不到 skill "cannbay-report" 的正文（无 invoke 事件 / resultJson）`）。根治：所有 SKILL.md 正文恢复统一收口 skill-content 单点（三通道分类器 `skillMdReadsOfToolCall`）——Audit 对账（`recoverSkillBody`）、Skills 面板、LLM 声明提取（规程候选）共用同一词表，通道扩展不再双头漂移；shell 通道补剥模型自印的 `====…SKILL.md====` 回显横幅。配套：`resolveWorkflowSkillName` 接受 use 事件（B 形 root 声明定位）；`--transcript` 序列化为 B 形加载在源工具调用前合成 Skill 锚点（sift `--kind skill` 切段前提，合成只发生在审计视图序列化出口、不进 DB）；落盘 SKILL.md 的 frontmatter 由 `ensureSkillFrontmatter` 单点保证（read/shell 通道原文自带则对齐名字、缺则注入合成头，不再双头）

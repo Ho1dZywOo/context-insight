@@ -219,7 +219,7 @@ describe('codex-jsonl readSession 状态机', () => {
       }),
       JSON.stringify({
         timestamp: usageAt, ordinal: 3, type: 'token_usage_record',
-        payload: { usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } },
+        payload: { usage: { input_tokens: 100, cached_input_tokens: 40, cache_write_input_tokens: 20, output_tokens: 20, reasoning_output_tokens: 5, total_tokens: 120 } },
       }),
       JSON.stringify({
         timestamp: completedAt, ordinal: 4, type: 'response_item',
@@ -232,7 +232,15 @@ describe('codex-jsonl readSession 状态机', () => {
       const turn = turns[0];
       expect(turn.timestamp).toBe(startedAt);
       expect(turn.timeInfo?.created).toBe(Date.parse(startedAt));
-      expect(turn.usage?.total).toBe(120);
+      expect(turn.usage).toMatchObject({
+        total: 120,
+        input: 40,
+        cacheRead: 40,
+        cacheWrite: 20,
+        inputMessagesTokens: 100,
+        output: 15,
+        reasoning: 5,
+      });
       expect(turn.tool_calls).toHaveLength(1);
       expect(turn.tool_calls![0]).toMatchObject({
         toolCallId: 'call_patch',

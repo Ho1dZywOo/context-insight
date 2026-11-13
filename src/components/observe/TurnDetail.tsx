@@ -134,14 +134,14 @@ function formatTimestamp(ts: string | null): string {
   }
 }
 
-export function TurnDetail({ turn, highlight, onRefresh, subagentLabel, onPrevTurn, onNextTurn, prevInputTokens, prevInputMessagesCount, filmstripTurns, onSelectTurn, entrance }: {
+export function TurnDetail({ turn, highlight, onRefresh, subagentLabel, onPrevTurn, onNextTurn, prevTotalInputTokens, prevInputMessagesCount, filmstripTurns, onSelectTurn, entrance }: {
   turn: TurnDetailData
   highlight?: TurnHighlight | null
   onRefresh?: () => void
   subagentLabel?: string
   onPrevTurn?: () => void
   onNextTurn?: () => void
-  prevInputTokens?: number | null
+  prevTotalInputTokens?: number | null
   prevInputMessagesCount?: number | null
   filmstripTurns?: FilmstripTurn[]
   onSelectTurn?: (turnId: string) => void
@@ -185,8 +185,9 @@ export function TurnDetail({ turn, highlight, onRefresh, subagentLabel, onPrevTu
   const toolTotalMs = turn.toolCalls.reduce((s, tc) => s + Math.max(tc.durationMs, 0), 0)
   const modelMs = Math.max(turn.latencyMs, 0)
   const turnTotalMs = modelMs + toolTotalMs
-  const delta = prevInputTokens != null && prevInputTokens > 0 ? totalInput - prevInputTokens : null
-  const deltaPct = delta != null ? (delta / prevInputTokens!) * 100 : null
+  const delta = turn.role === "assistant" && prevTotalInputTokens != null && prevTotalInputTokens > 0
+    ? totalInput - prevTotalInputTokens
+    : null
 
   // 时间线位置计数（Turn n/total）：以胶片序列为准（与点击走查同一坐标系）
   const filmTotal = filmstripTurns?.length ?? 0
@@ -382,10 +383,9 @@ export function TurnDetail({ turn, highlight, onRefresh, subagentLabel, onPrevTu
                   "rounded-full bg-foreground/[0.05] px-1.5",
                   delta > 0 ? "text-muted-foreground" : "text-emerald-600 dark:text-emerald-400",
                 )}
-                title="同一 agent 维度，与上一轮输入 token 的差值"
+                title="同一 agent 维度的上一 assistant 轮，与本轮输入合计（缓存读 + 新输入 + 缓存写）同口径比较"
               >
                 较上轮 {delta >= 0 ? "▲" : "▼"} {fmtTokens(Math.abs(delta))}
-                {deltaPct != null && Math.abs(deltaPct) >= 1 ? ` (${deltaPct > 0 ? "+" : ""}${deltaPct.toFixed(0)}%)` : ""}
               </span>
             )}
           </div>
