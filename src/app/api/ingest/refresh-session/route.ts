@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { deltaRefreshSession } from '@/lib/ingest/data-service';
+import { invalidateObservationCaches } from '@/lib/observe/invalidation';
 import { logInfo } from '@/lib/logger';
 import { prisma } from '@/lib/db';
 import { withRouteLog } from '@/lib/api-route';
@@ -39,6 +40,9 @@ export const POST = withRouteLog('ingest/refresh-session', async (request: NextR
   // deltaRefreshSession 内二次查找时打到另一行（刷新错行）
   const t0 = Date.now();
   const result = await deltaRefreshSession(taskId, prisma, session);
+  // 增量刷新改写了会话行（追加/重建轮次）→ 观测缓存单点失效；全量重建
+  // （漂移）连行内容都会重排，缺失效则观测端点在 TTL 内读到旧快照
+  invalidateObservationCaches();
   logInfo('route:ingest/refresh-session', '增量刷新完成', {
     taskId, framework: session.framework, fullRebuild: result.fullRebuild ?? false,
     addedTurns: result.addedTurns, updatedTurns: result.updatedTurns,

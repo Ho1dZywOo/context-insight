@@ -14,7 +14,7 @@ import { prisma } from '@/lib/db';
 import { withRouteLog } from '@/lib/api-route';
 import { logInfo } from '@/lib/logger';
 import { listRecycleEntries, restoreRecycleEntry, purgeRecycleEntry, emptyRecycle } from '@/lib/recycle';
-import { invalidateCaches } from '@/lib/collection/lake-view/runs';
+import { invalidateObservationCaches } from '@/lib/observe/invalidation';
 
 export const GET = withRouteLog('recycle', async () => {
   return NextResponse.json({ entries: listRecycleEntries() });
@@ -30,7 +30,7 @@ export const POST = withRouteLog('recycle', async (request: NextRequest) => {
     }
     try {
       const result = await restoreRecycleEntry(body.name, prisma);
-      invalidateCaches();
+      invalidateObservationCaches();
       return NextResponse.json({ ok: true, name: body.name, ...result });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Restore failed';
