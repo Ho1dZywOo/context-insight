@@ -70,6 +70,7 @@ context-insight            # 首次：自动 build + migrate（约 30s-2min）�
 ```
 
 - 需 Node.js >= 22.12；`./start.sh` 同时安装 cpx 捕获命令（详见 `../cpx/README.md`）
+- `npm run build` 会先停掉本仓运行中的服务器（构建重写 `.next` 后，存活实例会新旧代码混跑）；构建后用 `./start.sh` 重启
 - 浏览器打开 `http://localhost:21025`
 
 日志文件位置：

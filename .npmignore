@@ -8,8 +8,11 @@ playwright.config.ts
 test-results/
 playwright-report/
 
-# 构建产物与缓存（next build 产物不放包内 —— 现场构建落 ~/.context-insight/.next）
+# 构建产物与缓存（next build 产物不放包内 —— 现场构建落 ~/.context-insight/.next；
+# .next-e2e 是 E2E 门禁的隔离产物目录，同理不入包——缺了会让 pack 哨兵在
+# 跑过 e2e 的机器上炸（构建树混入包产物））
 .next/
+.next-e2e/
 out/
 build/
 *.tsbuildinfo

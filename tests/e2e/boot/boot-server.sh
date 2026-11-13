@@ -16,19 +16,17 @@
 #
 #   1. prisma/e2e.db 每次重建（migrations 重放）——run-to-run 确定性基线，
 #      与 dev.db（用户生产库）/test.db（vitest 库）物理隔离
-#   2. .next 构建按 BUILD_ID 新鲜度复用（与 start.sh 同款判定，排除
-#      export-view.js——它是每次启动重写的构建产物）：首跑全量构建，之后
-#      源码未变秒过
+#   2. .next-e2e 构建按 BUILD_ID 新鲜度复用（隔离产物目录，判定与 start.sh
+#      同款，排除 export-view.js——它是每次启动重写的构建产物）：首跑全量
+#      构建，之后源码未变秒过
 #   3. public/export-view.js 重建（离线 HTML 导出的运行时依赖）
 #   4. exec next start 绑 127.0.0.1:E2E_PORT（默认 21100，避开 dev 21025）
 #
-# 环境隔离三件套：DATABASE_URL=prisma/e2e.db（绝不碰用户库）、
+# 环境隔离四件套：DATABASE_URL=prisma/e2e.db（绝不碰用户库）、
 # CONTEXT_INSIGHT_HOME=仓内 tmp/insight-e2e-home（run-store/回收站/数据仓
-# 配置与真实 ~/.context-insight 物理断开）、CONTEXT_LOG=0（不写用户日志目录）。
-#
-# 注意 .next 与用户实例共享（Turbopack 禁止 distDir 外置，见
-# next.config.ts）：E2E 与 ./start.sh 并行跑会互相打架（重建会抽掉运行中
-# 实例的产物）——串行使用；端口已错开，仅构建产物是共享面。
+# 配置与真实 ~/.context-insight 物理断开）、CONTEXT_LOG=0（不写用户日志目录）、
+# INSIGHT_DIST_DIR=.next-e2e（构建产物与生产 .next 物理隔离——门禁与运行中
+# 实例并行不再互抽产物，2026-11-12 混代事故的根因面）。
 set -euo pipefail
 
 # tests/e2e/boot → 仓库根
@@ -46,15 +44,18 @@ export DATABASE_URL="file:$DB"
 export CONTEXT_INSIGHT_HOME="$E2E_HOME"
 export CONTEXT_LOG=0
 export CONTEXT_LOG_FILE=0
+# 构建产物隔离（next.config.ts 按此 env 分流 distDir）：构建与起服都必须带
+export INSIGHT_DIST_DIR=".next-e2e"
 
 # --- 1) e2e.db：migrations 重放（同一基线；夹具会话从物理上不可能泄进用户库） ---
 rm -f "$DB" "$DB-wal" "$DB-shm" "$DB-journal"
 npx prisma migrate deploy
 
-# --- 2) 构建：BUILD_ID 新鲜度复用（源码/配置比 BUILD_ID 新才重建） ---
+# --- 2) 构建：BUILD_ID 新鲜度复用（源码/配置比 BUILD_ID 新才重建；判定
+# 只看隔离产物目录 .next-e2e，不碰生产 .next） ---
 NEED_BUILD=true
-if [ -f ".next/BUILD_ID" ]; then
-  STALE="$(find src prisma public package.json next.config.ts tsconfig.json -newer .next/BUILD_ID ! -path 'public/export-view.js' -print -quit 2>/dev/null || true)"
+if [ -f ".next-e2e/BUILD_ID" ]; then
+  STALE="$(find src prisma public package.json next.config.ts tsconfig.json -newer .next-e2e/BUILD_ID ! -path 'public/export-view.js' -print -quit 2>/dev/null || true)"
   if [ -z "$STALE" ]; then
     NEED_BUILD=false
     echo "[e2e-boot] build cached — skip"

@@ -70,6 +70,7 @@ context-insight            # first run: auto-build + migrate (~30s-2min), then s
 ```
 
 - Requires Node.js >= 22.14; `./start.sh` also installs the `cpx` capture command (see `../cpx/README.md`)
+- `npm run build` first stops any running server from this checkout (a rebuilt `.next` under a live instance silently mixes old/new code); restart with `./start.sh` after building
 - Open `http://localhost:21025`
 
 Log file locations:

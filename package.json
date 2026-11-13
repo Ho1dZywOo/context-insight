@@ -14,6 +14,7 @@
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
     "build": "next build",
+  "prebuild": "node scripts/build-guard.mjs",
     "build:export-view": "node scripts/build-export-view.mjs",
     "start": "next start -H 127.0.0.1",
     "postinstall": "node scripts/postinstall.mjs",

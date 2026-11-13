@@ -28,7 +28,7 @@ tests/e2e/
 ├── fixtures.ts               browserConsole 验收门（auto fixture）
 ├── global-setup.ts           播种 = 真实 HTTP 导入管线（即导入冒烟）
 ├── global-teardown.ts        端口回收不变量（防泄漏实例 fail-fast）
-├── boot/boot-server.sh       e2e.db 重建 → 构建复用 → 隔离环境 → next start
+├── boot/boot-server.sh       e2e.db 重建 → 隔离构建（.next-e2e）→ 隔离环境 → next start
 ├── fixtures/tool-bundle/     E2E 自有工具语料（e2e-tools01，见下）
 ├── support/
 │   ├── env.ts                UI 等待预算（E2E_UI_TIMEOUT_MS 覆盖）
@@ -53,7 +53,7 @@ tests/e2e/
 └── offline-export.spec.ts    离线 HTML 导出：下载 + file:// 往返离线内核起播
 ```
 
-### 环境隔离（五件套）
+### 环境隔离（六件套）
 
 | 隔离面 | 手段 |
 | --- | --- |
@@ -62,9 +62,13 @@ tests/e2e/
 | HOME | `CONTEXT_INSIGHT_HOME=仓内 tmp/insight-e2e-home`（run-store/回收站/数据仓配置与真实家目录断开） |
 | 日志 | `CONTEXT_LOG=0`（不写用户日志目录） |
 | 启动器 | **不用 `./start.sh`**——它会杀本仓所有自家 next 实例（含用户在用的 21025）、写端口登记、装代理、开浏览器 |
+| 构建产物 | `INSIGHT_DIST_DIR=.next-e2e`（next.config.ts 按该 env 分流 distDir）——E2E 构建与生产 `.next` 物理隔离，与运行中实例并行安全 |
 
-注意 `.next/` 与用户日常实例共享（Turbopack 禁止 distDir 外置）：E2E 与 `./start.sh`
-**串行使用**；并行跑会因重建抽掉运行中实例的产物。
+构建产物隔离的前科：共享 `.next` 时门禁构建重写产物，运行中实例内存里仍是
+启动时预载的旧模块（Next 16 全量预载路由 + Turbopack「先到的工厂赢」），
+新旧混跑静默错乱（2026-11-12）。配套防线：`npm run build` 挂 prebuild 守门
+（`scripts/build-guard.mjs`，cwd 锚定本仓的 next 实例先停再建）；服务端启动
+自报构建标识（boot 行带 version/BUILD_ID——混代进程可直接对账实锤）。
 
 ### 播种即冒烟
 

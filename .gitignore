@@ -16,6 +16,7 @@ proxy/node_modules
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 
 # production
