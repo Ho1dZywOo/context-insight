@@ -126,8 +126,8 @@ describe('observe API routes', () => {
       const bridge = bridges[0];
       expect(bridge.dispatchExecutionId).toBeDefined();
       expect(typeof bridge.status).toBe('string');
-      expect(typeof bridge.subagentTokens).toBe('number');
-      expect(typeof bridge.subagentLatencyMs).toBe('number');
+      expect(typeof bridge.subagentTokens).toBe('bigint');
+      expect(typeof bridge.subagentLatencyMs).toBe('bigint');
     }
   });
 });

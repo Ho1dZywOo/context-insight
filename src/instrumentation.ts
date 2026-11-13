@@ -18,6 +18,10 @@ export async function register(): Promise<void> {
   await import('@/lib/bigint-json');
   const cfg = loggerConfigSnapshot();
   logInfo('logger', 'boot 日志配置', { enabled: cfg.enabled, level: cfg.level, file: cfg.file, stdout: cfg.stdout, dir: cfg.dir });
+  // 构建标识自报（进程身份锚点）：version 是构建期常量、BUILD_ID 取启动时
+  // 刻磁盘态——boot 行与事后磁盘对不上即混代进程实锤（2026-11-12 事故补位）
+  const { readBuildIdentity } = await import('@/lib/build-identity');
+  logInfo('logger', 'boot 构建标识', { ...readBuildIdentity(), pid: process.pid });
   // wire 工具时长预热（性能层，后台不阻塞启动）：捕获冷读是秒级同步阻塞，
   // 不预热则重启后第一个踩中的请求为整段买单（详见 tool-timing-warm 模块头）
   const { prisma } = await import('@/lib/db');

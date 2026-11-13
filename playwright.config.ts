@@ -41,7 +41,8 @@ export default defineConfig({
     command: "bash tests/e2e/boot/boot-server.sh",
     // 健康探针 = 起动器同款 API 探活（start.sh CLI 模式同路径）
     url: `${BASE_URL}/api/observe/data?pageSize=1`,
-    // 首跑含 next build（~2min）；复跑走 BUILD_ID 缓存秒过
+    // 首跑含 next build（~2min，产物落隔离目录 .next-e2e——不抽换生产 .next）；
+    // 复跑走 .next-e2e BUILD_ID 缓存秒过
     timeout: 300_000,
     reuseExistingServer: false,
     stdout: "pipe",

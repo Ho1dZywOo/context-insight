@@ -22,8 +22,17 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 // navigate out of the projectPath"）；而传绝对路径会被拼进包目录深处形成
 // 垃圾路径且 BUILD_ID 探测永远落空（每次启动重建）。多人隔离靠每人各自的
 // npm 安装（包目录按用户隔离），可写数据（库/登记/PID）仍在 DATA_DIR。
+// 唯一例外：INSIGHT_DIST_DIR 项目根内分流（E2E 隔离构建，见下）。
+
+// 构建产物目录分流：INSIGHT_DIST_DIR 指定项目根内目录时启用——E2E 门禁
+// 构建走 .next-e2e，与生产 .next 物理隔离（2026-11-12 事故：共享 .next 时
+// 门禁构建重写产物，运行中实例内存里仍是启动时预载的旧模块——Next 16
+// 启动全量预载路由 + Turbopack「先到的工厂赢」——新旧混跑静默错乱）。
+// 未设 env 时行为不变（.next）；外逃目录仍被 Turbopack 拒绝（见上注）。
+const distDir = process.env.INSIGHT_DIST_DIR?.trim();
 
 const nextConfig: NextConfig = {
+  ...(distDir ? { distDir } : {}),
   turbopack: { root: projectRoot },
   // 7zip-bin 带平台二进制（linux/x64/7za 等），其 index.js 用 __dirname 定位
   // 二进制——被打包器内联会把 __dirname 编译成构建期常量（如 /ROOT/...），

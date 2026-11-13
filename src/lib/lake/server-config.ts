@@ -26,12 +26,19 @@ export interface ServerLakeConfig {
   lfs?: boolean;
 }
 
-// 与 lake-auth.json 同目录（'.context-insight' 引号字面量是 pack-cannbot 品牌翻转点）
+// lake 文件根（lake-config/lake-auth/bin 与 proxy 目录同根）：CONTEXT_PROXY_DIR
+// 重定向优先（测试/多实例隔离的既有通道）；否则锚定 CONTEXT_INSIGHT_HOME
+// （与 run-store 同源——e2e boot 以此隔离，lake 层此前漏认，测试环境会读写
+// 真实 home 的配置）；缺省真实 home。'.context-insight' 引号字面量是
+// pack-cannbot 品牌翻转点。
+export function lakeFilesRoot(): string {
+  const home = process.env.CONTEXT_INSIGHT_HOME ?? path.join(os.homedir(), '.context-insight')
+  return path.dirname(process.env.CONTEXT_PROXY_DIR ?? path.join(home, 'proxy'))
+}
+
+// 与 lake-auth.json 同目录
 export function serverConfigPath(): string {
-  return path.join(
-    path.dirname(process.env.CONTEXT_PROXY_DIR ?? path.join(os.homedir(), '.context-insight', 'proxy')),
-    'lake-config.json',
-  );
+  return path.join(lakeFilesRoot(), 'lake-config.json')
 }
 
 function sanitize(raw: unknown): ServerLakeConfig | null {
