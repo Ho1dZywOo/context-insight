@@ -412,7 +412,7 @@ function readSessionFromLines(lines: CodexRolloutLine[]): RawInteraction[] {
           const tc: ToolCallInfo = {
             toolCallId: callId,
             toolName: typeof payload.name === 'string' ? payload.name : 'custom_tool',
-            argsJson: input == null ? null : JSON.stringify({ input }),
+            argsJson: typeof input === 'string' ? input : (input == null ? null : JSON.stringify(input)),
             resultJson: null,
             state: typeof payload.status === 'string' ? payload.status : 'completed',
             startedAt: toMillis(line.timestamp),
@@ -438,6 +438,7 @@ function readSessionFromLines(lines: CodexRolloutLine[]): RawInteraction[] {
             const out = payload.output;
             tc.resultJson = typeof out === 'string' ? out : (out != null ? JSON.stringify(out) : null);
             tc.completedAt = toMillis(line.timestamp) ?? tc.completedAt ?? null;
+            tc.state = 'completed';
           }
         } else if (itemType === 'web_search_call') {
           markGroupStart(line);

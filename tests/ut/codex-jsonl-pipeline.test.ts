@@ -203,6 +203,7 @@ describe('codex-jsonl readSession 状态机', () => {
     const startedAt = '2026-11-12T07:00:01.000Z';
     const usageAt = '2026-11-12T07:00:02.000Z';
     const completedAt = '2026-11-12T07:00:03.000Z';
+    const patchInput = '*** Begin Patch\n*** Add File: a.py\n+print(1)\n*** End Patch\n';
     fs.writeFileSync(file, [
       JSON.stringify({
         timestamp: '2026-11-12T07:00:00.000Z', ordinal: 0, type: 'session_meta',
@@ -212,8 +213,8 @@ describe('codex-jsonl readSession 状态机', () => {
       JSON.stringify({
         timestamp: startedAt, ordinal: 2, type: 'response_item',
         payload: {
-          type: 'custom_tool_call', id: 'ctc_call_patch', status: 'completed', call_id: 'call_patch',
-          name: 'apply_patch', input: '*** Begin Patch\n*** Add File: a.py\n+print(1)\n*** End Patch\n',
+          type: 'custom_tool_call', id: 'ctc_call_patch', status: 'in_progress', call_id: 'call_patch',
+          name: 'apply_patch', input: patchInput,
         },
       }),
       JSON.stringify({
@@ -241,7 +242,7 @@ describe('codex-jsonl readSession 状态机', () => {
         completedAt: Date.parse(completedAt),
         resultJson: 'Success. Updated a.py',
       });
-      expect(turn.tool_calls![0].argsJson).toContain('*** Begin Patch');
+      expect(turn.tool_calls![0].argsJson).toBe(patchInput);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
