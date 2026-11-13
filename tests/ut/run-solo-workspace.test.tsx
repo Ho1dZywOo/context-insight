@@ -331,11 +331,11 @@ describe('Run 详情页 solo run 渲染（run-first 刀H）', () => {
     const graph = document.querySelector('[data-run-tab="graph"]')
     expect(graph).toBeTruthy()
     expect(graph!.classList.contains('hidden')).toBe(false)
-    // 画布挂载 + 单节点（短名 = sessionId）+ 第 1 次运行带（无回滚）
+    // 画布挂载 + 单节点（主 Agent 固定名）+ 第 1 次运行带（无回滚）
     expect(document.querySelector('.run-canvas')).toBeTruthy()
     const nodes = document.querySelectorAll('.run-node')
     expect(nodes).toHaveLength(1)
-    expect(nodes[0].textContent).toContain(SID)
+    expect(nodes[0].textContent).toContain('Main Agent')
     const graphText = graph!.textContent ?? ''
     expect(graphText).toContain('第 1 次运行')
   })

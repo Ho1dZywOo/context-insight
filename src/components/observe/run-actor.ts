@@ -84,7 +84,7 @@ export function buildRunActors(turns: RunActorTurn[]): Map<string, RunActor> {
   const actors = new Map<string, RunActor>()
   for (const [key, t] of groups) {
     const isRoot = !t.isSubagent
-    const agentName = t.agentName ?? (isRoot ? "Main Agent" : "?")
+    const agentName = t.agentName ?? (isRoot ? "Main Agent" : "Subagent")
     const subagentType = isRoot ? null : t.subagentType ?? null
     const kind: RunActorKind = isRoot ? (t.member ? "member" : "main") : "subagent"
     let baseName: string

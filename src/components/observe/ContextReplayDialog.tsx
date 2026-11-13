@@ -11,7 +11,7 @@ import { useState, useMemo, useEffect, useRef } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { buildRunActors, subagentBaseNameOf, type RunActor } from "@/components/observe/run-actor"
+import { buildRunActors, type RunActor } from "@/components/observe/run-actor"
 import type { TurnRowItem } from "@/components/observe/ContextTracker"
 import { contextAgentKeyOf, contextColorMapOf, contextLegendKeyOf } from "@/components/observe/context-legend"
 import {
@@ -65,7 +65,11 @@ function computeStepOf(turns: TurnRowItem[]): Map<string, number> {
   return m
 }
 
-function computeTimelines(turns: TurnRowItem[], stepOf: Map<string, number>): AgentTimeline[] {
+function computeTimelines(
+  turns: TurnRowItem[],
+  stepOf: Map<string, number>,
+  actors: Map<string, RunActor>,
+): AgentTimeline[] {
   const sessionMap = new Map<string, TurnRowItem[]>()
   for (const t of turns) {
     if ((t.inputTokens + t.cacheReadTokens) <= 0) continue
@@ -76,30 +80,27 @@ function computeTimelines(turns: TurnRowItem[], stepOf: Map<string, number>): Ag
 
   // 类型配色：黄金角度序列（context-legend 单一源）——键序规范排序与
   // ContextTracker 图例/曲线同源，回放与趋势图同色
-  const colorMap = (() => {
-    const seen = new Map<string, { sessionId: string; agentName: string; isRoot: boolean; subagentType: string | null }>()
-    for (const t of turns) {
-      const sid = contextAgentKeyOf(t)
-      if (!seen.has(sid)) {
-        seen.set(sid, {
-          sessionId: sid,
-          agentName: t.agentName ?? "?",
-          isRoot: !t.isSubagent,
-          subagentType: t.isSubagent ? t.subagentType ?? null : null,
-        })
-      }
-    }
-    return contextColorMapOf([...seen.values()])
-  })()
+  const colorMap = contextColorMapOf(
+    [...sessionMap.keys()].map(sid => {
+      const actor = actors.get(sid)!;
+      return {
+        sessionId: sid,
+        agentName: actor.agentName,
+        isRoot: actor.isRoot,
+        subagentType: actor.subagentType,
+      };
+    }),
+  )
 
   const stepOfTurn = (t: TurnRowItem) => stepOf.get(t.turnId) ?? t.turnIndex
   const timelines: AgentTimeline[] = []
 
   for (const [sid, agentTurns] of sessionMap) {
-    const agentName = agentTurns[0].agentName ?? "?"
-    const isRoot = !agentTurns[0].isSubagent
-    const memberLabel = agentTurns[0].member?.label ?? null
-    const subagentType = isRoot ? null : agentTurns[0].subagentType ?? null
+    const actor = actors.get(sid)!;
+    const isRoot = actor.isRoot
+    const agentName = actor.agentName
+    const memberLabel = actor.memberLabel
+    const subagentType = actor.subagentType
     const color = colorMap.get(contextLegendKeyOf({ sessionId: sid, agentName, isRoot, subagentType })) ?? "#94a3b8"
     const spawnStep = stepOfTurn(agentTurns[0])
     const deathStep = stepOfTurn(agentTurns[agentTurns.length - 1])
@@ -122,9 +123,11 @@ function computeTimelines(turns: TurnRowItem[], stepOf: Map<string, number>): Ag
 }
 
 function displayLabel(s: AgentTimeline, actors: Map<string, RunActor>): string {
-  // 命名单一源（run-actor）：道名与趋势卡/图例同源；目录缺项兜底
-  return actors.get(s.sessionId)?.displayName
-    ?? (s.isRoot ? s.memberLabel ?? s.agentName : subagentBaseNameOf(s))
+  return actors.get(s.sessionId)!.displayName
+}
+
+function turnDisplayLabel(t: TurnRowItem, actors: Map<string, RunActor>): string {
+  return actors.get(contextAgentKeyOf(t))!.displayName
 }
 
 interface ContextReplayDialogProps {
@@ -137,9 +140,9 @@ interface ContextReplayDialogProps {
 
 export function ContextReplayDialog({ open, onOpenChange, turns, contextWindowLimit }: ContextReplayDialogProps) {
   const stepOf = useMemo(() => computeStepOf(turns), [turns])
-  const timelines = useMemo(() => computeTimelines(turns, stepOf), [turns, stepOf])
   // 命名单一源（run-actor）：回放道名与趋势卡/图例同源，别名表不再拷贝
   const actors = useMemo(() => buildRunActors(turns), [turns])
+  const timelines = useMemo(() => computeTimelines(turns, stepOf, actors), [turns, stepOf, actors])
 
   if (!open || timelines.length === 0) return null
 
@@ -561,14 +564,14 @@ function ContextReplayPlayer({
             <span className="font-medium">Turn #{currentTurn}</span>
             {currentTurnData.map(t => (
               <Badge key={t.turnId} variant={t.isSubagent ? "orange" : "blue"} className="text-xs">
-                {t.isSubagent ? (t.subagentType ?? t.agentName ?? "sub") : (t.agentName ?? "root")}
+                {turnDisplayLabel(t, actors)}
               </Badge>
             ))}
           </div>
           <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
             {currentTurnData.map(t => (
               <span key={t.turnId}>
-                {t.isSubagent ? (t.subagentType ?? t.agentName ?? "?") : (t.agentName ?? "?")}: {formatTokenCount(t.inputTokens)} input
+                {turnDisplayLabel(t, actors)}: {formatTokenCount(t.inputTokens)} input
                 {t.contextWindowPct != null && t.contextWindowPct > 0 && ` (${t.contextWindowPct.toFixed(1)}%)`}
               </span>
             ))}
