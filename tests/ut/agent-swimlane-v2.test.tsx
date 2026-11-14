@@ -138,6 +138,7 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     expect(rootPieces[0].hasAttribute('data-root-segment-owner')).toBe(false)
     const handback = el.querySelector<HTMLElement>('[data-root-segment-owner="ses_g1"]')
     expect(handback).toBe(rootPieces[1])
+    expect(handback!.getAttribute('title')).toContain('父 Agent 接收')
     dblclick(handback!)
 
     expect(onViewTurns).toHaveBeenCalledTimes(1)

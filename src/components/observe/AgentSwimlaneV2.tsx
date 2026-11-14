@@ -472,13 +472,19 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
               const ownerLabel = owner
                 ? identityOf(owner.agent)?.subagentType ?? owner.agent.agentName ?? "子代理"
                 : null
+              const ownerBridge = owner?.bridge
+                ?? (owner?.agent.agentSessionId ? bridgeBySessionId.get(owner.agent.agentSessionId)?.[0] : undefined)
               return (
                 <div
                   key={`${seg.index}:${pieceIndex}`}
                   data-root-segment={span.agent.isSubagent ? undefined : `${span.agent.executionId}:${seg.index}:${pieceIndex}`}
                   data-root-segment-owner={owner?.agent.agentSessionId ?? undefined}
                   className={owner ? "absolute pointer-events-auto cursor-pointer" : "absolute pointer-events-none"}
-                  title={ownerLabel ? `双击跳到 ${ownerLabel} 最后一轮` : undefined}
+                  title={ownerLabel
+                    ? ownerBridge?.parentResponseTurnId
+                      ? `双击跳到父 Agent 接收 ${ownerLabel} 回复的 turn`
+                      : `双击跳到 ${ownerLabel} 最后一轮`
+                    : undefined}
                   style={{
                     left: `${((piece.start - span.start) / spanMs) * 100}%`,
                     width: `${((piece.end - piece.start) / spanMs) * 100}%`,
@@ -489,8 +495,6 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
                   onDoubleClick={owner ? e => {
                     e.stopPropagation()
                     cancelPendingMeasure()
-                    const ownerBridge = owner.bridge
-                      ?? (owner.agent.agentSessionId ? bridgeBySessionId.get(owner.agent.agentSessionId)?.[0] : undefined)
                     onViewTurns?.(owner.agent.agentSessionId, undefined, owner.agent.member?.taskId ?? null, {
                       position: "last",
                       atMs: owner.end,
