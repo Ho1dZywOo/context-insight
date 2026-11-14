@@ -244,7 +244,8 @@ export function PerfPanorama({ endpoints, onOpenTurn, onOpenSearch, swimlanePayl
   }, [model])
 
   // 时间线跳转：子代理条 → 该会话首轮（多次派发时按派发时刻后定位）；
-  // 主泳道承接 subagent 结束的活跃段 → 该子代理末轮；root 条 → 该成员首轮。
+  // 主泳道承接 subagent 结束的活跃段 → 父 Agent 接收回复的 turn；无则回退子代理末轮；
+  // root 条 → 该成员首轮。
   // 唯一出口 onOpenTurn(turnId)；解析用轮次载荷直供优先（离线导出），线上回落端点取数
   const jumpTurns = swimlanePayload?.turns ?? turns
   const openSwimTurn = (agentSessionId: string | null, sinceMs?: number, memberTaskId?: string | null, target?: SwimTurnTarget) => {
@@ -258,6 +259,10 @@ export function PerfPanorama({ endpoints, onOpenTurn, onOpenSearch, swimlanePayl
           return (at - bt) || (a.turnIndex - b.turnIndex)
         })
       if (target?.position === "last") {
+        if (target.parentTurnId) {
+          onOpenTurn(target.parentTurnId)
+          return
+        }
         const bounded = target.atMs == null
           ? subs
           : subs.filter(t => t.createdAt && new Date(t.createdAt).getTime() <= target.atMs!)

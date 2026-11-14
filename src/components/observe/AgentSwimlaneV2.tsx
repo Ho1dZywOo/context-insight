@@ -11,7 +11,7 @@
 // ①并发槽位数 = 当前可见集合的真实最大并发（旧块固定 5 槽）
 // ②底部图例 = 子代理类型（resolveSubagentIdentity 唯一入口）可勾选过滤
 // ③点击泳道内两点测时距（第三次点击重置）；双击条子跳转（member 归因随行）；
-//   主泳道承接 subagent 结束后的活跃段时，双击跳该 subagent 末轮
+//   主泳道承接 subagent 结束后的活跃段时，双击优先跳父 Agent 收到回复的 turn
 import { useMemo, useState, useCallback, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardAction } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -102,6 +102,7 @@ type Measure = { a: { pct: number; t: number }; b?: { pct: number; t: number } }
 export type SwimTurnTarget = {
   position: "first" | "last"
   atMs?: number
+  parentTurnId?: string | null
 }
 
 export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns, lanes = [], lanesInferred = false }: {
@@ -285,7 +286,7 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
 
   // 主泳道活跃段的交接切片：subagent 结束时刻作为切点，结束点之后到下一
   // 个 lifecycle 边界的主活跃区归属刚结束的 subagent；结束点之前保持普通 root。
-  // 双击交接切片可直达该 subagent 的末轮。
+  // 双击交接切片优先直达父会话收到该 subagent 回复的 turn。
   const rootSegmentPieces = useMemo(() => {
     type Piece = { start: number; end: number; owner: Span | null }
     const piecesBySegment = new Map<string, Piece[]>()
@@ -488,9 +489,12 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
                   onDoubleClick={owner ? e => {
                     e.stopPropagation()
                     cancelPendingMeasure()
+                    const ownerBridge = owner.bridge
+                      ?? (owner.agent.agentSessionId ? bridgeBySessionId.get(owner.agent.agentSessionId)?.[0] : undefined)
                     onViewTurns?.(owner.agent.agentSessionId, undefined, owner.agent.member?.taskId ?? null, {
                       position: "last",
                       atMs: owner.end,
+                      parentTurnId: ownerBridge?.parentResponseTurnId ?? null,
                     })
                   } : undefined}
                 />
@@ -677,7 +681,7 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
           )}
         </div>
         <div className="text-[11px] text-muted-foreground">
-          槽位 = 可见集合真实最大并发 · 单击泳道测时距（两点，第三下重置） · 双击条子跳 turns · subagent 结束后的主泳道活跃段双击跳其末轮 · 横向滚动可平移 · Ctrl/⌘ + 滚轮缩放
+          槽位 = 可见集合真实最大并发 · 单击泳道测时距（两点，第三下重置） · 双击条子跳 turns · subagent 结束后的主泳道活跃段双击跳父 Agent 接收回复的 turn · 横向滚动可平移 · Ctrl/⌘ + 滚轮缩放
         </div>
       </CardContent>
 

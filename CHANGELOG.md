@@ -5,7 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
-- 【泳道 subagent 结束交接】执行时间线的主泳道此前只有整段双击跳主 Agent 首轮；现按 subagent 生命周期切分活跃段，subagent 结束后接续的主 Agent 活跃段归属刚结束的 subagent，双击可直达该 subagent 最后一轮
+- 【泳道 subagent 结束交接】执行时间线的主泳道此前只有整段双击跳主 Agent 首轮；现按 subagent 生命周期切分活跃段，subagent 结束后接续的主 Agent 活跃段归属刚结束的 subagent，双击优先跳到父 Agent 通过 `wait_agent` 收到该 subagent 回复的 turn；日志没有接收轮时回退到该 subagent 最后一轮
 - 【上下文增长图模式去重】Context 主趋势图的「面积/折线」切换此前只改变填充样式，数据、坐标和点位完全相同，切换没有信息增益。现移除模式开关与面积填充，主图固定使用折线，便于单 Agent 和多 Agent 精确比较；详情弹窗内的缓存份额带与趋势小图保持不变
 - 【主 Agent 命名与 Context Replay 问号】solo run 此前用短 session GUID 合成成员/nodeId，Context Replay 的 root turn 又会分别回落成 `root` / `?`。现 solo 单主 Agent 的 member label 和 graph nodeId 统一为 `Main Agent`；回放 badge/逐 turn 明细复用 `RunActor` 名称，匿名子代理统一显示 `Subagent`
 - 【移除 run 状态徽标】solo 会话的 `passed` 是“会话已导入”的合成状态，不代表任务成功；workflow run 顶层状态也与工具错误口径混杂。现 Overview 与首页 run 行不再展示 run 状态徽标，保留 Graph 节点状态、重试状态和 Errors 独立统计

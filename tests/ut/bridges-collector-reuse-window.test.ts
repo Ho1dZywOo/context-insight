@@ -77,6 +77,55 @@ describe('collectors/bridges：复用会话读侧窗口自愈', () => {
     expect(new Date(rework.responseTimestamp!).getTime()).toBe(new Date('2026-10-13T09:40:18.267Z').getTime());
   });
 
+  it('父会话 wait_agent 收到 subagent completed 结果时，写回 parentResponseTurnId', async () => {
+    const task = `${TASK}-parent-receive`;
+    const sid = 'ses-parent-receive';
+    const session = await prisma.session.create({ data: { taskId: task, framework: 'codex' } });
+    try {
+      const dispatchAt = new Date('2026-10-13T12:00:00.000Z');
+      await prisma.interactionBridge.create({
+        data: {
+          sessionId: session.id,
+          dispatchExecutionId: 'exec-parent-receive',
+          dispatchTimestamp: dispatchAt,
+          responseTimestamp: new Date('2026-10-13T12:05:00.000Z'),
+          subagentSessionId: sid,
+          status: 'completed',
+        },
+      });
+      await prisma.turn.create({
+        data: {
+          sessionId: session.id, turnIndex: 0, role: 'assistant', isSubagent: true,
+          subagentSessionId: sid, createdAt: dispatchAt, createdAt_ts: dispatchAt, latencyMs: 300_000,
+        },
+      });
+      const parentTurn = await prisma.turn.create({
+        data: {
+          sessionId: session.id, turnIndex: 1, role: 'assistant', isSubagent: false,
+          createdAt: new Date('2026-10-13T12:04:55.000Z'),
+          createdAt_ts: new Date('2026-10-13T12:04:55.000Z'),
+        },
+      });
+      await prisma.toolCall.create({
+        data: {
+          turnId: parentTurn.id,
+          toolCallId: 'call-parent-receive',
+          toolName: 'wait_agent',
+          state: 'completed',
+          argsJson: JSON.stringify({ targets: [sid], timeout_ms: 600_000 }),
+          resultJson: JSON.stringify({ status: { [sid]: { completed: 'done' } }, timed_out: false }),
+          startedAt: new Date('2026-10-13T12:00:00.000Z'),
+          completedAt: new Date('2026-10-13T12:05:00.500Z'),
+        },
+      });
+
+      const items = await collectScopeBridges(prisma, scopeOf(session.id));
+      expect(items.find(b => b.subagentSessionId === sid)?.parentResponseTurnId).toBe(parentTurn.id);
+    } finally {
+      await prisma.session.deleteMany({ where: { taskId: task } }).catch(() => {});
+    }
+  });
+
   it('窗口内 turn 的 completedAt 越过下次派发时，response 钳到下次派发时刻', async () => {
     const task = `${TASK}-clamp`;
     const sid = 'ses-route-reuse-clamp';

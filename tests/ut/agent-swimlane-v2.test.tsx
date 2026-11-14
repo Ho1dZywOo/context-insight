@@ -13,7 +13,7 @@
 //   单击（任意位置，含条子上）= 测时距两点标记；落点防抖 DBLCLICK_GUARD_MS，
 //     以便让位给双击；
 //   双击条子 = onViewTurns 跳转，并取消双击前置两击挂起的测距点；
-//   主泳道承接 subagent 结束的活跃段同样双击跳该 subagent 末轮。
+//   主泳道承接 subagent 结束的活跃段同样双击，优先跳父 Agent 接收回复的 turn。
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -63,14 +63,15 @@ function mkAgent(over: {
   } as unknown as AgentItem
 }
 
-function mkBridges(sessions: Array<{ sub: string; type: string; step?: string; ts?: string; resp?: string; status?: string }>): BridgeItem[] {
-  return sessions.map(({ sub, type, step, ts, resp, status }) => ({
+function mkBridges(sessions: Array<{ sub: string; type: string; step?: string; ts?: string; resp?: string; status?: string; parentTurnId?: string }>): BridgeItem[] {
+  return sessions.map(({ sub, type, step, ts, resp, status, parentTurnId }) => ({
     dispatchExecutionId: `exec-${sub}`,
     dispatchContent: step ?? `step-${sub}`,
     dispatchTimestamp: ts ?? null,
     responseTimestamp: resp ?? null,
     subagentSessionId: sub,
     subagentType: type,
+    parentResponseTurnId: parentTurnId ?? null,
     status: status ?? 'completed',
     dispatchBackground: false,
   } as unknown as BridgeItem))
@@ -110,7 +111,7 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     mkAgent({ executionId: 'subB', span: { start: Date.parse(T0) + 20_000, end: Date.parse(T0) + 70_000 }, agentSessionId: 'ses_g2', agentName: '⑥ base 切分' }),
   ]
 
-  it('主泳道承接 subagent 结束的活跃段：双击跳该 subagent 最后一轮', async () => {
+  it('主泳道承接 subagent 结束的活跃段：双击跳父 Agent 接收回复的 turn', async () => {
     const T = Date.parse(T0)
     const ownedAgents = [
       mkAgent({
@@ -129,7 +130,7 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     ]
     const onViewTurns = vi.fn()
     const el = await renderV2(ownedAgents, mkBridges([
-      { sub: 'ses_g1', type: 'design-sync-planner', ts: new Date(T + 100_000).toISOString(), resp: new Date(T + 200_000).toISOString() },
+      { sub: 'ses_g1', type: 'design-sync-planner', ts: new Date(T + 100_000).toISOString(), resp: new Date(T + 200_000).toISOString(), parentTurnId: 'parent-receive-turn' },
     ]), onViewTurns)
 
     const rootPieces = [...el.querySelectorAll<HTMLElement>('[data-root-segment]')]
@@ -143,6 +144,7 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     expect(onViewTurns).toHaveBeenCalledWith('ses_g1', undefined, null, {
       position: 'last',
       atMs: T + 200_000,
+      parentTurnId: 'parent-receive-turn',
     })
   })
 

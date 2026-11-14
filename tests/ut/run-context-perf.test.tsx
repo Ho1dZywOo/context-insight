@@ -173,6 +173,37 @@ const perfSubTurnB = {
   createdAt: '2026-10-13T02:00:55.000Z',
 };
 
+const perfParentAckTurn = {
+  ...perfTurn,
+  turnId: 'rop-t-parent-ack',
+  turnIndex: 2,
+  contentSummary: '收到子代理交回结果',
+  createdAt: '2026-10-13T02:03:10.000Z',
+};
+
+const perfBridge = {
+  bridgeId: 'rop-bridge-sub',
+  dispatchExecutionId: 'rop-exec-root',
+  dispatchTurnId: 'rop-t-a0',
+  dispatchToolCallId: 'tc-spawn-sub',
+  dispatchContent: '子代理调研',
+  dispatchTimestamp: '2026-10-13T02:00:30.000Z',
+  dispatchBackground: false,
+  responseExecutionId: null,
+  responseTurnId: 'rop-t-sub1',
+  responseContent: '子代理收尾',
+  responseTimestamp: '2026-10-13T02:03:00.000Z',
+  subagentSessionId: 'rop-sub-1',
+  subagentType: 'research',
+  subagentName: 'rop-研究员',
+  agentName: 'research',
+  parentResponseTurnId: 'rop-t-parent-ack',
+  status: 'completed',
+  subagentTokens: 160,
+  subagentLatencyMs: 150_000,
+  member: { taskId: 'ses_mini_a', label: '成员A' },
+};
+
 const fetchCalls: string[] = [];
 
 // 工具耗时卡夹具（Perf「成员 × 工具」双维度的工具侧）：Read（含错误与
@@ -231,10 +262,10 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     return json({ items: [execRoot, execSub], root: [execRoot], subagents: [execSub], totalExecutions: 2, subagentCount: 1 });
   }
   if (u.pathname === '/api/observe/run/minidemo01/turns') {
-    return json({ items: [perfTurn, perfTurnB, perfSubTurn, perfSubTurnB], total: 4, page: 1, pageSize: Number(u.searchParams.get('pageSize') ?? 200) });
+    return json({ items: [perfTurn, perfTurnB, perfSubTurn, perfSubTurnB, perfParentAckTurn], total: 5, page: 1, pageSize: Number(u.searchParams.get('pageSize') ?? 200) });
   }
   if (u.pathname === '/api/observe/run/minidemo01/bridges') {
-    return json({ items: [], total: 0 });
+    return json({ items: [perfBridge], total: 1 });
   }
   if (u.pathname === '/api/observe/run/minidemo01/tool-stats') {
     return json(perfToolStats);
@@ -375,14 +406,14 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(perf!.querySelector('.perf-bar-rise')).toBeNull();
     expect(perf!.querySelector('.perf-grow-x')).toBeNull();
 
-    // 跳转①：主泳道承接 subagent 结束的活跃段双击 → 该 subagent 最后一轮
+    // 跳转①：主泳道承接 subagent 结束的活跃段双击 → 父 Agent 接收回复的 turn
     const handback = perf!.querySelector('[data-root-segment-owner="rop-sub-1"]');
     expect(handback).toBeTruthy();
     ensurePushSpy().mockClear();
     await act(async () => {
       handback!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     });
-    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('turn=rop-t-sub1');
+    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('turn=rop-t-parent-ack');
 
     // 跳转②：时间线子代理条双击 → Turns 深链（该会话首轮）
     const subBar = perf!.querySelector('[data-bar="rop-exec-sub"]');

@@ -57,6 +57,8 @@ export interface BridgeItem {
   subagentType: string | null
   subagentName: string | null
   agentName: string | null
+  /** 父会话中 wait_agent 收到该 subagent 完成/错误结果的 turn（无则 null） */
+  parentResponseTurnId?: string | null
   status: string
   subagentTokens: number
   subagentLatencyMs: number
