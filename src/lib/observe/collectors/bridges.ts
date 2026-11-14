@@ -87,19 +87,23 @@ export async function collectScopeBridges(
       : Promise.resolve([]),
     // 父侧接收 turn：wait_agent 的 result 里带 subagent 状态键。按完成时刻与桥
     // response 邻接选最近一条；超时轮 result 不含 sid，天然不会命中。
-    prisma.toolCall.findMany({
-      where: {
-        toolName: 'wait_agent',
-        resultJson: { not: null },
-        turn: { sessionId: { in: memberRowIds }, isSubagent: false },
-      },
-      select: {
-        turnId: true,
-        resultJson: true,
-        completedAt: true,
-        turn: { select: { sessionId: true } },
-      },
-    }),
+    subagentSessionIds.length > 0
+      ? prisma.toolCall.findMany({
+          where: {
+            toolName: 'wait_agent',
+            resultJson: { not: null },
+            completedAt: { not: null },
+            turn: { sessionId: { in: memberRowIds }, isSubagent: false },
+            OR: subagentSessionIds.map(id => ({ resultJson: { contains: id } })),
+          },
+          select: {
+            turnId: true,
+            resultJson: true,
+            completedAt: true,
+            turn: { select: { sessionId: true } },
+          },
+        })
+      : Promise.resolve([]),
   ]);
   const executionMap = new Map(executions.map(e => [e.agentSessionId, e.agentName]));
   const turnsBySession = new Map<string, typeof subTurns>();
