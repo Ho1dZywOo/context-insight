@@ -15,7 +15,8 @@ import { listLakeBundles, uploadLakeBundle, importLakeBundle } from '@/lib/lake/
 import { resolveLakeRemote, resolveAdhocRemote, testLakeRemote, listRemoteBranches, redactRemoteSecrets, normalizeDirPrefix } from '@/lib/lake/remote';
 import { classifyLakeError, lakeLfsNotEnabledMessage } from '@/lib/lake/auth';
 import { ensureMirrorAsync, lakeProgress, listRemoteDirs, markLakePhase } from '@/lib/lake/mirror';
-import { listParadigms, listRuns, getLakeListing, invalidateCaches } from '@/lib/collection/lake-view/runs';
+import { listParadigms, listRuns, getLakeListing } from '@/lib/collection/lake-view/runs';
+import { invalidateObservationCaches } from '@/lib/observe/invalidation';
 import { getScorecard } from '@/lib/collection/lake-view/insight-data';
 import { sessionHref } from '@/lib/shared/session-link';
 import { isSoloRunId, soloTaskIdOf } from '@/lib/run/identity';
@@ -163,7 +164,7 @@ export async function POST(request: NextRequest) {
       try {
         const result = await importLakeSession(sid, prisma, remote, recording === 'native' ? 'native' : 'capture');
         // 视图聚合层 TTL 缓存失效：导入后 lake-runs 的「已导入」列即时翻转
-        invalidateCaches();
+        invalidateObservationCaches();
         // 权威深链回传：framework = 刚落库行的 recording class（分类器可能加
         // -proxy 后缀，lake meta 的裸 agent 名不可预拼）——前端跳转只认此值
         return NextResponse.json({ result, insightUrl: sessionHref(sid, result.framework ?? null) });
@@ -394,7 +395,7 @@ export async function POST(request: NextRequest) {
           if (!noteText.trim()) return NextResponse.json({ error: 'text required' }, { status: 400 });
           records = await appendNote(session, noteText);
         }
-        invalidateCaches();
+        invalidateObservationCaches();
         logInfo('route:ingest/lake', 'lake 记录已推送', { sid, kind: writeKind, paradigm: session.paradigm });
         return NextResponse.json({ sid, records });
       } catch (e) {

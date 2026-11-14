@@ -252,6 +252,63 @@ function lanesOf(dots: ChartDotVm[], cap: number): { label: string; dots: ChartD
   return lanes;
 }
 
+// ── 时间线轴模型（位置编码与刻度由「显示粒度上的跨度」单一决策） ──────────────
+// 三态：time（起止跨秒、显示上可分辨 → 位置=真实时刻比例，刻度起中末按标签
+// 去重——同文刻度是纯噪声）；instant（全部事件落在同一显示秒 → 毫秒差不足
+// 以支撑比例编码，位置退化为事件序几何、刻度收拢为一枚居中时刻）；ordinal
+// （时间戳缺失 → 事件序，轴不撒谎）。单点会话必然落 instant：一枚时刻刻度。
+
+interface TimelineTick {
+  at: number;
+  label: string;
+  anchor: "start" | "middle" | "end";
+}
+
+interface TimelineAxis {
+  mode: "time" | "instant" | "ordinal";
+  xOf: (d: ChartDotVm) => number;
+  ticks: TimelineTick[];
+}
+
+function axisOf(dots: ChartDotVm[]): TimelineAxis {
+  const n = dots.length;
+  const ordX = (d: ChartDotVm) => TL_PAD_L + (n > 1 ? (d.ord / (n - 1)) * TL_CW : TL_CW / 2);
+  if (n === 0 || !dots.every(d => d.at != null)) {
+    return {
+      mode: "ordinal",
+      xOf: ordX,
+      ticks: [
+        { at: TL_PAD_L, label: "事件序 起点", anchor: "start" },
+        { at: TL_PAD_L + TL_CW, label: "终点", anchor: "end" },
+      ],
+    };
+  }
+  const ts = dots.map(d => new Date(d.at!).getTime());
+  const tMin = Math.min(...ts);
+  const tMax = Math.max(...ts);
+  const labelOf = (t: number) => fmtClock(new Date(t).toISOString());
+  if (labelOf(tMin) === labelOf(tMax)) {
+    return {
+      mode: "instant",
+      xOf: ordX,
+      ticks: [{ at: TL_PAD_L + TL_CW / 2, label: labelOf(tMin), anchor: "middle" }],
+    };
+  }
+  const timeX = (d: ChartDotVm) => TL_PAD_L + ((new Date(d.at!).getTime() - tMin) / (tMax - tMin)) * TL_CW;
+  const marks = [
+    { t: tMin, anchor: "start" },
+    { t: (tMin + tMax) / 2, anchor: "middle" },
+    { t: tMax, anchor: "end" },
+  ] as const;
+  const ticks: TimelineTick[] = [];
+  for (const m of marks) {
+    const label = labelOf(m.t);
+    if (ticks.some(k => k.label === label)) continue;
+    ticks.push({ at: TL_PAD_L + ((m.t - tMin) / (tMax - tMin)) * TL_CW, label, anchor: m.anchor });
+  }
+  return { mode: "time", xOf: timeX, ticks };
+}
+
 // ── 时间线卡（维度无关：泳道 × run 时间 / 事件序，点按落 turn 现场） ──
 
 function TimelineCard({ title, chartKind, lanes, accent, onOpenTurn }: {
@@ -269,29 +326,7 @@ function TimelineCard({ title, chartKind, lanes, accent, onOpenTurn }: {
     lanes.forEach((l, i) => l.dots.forEach(d => m.set(d.id, i)));
     return m;
   }, [lanes]);
-
-  // x 定位：全体有时刻按时间（轴不撒谎），否则按事件序（明示口径）
-  const tl = useMemo(() => {
-    const useTime = dots.length > 0 && dots.every(d => d.at != null);
-    const tMin = useTime ? Math.min(...dots.map(d => new Date(d.at!).getTime())) : 0;
-    const tMaxRaw = useTime ? Math.max(...dots.map(d => new Date(d.at!).getTime())) : 0;
-    const tMax = tMaxRaw > tMin ? tMaxRaw : tMin + 1;
-    const n = dots.length;
-    const xOf = (d: ChartDotVm): number => {
-      if (useTime) {
-        const t = new Date(d.at!).getTime();
-        return TL_PAD_L + ((t - tMin) / (tMax - tMin)) * TL_CW;
-      }
-      return TL_PAD_L + (n > 1 ? (d.ord / (n - 1)) * TL_CW : TL_CW / 2);
-    };
-    const ticks = useTime
-      ? [tMin, (tMin + tMax) / 2, tMax].map(t => ({ at: TL_PAD_L + ((t - tMin) / (tMax - tMin)) * TL_CW, label: fmtClock(new Date(t).toISOString()) }))
-      : [
-          { at: TL_PAD_L, label: "事件序 起点" },
-          { at: TL_PAD_L + TL_CW, label: "终点" },
-        ];
-    return { useTime, xOf, ticks };
-  }, [dots]);
+  const tl = useMemo(() => axisOf(dots), [dots]);
 
   const laneY = (i: number) => TL_PAD_T + i * LANE_PITCH + LANE_PITCH / 2;
   const tlH = TL_PAD_T + TL_PAD_B + Math.max(1, lanes.length) * LANE_PITCH;
@@ -317,7 +352,7 @@ function TimelineCard({ title, chartKind, lanes, accent, onOpenTurn }: {
         <div className="mb-2 flex shrink-0 items-baseline justify-between">
           <p className="text-[13px] font-semibold text-foreground/90">{title}</p>
           <p className="text-[11px] text-muted-foreground">
-            {tl.useTime ? "run 时刻" : "事件序（时间戳缺失）"}
+            {tl.mode === "time" ? "run 时刻" : tl.mode === "instant" ? "run 时刻（同一秒内）" : "事件序（时间戳缺失）"}
             {" · "}共 {dots.length} 次
           </p>
         </div>
@@ -346,9 +381,10 @@ function TimelineCard({ title, chartKind, lanes, accent, onOpenTurn }: {
             {tl.ticks.map((t, i) => (
               <text
                 key={i}
+                data-skill-tick
                 x={t.at}
                 y={tlH - 6}
-                textAnchor={i === 0 ? "start" : i === tl.ticks.length - 1 ? "end" : "middle"}
+                textAnchor={t.anchor}
                 fontSize="8.5"
                 className="fill-muted-foreground tabular-nums"
               >

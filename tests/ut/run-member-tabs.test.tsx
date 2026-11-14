@@ -158,14 +158,14 @@ afterEach(() => {
 })
 
 describe('run-first 刀I3：能力闸挂载（Wire/Replay/Score + solo Audit）', () => {
-  it('solo Audit 能力闸：四域审计板（solo = 单成员退化，装配数据走 run 级端点）', async () => {
+  it('solo Audit 能力闸：三域审计板（solo = 单成员退化，装配数据走 run 级端点）', async () => {
     await renderSolo('?tab=audit')
     const audit = document.querySelector('[data-run-tab="audit"]')
     expect(audit).toBeTruthy()
     expect(audit!.classList.contains('hidden')).toBe(false)
     const text = audit!.textContent ?? ''
-    // 四域分段：Skill / Agent / Workflow / Run（solo 与 bundle 同一组件，单成员退化）
-    for (const d of ['Skill', 'Agent', 'Workflow', 'Run']) {
+    // 三域分段：Skill / Agent / Workflow（solo 与 bundle 同一组件，单成员退化）
+    for (const d of ['Skill', 'Agent', 'Workflow']) {
       expect(text).toContain(d)
     }
     // 装配数据走 run 级 skills 端点（零 member 参数，成员归因在事件里）

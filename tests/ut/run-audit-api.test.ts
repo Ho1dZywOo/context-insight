@@ -9,14 +9,12 @@
 // run 级对账端点 IT：双编排路径验证——
 // ① `--run` 原生对账（源 bundle 在盘）：spawn 带 --run 不带 --transcript，result
 //    事件 _members 由 report.run.units × sessionId 权威映射；
-// ② DB transcript 回落（solo run / 源目录已删 / root 域 / S1 型 run 域）：全体
-//    成员各物化一个 transcript 文件（受控成员标签命名）+ 一次 spawn + result
-//    事件 _members；`--kind` 切片名（`{stem}-{name}-{ti}-{i}.jsonl`，即
-//    findings.transcript）按 stem 前缀回映射成员；
-// ③ run 域：编排规程层声明 × 全体成员整会话——S2 型（有真名）走 --run 宽松
-//    模式（无 --kind），S1 型（无真名）回落 DB 路径（恒无 --kind）；
-// ④成员子集/未知成员/无会话；⑤agent 域 system 注入恢复；⑥root 域恒单成员
-//    （组合声明 + _layers）；⑦声明恢复失败 404/503。
+// ② DB transcript 回落（solo run / 源目录已删 / root 域）：全体成员各物化一个
+//    transcript 文件（受控成员标签命名）+ 一次 spawn + result 事件 _members；
+//    `--kind` 切片名（`{stem}-{name}-{ti}-{i}.jsonl`，即 findings.transcript）
+//    按 stem 前缀回映射成员；
+// ③成员子集/未知成员/无会话；④agent 域 system 注入恢复；⑤root 域恒单成员
+//    （组合声明 + _layers）；⑥声明恢复失败 404/503。
 // 声明恢复与 records 序列化的内部逻辑由 sift-audit 既有测试覆盖，此处以桩注入。
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -42,11 +40,9 @@ const fakePrisma = {
 }
 vi.mock("@/lib/db", () => ({ prisma: fakePrisma }))
 
-const { recoverSkillBodyMock, recoverCombinedMock, recoverWorkflowMock, resolveWorkflowNameMock, buildRecordsMock, recoverAgentSystemMock, scanRootMock } = vi.hoisted(() => ({
+const { recoverSkillBodyMock, recoverCombinedMock, buildRecordsMock, recoverAgentSystemMock, scanRootMock } = vi.hoisted(() => ({
   recoverSkillBodyMock: vi.fn(),
   recoverCombinedMock: vi.fn(),
-  recoverWorkflowMock: vi.fn(),
-  resolveWorkflowNameMock: vi.fn(),
   buildRecordsMock: vi.fn(),
   recoverAgentSystemMock: vi.fn(),
   scanRootMock: vi.fn(),
@@ -57,8 +53,6 @@ vi.mock("@/lib/sift-audit", async (importOriginal) => {
     ...actual,
     recoverSkillBody: recoverSkillBodyMock,
     recoverCombinedWorkflowDeclaration: recoverCombinedMock,
-    recoverWorkflowDeclaration: recoverWorkflowMock,
-    resolveWorkflowSkillName: resolveWorkflowNameMock,
     buildStructuredRecords: buildRecordsMock,
   }
 })
@@ -197,8 +191,6 @@ beforeEach(() => {
   fakePrisma.interactionBridge.findMany.mockReset().mockResolvedValue([])
   recoverSkillBodyMock.mockReset()
   recoverCombinedMock.mockReset()
-  recoverWorkflowMock.mockReset()
-  resolveWorkflowNameMock.mockReset().mockResolvedValue(null)
   buildRecordsMock.mockReset().mockImplementation(async (id: string) => [{ type: "user", text: `records-of-${id}`, ts: 0, parent_tool_use_id: null, agent: null }])
   recoverAgentSystemMock.mockReset().mockReturnValue(null)
   scanRootMock.mockReset().mockReturnValue(null)
@@ -356,114 +348,6 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
     const [, args] = spawnMock.mock.calls[0]
     expect(args).not.toContain("--run")
     expect(transcriptArgsOf(args)).toHaveLength(2)
-  })
-
-  it("run 域 S2 型：规程层声明 × 全 run，--run 宽松模式（无 --kind）+ 真名锚定 + units 归因", async () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rsd-audit-runmode-"))
-    const bundleDir = path.join(tmpRoot, "bundle")
-    fs.mkdirSync(path.join(bundleDir, "sessions"), { recursive: true })
-    fs.writeFileSync(path.join(bundleDir, "workflow.schema.json"), "{}")
-    fs.writeFileSync(path.join(bundleDir, "workflow.json"), '{"schema":"workflow-bundle","version":1}')
-    try {
-      readRunMock.mockReturnValue({
-        runId: RUN_ID,
-        manifest: null,
-        index: null,
-        meta: { schema: "insight-run-import", version: 1, data: { importedAt: "", sourceDir: bundleDir, manifestFile: "workflow.json", exportDataComplete: true, sessions: { total: 0, imported: 0, existing: 0, missingFile: 0, failed: 0 }, failures: [], warnings: [] } },
-      })
-      recoverWorkflowMock.mockResolvedValue({ content: "REGULATION BODY: 必须先跑测试", source: "task-prompts.md" })
-      resolveWorkflowNameMock.mockResolvedValue("orchestrator")
-      spawnMock.mockImplementation(
-        happySpawn({
-          ...FAKE_REPORT,
-          transcripts: ["ses_a.json", "ses_b.json"],
-          findings: [
-            { instruction_text: "必须先跑测试", source: "CONSTRAINT", verdict: "PASS", method: "PROGRAMMATIC", category: "prohibition", evidence: "ok", seq: 0, transcript: "ses_a.json" },
-            { instruction_text: "必须先跑测试", source: "CONSTRAINT", verdict: "FAIL", method: "PROGRAMMATIC", category: "prohibition", evidence: "bad", seq: 1, transcript: "ses_b.json" },
-          ],
-          run: {
-            runId: RUN_ID,
-            bundlePath: "bundle",
-            matchedSessionCount: 2,
-            targetCallCount: 2,
-            auditUnitCount: 2,
-            units: [
-              { auditUnitId: "ses_a.json", memberId: "m1", sessionId: "ses_a", source: "sessions/ses_a.native/ses_a.jsonl", scope: "session", matchedToolUseIds: ["u1"] },
-              { auditUnitId: "ses_b.json", memberId: "m2", sessionId: "ses_b", source: "sessions/ses_b.native/ses_b.jsonl", scope: "session", matchedToolUseIds: ["u2"] },
-            ],
-          },
-        }),
-      )
-
-      const res = await callRoute({ kind: "run", name: "ses_a", members: ["ses_a", "ses_b"] })
-      expect(res.status).toBe(200)
-
-      const events = (await readNdjson(res)) as Array<{
-        stage: string
-        report: { run?: { matchedSessionCount: number } }
-        _layers?: Array<{ kind: string; label: string }>
-        _members?: Record<string, { taskId: string }>
-      }>
-      const last = events.at(-1)!
-      expect(last.stage).toBe("result")
-      expect(last.report.run?.matchedSessionCount).toBe(2)
-      // 宽松模式：审计单元 = 整会话（scope=session），成员归因按 units × sessionId
-      expect(last._members).toEqual({
-        "ses_a.json": { taskId: "ses_a", label: "成员A", framework: "opencode" },
-        "ses_b.json": { taskId: "ses_b", label: "成员B", framework: "opencode" },
-      })
-      // run 域声明只带规程层（finding 归层徽章）
-      expect(last._layers).toEqual([
-        { kind: "regulation", label: "编排规程", source: "task-prompts.md", content: "REGULATION BODY: 必须先跑测试" },
-      ])
-
-      // 声明物化（流收尾后桩已落袋）：规程层正文 + 真名 frontmatter（--run 按名匹配 bundle 成员）
-      expect(written.declaration).toContain("name: orchestrator")
-      expect(written.declaration).toContain("REGULATION BODY")
-
-      const [, args] = spawnMock.mock.calls[0]
-      expect(args[args.indexOf("--run") + 1]).toBe(bundleDir)
-      // 宽松对账：无 --kind（整会话不切段）、无 --transcript（sift 原生选成员）
-      expect(args).not.toContain("--kind")
-      expect(transcriptArgsOf(args)).toEqual([])
-    } finally {
-      fs.rmSync(tmpRoot, { recursive: true, force: true })
-    }
-  })
-
-  it("run 域 S1 型（无真名）：sift 无法按名匹配 → 回落 DB 全成员 transcript（无 --kind）", async () => {
-    recoverWorkflowMock.mockResolvedValue({ content: "TURN0 REGULATION", source: "turn0 (注入编排规程)" })
-    resolveWorkflowNameMock.mockResolvedValue(null)
-    spawnMock.mockImplementation(happySpawn())
-
-    const res = await callRoute({ kind: "run", name: "ses_a" })
-    expect(res.status).toBe(200)
-
-    const events = (await readNdjson(res)) as Array<{ _layers?: Array<{ kind: string }> }>
-    expect(events.at(-1)!._layers).toEqual([
-      { kind: "regulation", label: "编排规程", source: "turn0 (注入编排规程)", content: "TURN0 REGULATION" },
-    ])
-
-    // 声明物化（流收尾后桩已落袋）：S1 型无真名 → 合成名 frontmatter
-    expect(written.declaration).toContain("name: 主 agent 编排")
-    expect(written.declaration).toContain("TURN0 REGULATION")
-    // 全体成员各物化一个 transcript（缺省 members = run 全体）
-    expect(Object.keys(written.transcripts).sort()).toEqual(["成员A.json", "成员B.json"])
-
-    const [, args] = spawnMock.mock.calls[0]
-    expect(args).not.toContain("--run")
-    expect(args).not.toContain("--kind")
-    expect(transcriptArgsOf(args)).toHaveLength(2)
-  })
-
-  it("run 域：声明不可恢复 → 404；声明源成员不在 run → 400", async () => {
-    recoverWorkflowMock.mockResolvedValue(null)
-    const res = await callRoute({ kind: "run", name: "ses_a" })
-    expect(res.status).toBe(404)
-    await expect(res.json()).resolves.toMatchObject({ reason: "no-declaration" })
-
-    const res2 = await callRoute({ kind: "run", name: "ghost" })
-    expect(res2.status).toBe(400)
   })
 
   it("成员子集：只物化选中成员的 transcript", async () => {

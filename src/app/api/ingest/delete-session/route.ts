@@ -12,7 +12,7 @@ import { withRouteLog } from '@/lib/api-route';
 import { logInfo, logWarn } from '@/lib/logger';
 import { cascadeDeleteSessionRows } from '@/lib/ingest/session-cascade';
 import { archiveSessionsToRecycle } from '@/lib/recycle';
-import { invalidateCaches } from '@/lib/collection/lake-view/runs';
+import { invalidateObservationCaches } from '@/lib/observe/invalidation';
 
 // Delete a session and ALL its child rows. SQLite foreign-key cascade is not
 // reliably enforced (PRAGMA state varies), so child rows are removed explicitly
@@ -44,8 +44,8 @@ export const DELETE = withRouteLog('ingest/delete-session', async (request: Next
       prisma.session.deleteMany({}),
     ]);
     logInfo('route:ingest/delete-session', '全库清空', { deleteAll: true, deleted: count });
-    // 湖列表/评分/活跃缓存失效：删除后 lake 视图与概览不再显示已删会话
-    invalidateCaches();
+    // 观测缓存单点失效（作用域行 id + 湖列表/评分/活跃）：删除后 lake 视图与概览不再显示已删会话
+    invalidateObservationCaches();
     return NextResponse.json({ deleted: count });
   }
 
@@ -62,7 +62,7 @@ export const DELETE = withRouteLog('ingest/delete-session', async (request: Next
       }
     }
     logInfo('route:ingest/delete-session', '批量删除完成', { batch: batchSessions.length, deleted });
-    invalidateCaches();
+    invalidateObservationCaches();
     return NextResponse.json({ deleted, batch: batchSessions.length });
   }
 
@@ -96,6 +96,6 @@ export const DELETE = withRouteLog('ingest/delete-session', async (request: Next
     await cascadeDeleteSession(s.id);
   }
   logInfo('route:ingest/delete-session', '会话已删除', { taskId, framework: framework ?? '', deleted: sessions.length });
-  invalidateCaches();
+  invalidateObservationCaches();
   return NextResponse.json({ deleted: sessions.length, taskId });
 });

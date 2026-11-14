@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import { importSession } from '@/lib/ingest/data-service';
+import { invalidateObservationCaches } from '@/lib/observe/invalidation';
 import {
   isKnownSource,
   isUmbrellaSource,
@@ -108,6 +109,9 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await importSession(filePath, effectiveSessionId, prisma, filePath, resolved.sourceType);
+    // 导入（含合并进已有会话）改写了会话行 → 观测缓存单点失效（run 作用域
+    // 行 id、lake 视图列表/评分卡；缺失效则重导后 60s 内观测端点按旧行查）
+    invalidateObservationCaches();
 
     // 导入后的会话归属（framework/version）以 DB 为准 —— proxy 捕获按文件内
     // source 标记归属（opencode-proxy → opencode），路径/文件名猜不出。

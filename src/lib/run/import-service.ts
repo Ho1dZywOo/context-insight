@@ -22,6 +22,7 @@ import { parseManifest, buildIndex, type RunIndex } from './reader';
 import { MANIFEST_FILENAMES, WORKFLOW_SCHEMA_FILE, type RunManifest } from './model';
 import { validateWithBundleSchema } from './schema-validate';
 import { saveRun, runsRoot, readRun, isSafeRunId } from './run-store';
+import { invalidateObservationCaches } from '@/lib/observe/invalidation';
 import { BUNDLE_REPORT_FILE } from '../lake/bundle-layout';
 
 export interface BundleValidation {
@@ -372,6 +373,10 @@ export async function runImportJob(
     }
   }
   state.currentSid = null;
+
+  // 会话行已由 importSession 改写（新建 / 幂等合并）→ 观测缓存单点失效：
+  // run 作用域缓存持有成员行 id，重导换行后不失效会按死行 id 静默查空
+  invalidateObservationCaches();
 
   // 3. finalize：import.json 汇总
   saveRun(

@@ -7,11 +7,10 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// Run Audit tab：四域审计（Skill / Agent / Workflow / Run），全部站在 run 层面。
+// Run Audit tab：三域审计（Skill / Agent / Workflow），全部站在 run 层面。
 // 左栏 = 域导航 + 当前域的目标列表；右栏 = 对账内容（选中目标 → sift 对账报告，
 // 未选 → 域导览）。skill/agent 域 = 目标注册表（跨成员合并 + 成员归因）；workflow
-// 域 = 成员主 agent 编排组合声明（root 切段，恒单成员）；run 域 = 编排规程声明
-// × 全 run 成员整会话（sift 宽松对账，源 bundle 在盘走 --run 原生）。对账结果经
+// 域 = 成员主 agent 编排组合声明（root 切段，恒单成员）。对账结果经
 // skill-audit-job 的 run 级键缓存（cross-tab resume + sessionStorage）。solo run
 // 走同一组件（单成员退化，无需特判）。
 
@@ -19,7 +18,7 @@ import { useEffect, useMemo, useRef, useState, memo } from "react";
 import { useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { BoxesIcon, BotIcon, FileSearchIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
+import { BotIcon, FileSearchIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
 import {
   subscribeSkillAudit,
   getSkillAuditSnapshot,
@@ -36,7 +35,7 @@ import type { RunMemberRow } from "@/lib/run/member-rows";
 import { AuditReportPanel } from "@/components/run/audit/AuditReportPanel";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
 
-type AuditDomain = "skill" | "agent" | "workflow" | "run";
+type AuditDomain = "skill" | "agent" | "workflow";
 
 interface SkillsResponse {
   events: Array<{ skillName: string; eventType: string; member: { taskId: string; label: string | null } | null }>;
@@ -57,10 +56,9 @@ function fmtInt(n: number): string {
 const SPRING = "duration-300 [animation-timing-function:cubic-bezier(0.32,0.72,0,1)]"
 
 const DOMAINS: Array<{ key: AuditDomain; label: string; icon: typeof SparklesIcon; desc: string }> = [
-  { key: "skill", label: "Skill", icon: SparklesIcon, desc: "skill 声明 × 涉事成员全体 transcript——按调用段切分对账；源 bundle 在盘时走 sift --run 原生对账。" },
-  { key: "agent", label: "Agent", icon: BotIcon, desc: "agent .md 声明 × 涉事成员——按派发段切分对账；源 bundle 在盘时走 sift --run 原生对账。" },
-  { key: "workflow", label: "Workflow", icon: WorkflowIcon, desc: "主 agent 编排组合声明（规程层 + 计划层）× 该成员会话 root 段——编排声明是成员私有，恒单成员对账。" },
-  { key: "run", label: "Run", icon: BoxesIcon, desc: "编排规程声明 × 全 run 成员整会话——宽松对账不切段，审的是全员编排纪律；源 bundle 在盘时走 sift --run 原生。" },
+  { key: "skill", label: "Skill", icon: SparklesIcon, desc: "skill 声明 × 会话实际轨迹对账" },
+  { key: "agent", label: "SubAgent", icon: BotIcon, desc: "Subagent 定义声明 × 会话实际轨迹对账" },
+  { key: "workflow", label: "Workflow", icon: WorkflowIcon, desc: "RootAgent 编排声明 × 该成员会话轨迹对账" },
 ]
 
 // ── 目标行状态徽标（各域共用：job 快照 → 文案/颜色） ────────────────────────
@@ -181,63 +179,6 @@ const WorkflowRow = memo(function WorkflowRow({
       </span>
       <span className="mt-0.5 block truncate text-[11px] text-muted-foreground" title={member.taskId}>
         {member.displayName}
-      </span>
-    </button>
-  )
-})
-
-// ── run 域目标行（编排规程声明 × 全 run，声明源成员一行） ────────────────────
-
-const RunRow = memo(function RunRow({
-  runId,
-  declarer,
-  memberCount,
-  probing,
-  selected,
-  onSelect,
-}: {
-  runId: string
-  declarer: RunMemberRow | null
-  memberCount: number
-  probing: boolean
-  selected: boolean
-  onSelect: () => void
-}) {
-  const key = declarer ? runAuditKey(runId, "run", declarer.taskId) : null
-  const job = useSyncExternalStore(
-    subscribeSkillAudit,
-    () => getSkillAuditSnapshot(key ?? "__none__"),
-    getSkillAuditServerSnapshot,
-  )
-
-  const badge = (() => {
-    if (!declarer) return probing
-      ? { text: "探测声明…", cls: "text-muted-foreground/60" }
-      : { text: "无可恢复声明", cls: "text-muted-foreground/60" }
-    return jobBadge(job)
-  })()
-
-  return (
-    <button
-      type="button"
-      data-audit-target={declarer ? `run:${declarer.taskId}` : "run:none"}
-      disabled={!declarer}
-      onClick={onSelect}
-      className={cn(
-        "flex w-full cursor-pointer flex-col gap-1 px-3 py-3 text-left transition-colors duration-150 active:bg-accent/70",
-        declarer ? (selected ? "bg-accent/60" : "hover:bg-accent/40") : "cursor-not-allowed opacity-60",
-      )}
-    >
-      <span className="flex min-w-0 items-baseline gap-2">
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">主 agent 编排 × 全 run</span>
-        <span className={cn("shrink-0 whitespace-nowrap text-[11px] font-medium", badge.cls)}>{badge.text}</span>
-      </span>
-      <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
-        {declarer
-          ? `声明源 ${declarer.displayName} · ${memberCount} 个成员整会话（宽松对账，不切段）`
-          : probing
-            ? "正在探测各成员的编排声明可恢复性…"
-            : "本 run 无可恢复的编排规程声明（无主 agent Skill invoke / 无 turn0 注入）"}
       </span>
     </button>
   )
@@ -409,18 +350,6 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
   // dispatches；事件源=真实派发段，member 源=成员种群不入 agent 域）
   const agentTargets = useMemo(() => deriveAgentTargetsFromDispatches(dispatches), [dispatches])
 
-  // run 域声明源：首个编排声明可恢复的成员（各成员注入同一份 run 级规程，
-  // 取首即可；漂移在 workflow 域按成员对账审视）
-  const declarer = useMemo(
-    () => members.find(m => workflowAvail.get(m.taskId)?.available) ?? null,
-    [members, workflowAvail],
-  )
-  const declarerKey = declarer?.taskId ?? ""
-  const probing = useMemo(
-    () => (domain === "workflow" || domain === "run") && members.some(m => !workflowAvail.has(m.taskId)),
-    [domain, members, workflowAvail],
-  )
-
   // sessionStorage 恢复（reload / 切 tab 回来）：全部域的既有结果灌回 store
   useEffect(() => {
     if (!loaded) return
@@ -428,13 +357,12 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
       ...skillTargets.map(t => ({ kind: "skill" as const, name: t.name })),
       ...agentTargets.map(t => ({ kind: "agent" as const, name: t.name })),
       ...members.map(m => ({ kind: "root" as const, name: m.taskId })),
-      ...(declarerKey ? [{ kind: "run" as const, name: declarerKey }] : []),
     ])
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId, loaded, declarerKey])
+  }, [runId, loaded])
 
-  // 编排声明可恢复性探测：挂载即探（左栏导航的 Run 域目标计数依赖声明源），
-  // 每成员一次即缓存，进 workflow/run 域无需等待
+  // 编排声明可恢复性探测：挂载即探（workflow 域目标行的可对账徽标依赖），
+  // 每成员一次即缓存，进 workflow 域无需等待
   useEffect(() => {
     let cancelled = false
     for (const m of members) {
@@ -461,14 +389,6 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
   )
 
   const introTiles = useMemo(() => {
-    if (domain === "run") {
-      const audited = declarer && getSkillAuditSnapshot(runAuditKey(runId, "run", declarer.taskId)).result != null
-      return [
-        { label: "对账范围", value: `${members.length} 成员` },
-        { label: "声明源", value: declarer?.displayName ?? "不可用", danger: !declarer && !probing },
-        { label: "已审", value: audited ? "1" : "0" },
-      ]
-    }
     if (domain === "workflow") {
       const ok = [...workflowAvail.values()].filter(v => v.available).length
       return [
@@ -484,7 +404,7 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
       { label: "已审", value: fmtInt(audited) },
       { label: "涉事成员", value: fmtInt(memberSet.size) },
     ]
-  }, [domain, targets, members, runId, workflowAvail, declarer, probing])
+  }, [domain, targets, members, runId, workflowAvail])
 
   const select = (sel: SelectedTarget | null) => {
     setSelected(sel);
@@ -508,21 +428,11 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
     select({ kind: "root", name: m.taskId, title: "主 agent 编排", members: [m.taskId] })
   }
 
-  const selectRunTarget = () => {
-    if (!declarer) return
-    if (selected?.kind === "run" && selected.name === declarer.taskId) {
-      select(null);
-      return;
-    }
-    select({ kind: "run", name: declarer.taskId, title: "主 agent 编排 × 全 run", members: members.map(m => m.taskId) })
-  }
-
   const activeDomain = DOMAINS.find(d => d.key === domain)!
   const domainCount = (key: AuditDomain): number => {
     if (key === "skill") return skillTargets.length
     if (key === "agent") return agentTargets.length
-    if (key === "workflow") return members.length
-    return declarer ? 1 : 0
+    return members.length
   }
 
   // 启动卡的目标摘要（域感知：目标名之外的必要上下文一行带齐）
@@ -536,8 +446,8 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
       const m = members.find(x => x.taskId === selected.name)
       return m ? `${m.displayName} · 规程层 + 计划层组合声明` : ""
     }
-    return declarer ? `声明源 ${declarer.displayName} · 全 run ${members.length} 个成员整会话` : ""
-  }, [selected, skillTargets, agentTargets, members, declarer])
+    return ""
+  }, [selected, skillTargets, agentTargets, members])
 
   // 已有结局（结果/运行中/失败）的目标选中即直接展示报告——选中只对未审目标弹启动卡
   const selJob = selected ? getSkillAuditSnapshot(runAuditKey(runId, selected.kind, selected.name)) : null
@@ -588,16 +498,7 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
           key={domain}
           className="min-h-0 flex-1 divide-y divide-foreground/[0.06] overflow-y-auto overflow-x-hidden animate-in fade-in slide-in-from-bottom-1 fill-mode-backwards duration-300 [animation-timing-function:cubic-bezier(0.32,0.72,0,1)]"
         >
-          {domain === "run" ? (
-            <RunRow
-              runId={runId}
-              declarer={declarer}
-              memberCount={members.length}
-              probing={probing}
-              selected={selected?.kind === "run"}
-              onSelect={selectRunTarget}
-            />
-          ) : domain === "workflow" ? (
+          {domain === "workflow" ? (
             members.map(m => {
               const avail = workflowAvail.get(m.taskId)?.available ?? null
               return (

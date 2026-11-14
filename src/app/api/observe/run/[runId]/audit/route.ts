@@ -6,17 +6,15 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// POST /api/observe/run/[runId]/audit —— run 级 sift 对账（四域审计的执行面）。
-// 声明单元（skill / agent .md / 主 agent 编排 root / run 级编排规程）对账本 run
-// 涉事成员的 transcript，两条编排路径：
+// POST /api/observe/run/[runId]/audit —— run 级 sift 对账（三域审计的执行面）。
+// 声明单元（skill / agent .md / 主 agent 编排 root）对账本 run 涉事成员的
+// transcript，两条编排路径：
 // - 源 bundle 在盘（import.json sourceDir + workflow.schema.json 契约齐全）：
 //   skill/agent 域走 sift `--run`（guixu PR #9）——sift 原生枚举清单成员、匹配
 //   目标调用、转换 .native 会话（保留原生 tool_use id 与子会话派生关系），
 //   报告带 run 溯元数据（命中会话/调用数 + units 审计单元映射），成员归因按
 //   report.run.units × sessionId 映射（_memberBySession 随流回传解析）。
-//   run 域同走 `--run` 但不带 --kind（宽松模式：声明真名匹配到的成员整会话
-//   对账，不切调用段）；S1 型声明（turn0 注入无真名）无法按名匹配 → 回落。
-// - 无源 bundle（solo run / 目录已删 / root 域 / S1 型 run 域）：每成员会话经
+// - 无源 bundle（solo run / 目录已删 / root 域）：每成员会话经
 //   buildStructuredRecords 序列化成独立 transcript 文件，一次 `sift audit` 多
 //   `--transcript`（sift 原生支持，可重复）跑完，跨成员聚合语义由 sift 的
 //   InstructionAggregate（pass/fail_count、fail_in_transcripts）直接产出。
@@ -30,8 +28,6 @@
 //   （AGENTS_SCAN_ROOT，多插件按涉事会话派发集合消歧）。
 // - root：主 agent 编排组合声明（规程层 + 计划层）——编排声明是成员私有
 //   （各成员各有一份），恒单成员对账。
-// - run：声明源成员（name）的编排规程层（"怎么干"，跨成员可共享）× 全体
-//   成员整会话——计划层（STATE.md）是成员私有任务承诺，不入 run 级对账。
 
 import { NextResponse } from 'next/server';
 import fs from 'node:fs';
@@ -44,9 +40,6 @@ import { resolveRunBundleDir } from '@/lib/run/bundle-source';
 import {
   recoverSkillBody,
   recoverCombinedWorkflowDeclaration,
-  recoverWorkflowDeclaration,
-  resolveWorkflowSkillName,
-  MAIN_AGENT_WORKFLOW_NAME,
   buildStructuredRecords,
 } from '@/lib/sift-audit';
 import { recoverAgentMdFromSystem } from '@/lib/agent-md-session-recover';
@@ -58,8 +51,8 @@ import { logError } from '@/lib/logger';
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 
 interface AuditRequestBody {
-  kind?: 'skill' | 'agent' | 'root' | 'run';
-  /** skill/agent = 目标名；root = 声明成员 taskId；run = 声明源成员 taskId。 */
+  kind?: 'skill' | 'agent' | 'root';
+  /** skill/agent = 目标名；root = 声明成员 taskId。 */
   name?: string;
   /** 涉事成员 taskId 列表；缺省 = run 全体成员（root 恒单成员）。 */
   members?: string[];
@@ -107,12 +100,6 @@ export const POST = withRouteLog(
         { status: 400 },
       );
     }
-    if (kind === 'run' && !scope.members.some(m => m.taskId === name)) {
-      return NextResponse.json(
-        { error: `声明源成员不在本 run: ${name}`, reason: 'bad-request' },
-        { status: 400 },
-      );
-    }
 
     // 成员 → 会话（同 sid 双会话形态按 framework 消歧；scope 成员自带 framework）
     const memberRefs = scope.members.filter(m => wanted.includes(m.taskId));
@@ -137,9 +124,6 @@ export const POST = withRouteLog(
     try {
       let skillPath: string;
       let layers: AuditLayerInfo[] | undefined;
-      // run 域（--run 宽松）声明锚定的真名：S2 型主 agent Skill invoke 的 skill 名；
-      // null（S1 型 turn0 注入）时 sift 无法按名匹配 bundle 成员，回落 DB 路径。
-      let workflowRealName: string | null = null;
       if (kind === 'skill') {
         let body: string | null = null;
         for (const m of withSession) {
@@ -203,33 +187,6 @@ export const POST = withRouteLog(
           }
           skillPath = resolved.mdPath;
         }
-      } else if (kind === 'run') {
-        // run 域：声明源成员（name = taskId）的规程层声明 × 全体成员整会话。
-        // 只取编排规程层（"怎么干"，跨成员可共享）；计划层（STATE.md，"干什么"）
-        // 是成员私有任务承诺，对其他成员只会产生 N/A 噪声，不入 run 级对账。
-        const declarerSession = sessions.get(name);
-        if (!declarerSession) {
-          return NextResponse.json(
-            { error: `声明源成员 ${name} 无已导入会话`, reason: 'no-sessions' },
-            { status: 404 },
-          );
-        }
-        const regulation = await recoverWorkflowDeclaration(declarerSession.id, prisma);
-        if (!regulation) {
-          return NextResponse.json(
-            { error: '声明源成员会话无可恢复的编排规程声明（无主 agent Skill invoke 的 skill 正文 / 无 turn0 注入）', reason: 'no-declaration' },
-            { status: 404 },
-          );
-        }
-        workflowRealName = await resolveWorkflowSkillName(declarerSession.id, prisma);
-        const dir = path.join(tmp, 'run-declaration');
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(
-          path.join(dir, 'SKILL.md'),
-          `---\nname: ${workflowRealName ?? MAIN_AGENT_WORKFLOW_NAME}\ndescription: recovered from run member session\n---\n${regulation.content}\n`,
-        );
-        skillPath = dir;
-        layers = [{ kind: 'regulation', label: '编排规程', source: regulation.source, content: regulation.content }];
       } else {
         // root：单成员的组合声明
         const m = withSession[0]!;
@@ -260,9 +217,7 @@ export const POST = withRouteLog(
       const outputDir = path.join(tmp, 'out');
       fs.mkdirSync(outputDir, { recursive: true });
 
-      // run 域走宽松模式（无 --kind，整会话不切分）；S1 型声明（turn0 注入）无
-      // 真名，sift 无法按名匹配 bundle 成员 → 不走 --run，回落 DB 路径。
-      if (kind !== 'root' && !(kind === 'run' && workflowRealName == null)) {
+      if (kind !== 'root') {
         const bundleDir = resolveRunBundleDir(runId);
         if (bundleDir) {
           const memberBySession: Record<string, AuditMemberRef> = {};
@@ -270,7 +225,7 @@ export const POST = withRouteLog(
             memberBySession[m.taskId] = { taskId: m.taskId, label: m.label, framework: m.framework };
           }
           const runArgs: string[] = ['audit', skillPath, '--run', bundleDir, '-o', outputDir, '--turn-refs'];
-          if (kind !== 'run') runArgs.push('--kind', kind);
+          runArgs.push('--kind', kind);
           return makeStreamingAuditResponse(
             runArgs,
             outputDir,
@@ -295,7 +250,7 @@ export const POST = withRouteLog(
         members[fileName] = { taskId: m.taskId, label: m.label, framework: m.framework };
       }
       args.push('-o', outputDir);
-      if (kind !== 'run') args.push('--kind', kind);
+      args.push('--kind', kind);
       args.push('--turn-refs');
 
       return makeStreamingAuditResponse(
