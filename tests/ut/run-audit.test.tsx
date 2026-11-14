@@ -8,13 +8,12 @@
 
 // @vitest-environment happy-dom
 
-// Run 详情 Audit tab IT（四域审计重构）：URL 感知 fetch mock 驱动页面级验证——
+// Run 详情 Audit tab IT（三域审计重构）：URL 感知 fetch mock 驱动页面级验证——
 // ①Skill 域目标注册表（跨成员合并 + 成员归因 pills，dispatch 目标分域不串）；
 // ②选中目标 → 启动卡显式发起（选中 ≠ 发起）→ run 级对账（POST run audit
 // 端点，NDJSON 流式 result 事件 → 报告自渲染：五态瓦片 + 指令组 + finding
 // 成员归因徽标；已有结果选中即直接展示——resume 语义）；③Agent 域（dispatch 目标
-// 单成员对账）；④Workflow 域（成员编排声明可恢复性探测 + root 单成员对账）；
-// ⑤Run 域（左域导航布局 + 编排规程声明 × 全 run 的 sift run 级对账）。
+// 单成员对账）；④Workflow 域（成员编排声明可恢复性探测 + root 单成员对账）。
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
@@ -265,36 +264,6 @@ vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (kind === 'agent') {
       return ndjsonResponse([auditResultEvent(1, 2, '成员B.json', '成员B 的子代理未按声明执行', '子代理须遵守 .md 声明')]);
     }
-    if (kind === 'run') {
-      return ndjsonResponse([
-        {
-          stage: 'result',
-          percent: 100,
-          report: {
-            skill_name: 'orchestrator',
-            transcripts: ['成员A.json', '成员B.json'],
-            summary: { total: 2, pass: 1, fail: 1, na: 0, unresolved: 0, indeterminate: 0 },
-            findings: [
-              {
-                instruction_text: '必须先跑测试', headline: '按编排规程收尾', source: 'CONSTRAINT',
-                verdict: 'PASS', method: 'PROGRAMMATIC', category: 'prohibition',
-                evidence: '成员A 全程遵守规程', transcript: '成员A.json',
-              },
-              {
-                instruction_text: '必须先跑测试', headline: '按编排规程收尾', source: 'CONSTRAINT',
-                verdict: 'FAIL', method: 'PROGRAMMATIC', category: 'prohibition',
-                evidence: '成员B 未按规程收尾', transcript: '成员B.json', turn_refs: [3],
-              },
-            ],
-            run: { runId: 'minidemo01', bundlePath: 'bundle', matchedSessionCount: 2, targetCallCount: 2, auditUnitCount: 2, units: [], warnings: [] },
-          },
-          _members: memberMap,
-          _layers: [
-            { kind: 'regulation', label: '编排规程', source: 'task-prompts.md', content: '规程：必须先跑测试后方可收尾' },
-          ],
-        },
-      ]);
-    }
     return ndjsonResponse([{ stage: 'result', percent: 100, report: { ...skillReport, run: { runId: 'minidemo01', bundlePath: 'bundle', matchedSessionCount: 2, targetCallCount: 3, auditUnitCount: 3, units: [], warnings: [] } }, _members: memberMap }]);
   }
   return json({ items: [], total: 0 });
@@ -358,7 +327,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-describe('Run 详情 Audit tab（四域审计重构）', () => {
+describe('Run 详情 Audit tab（三域审计重构）', () => {
   it('Skill 域目标注册表：跨成员合并 + 成员归因，dispatch 目标分域不串', async () => {
     await renderPage('?tab=audit');
 
@@ -570,73 +539,5 @@ describe('Run 详情 Audit tab（四域审计重构）', () => {
     });
     expect(panel!.textContent).toContain('成员A 按规程编排执行');
     expect(panel!.textContent).toContain('编排规程');
-  });
-
-  it('Run 域：左域导航布局 + 编排规程声明 × 全 run 的 sift run 级对账', async () => {
-    await renderPage('?tab=audit');
-
-    // 左栏域导航：四域在列；右栏域导览引导
-    const tab = document.querySelector('[data-run-tab="audit"]');
-    for (const d of ['skill', 'agent', 'workflow', 'run']) {
-      expect(tab!.querySelector(`[data-audit-domain="${d}"]`)).toBeTruthy();
-    }
-    expect(tab!.textContent).toContain('从左侧选择目标开始对账');
-    // 左栏从画布截出（发丝分区隔左右），不再叠卡片
-    const aside = tab!.querySelector('aside');
-    expect(aside?.className).toContain('lg:border-r');
-    expect(aside?.className).not.toContain('bg-card');
-
-    // 挂载即探测声明源：Run 域导航计数在进域前就绪（不再进域后才变 1）
-    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(tab!.querySelector('[data-audit-domain="run"]')!.textContent).toContain('1');
-
-    await switchDomain('Run');
-    // 声明源已缓存（成员A 可恢复 / 成员B 无）→ run 域唯一目标行
-    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    const row = document.querySelector<HTMLButtonElement>('[data-audit-target="run:ses_mini_a"]');
-    expect(row).toBeTruthy();
-    expect(row!.disabled).toBe(false);
-    expect(row!.textContent).toContain('全 run');
-    // 右栏域导览（run 域）：对账范围瓦片
-    expect(tab!.textContent).toContain('对账范围');
-    expect(tab!.textContent).toContain('2 成员');
-
-    await act(async () => {
-      row!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    });
-    // 选中 ≠ 发起：启动卡先行
-    expect(auditBodies.length).toBe(0);
-    await startAudit();
-    await act(async () => { await new Promise(r => setTimeout(r, 30)) });
-
-    // run 级端点：规程层声明 × 全体成员整会话（宽松）
-    expect(auditBodies[0]).toMatchObject({
-      kind: 'run',
-      name: 'ses_mini_a',
-      members: ['ses_mini_a', 'ses_mini_b'],
-    });
-    const panel = document.querySelector('[data-audit-report="ses_mini_a"]');
-    expect(panel).toBeTruthy();
-    const text = panel!.textContent ?? '';
-    // run 溯源副标题 + 跨成员判定
-    expect(text).toContain('run 溯源 · 命中 2 会话 / 2 次调用');
-    expect(text).toContain('成员A');
-    expect(text).toContain('成员B');
-    // 旧报告（无 text_coverage / skill_body 字段）不渲染声明覆盖总览
-    expect(panel!.querySelector('[data-audit-text-coverage]')).toBeNull();
-    // 展开指令组 → finding 明细：成员归因徽标 + 规程层归层徽章
-    const groupBtn = [...panel!.querySelectorAll('button')].find(b => b.textContent?.includes('按编排规程收尾'));
-    await act(async () => {
-      groupBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    });
-    expect(panel!.textContent).toContain('成员B 未按规程收尾');
-    expect(panel!.textContent).toContain('编排规程');
-    // turn 深链：#3 → 成员 turn-digest 解析 → navigate 写 URL 镜像
-    const turnLink = panel!.querySelector('[data-audit-turn-link="ses_mini_b:3"]')!;
-    await act(async () => {
-      turnLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    });
-    await act(async () => { await new Promise(r => setTimeout(r, 20)) });
-    expect(ensurePushSpy().mock.calls.some(c => String(c[2]).includes('turn=turn_b_3'))).toBe(true);
   });
 });

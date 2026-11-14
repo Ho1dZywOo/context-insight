@@ -16,7 +16,7 @@
 
 import type { AuditLayerInfo, AuditMemberMap, AuditReport, SkillAuditStoredResult } from "@/lib/sift-audit-types"
 
-export type AuditKind = "skill" | "agent" | "root" | "llm-root" | "run"
+export type AuditKind = "skill" | "agent" | "root" | "llm-root"
 
 /**
  * store 侧的 result：AuditReport + 可选 _html（"在新页打开原始 HTML"逃生口）。
