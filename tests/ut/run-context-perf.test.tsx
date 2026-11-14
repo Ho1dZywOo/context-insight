@@ -111,6 +111,8 @@ const contextAgentLimits = [
   { key: 'rop-sub-1', kind: 'subagent', model: 'glm-4.7-sub', contextLimit: 64000 },
 ];
 
+const PERF_T0 = Date.parse('2026-10-13T02:00:00.000Z')
+
 const execRoot = {
   executionId: 'rop-exec-root', sessionId: 'row_a', agentName: 'rop-alpha-agent', agentSessionId: null,
   isSubagent: false, member: { taskId: 'ses_mini_a', label: '成员A' },
@@ -119,6 +121,11 @@ const execRoot = {
   cacheReadInputTokens: 20, cacheCreationInputTokens: 10, cost: 0.02, latencyMs: 1200,
   toolCallCount: 3, toolCallErrorCount: 0, llmCallCount: 2, skillLoadCount: 0, skillInvokeCount: 1,
   model: 'glm-4.7', createdAt: '2026-10-13T02:00:10.000Z', skills: [],
+  span: { start: PERF_T0 + 10_000, end: PERF_T0 + 720_000 },
+  activeIntervals: [
+    { start: PERF_T0 + 10_000, end: PERF_T0 + 40_000 },
+    { start: PERF_T0 + 360_000, end: PERF_T0 + 480_000 },
+  ],
 };
 const execSub = {
   ...execRoot,
@@ -127,6 +134,8 @@ const execSub = {
   parentExecutionId: 'rop-exec-root', rootExecutionId: 'rop-exec-root', depth: 1,
   tokens: 150, inputTokens: 100, outputTokens: 50, latencyMs: 600,
   model: 'glm-4.7-sub', createdAt: '2026-10-13T02:00:45.000Z',
+  span: { start: PERF_T0 + 30_000, end: PERF_T0 + 180_000 },
+  activeIntervals: [{ start: PERF_T0 + 30_000, end: PERF_T0 + 180_000 }],
 };
 
 const perfTurn = {
@@ -154,6 +163,45 @@ const perfSubTurn = {
   totalTokens: 80, inputTokens: 50, outputTokens: 20, reasoningTokens: 10,
   cacheReadTokens: 5, cacheWriteTokens: 2, contextWindowPct: 30, latencyMs: 600,
   model: 'glm-4.7-sub', toolCalls: [], skillEvents: [],
+};
+
+const perfSubTurnB = {
+  ...perfSubTurn,
+  turnId: 'rop-t-sub1',
+  turnIndex: 1,
+  contentSummary: '子代理收尾',
+  createdAt: '2026-10-13T02:00:55.000Z',
+};
+
+const perfParentAckTurn = {
+  ...perfTurn,
+  turnId: 'rop-t-parent-ack',
+  turnIndex: 2,
+  contentSummary: '收到子代理交回结果',
+  createdAt: '2026-10-13T02:03:10.000Z',
+};
+
+const perfBridge = {
+  bridgeId: 'rop-bridge-sub',
+  dispatchExecutionId: 'rop-exec-root',
+  dispatchTurnId: 'rop-t-a0',
+  dispatchToolCallId: 'tc-spawn-sub',
+  dispatchContent: '子代理调研',
+  dispatchTimestamp: '2026-10-13T02:00:30.000Z',
+  dispatchBackground: false,
+  responseExecutionId: null,
+  responseTurnId: 'rop-t-sub1',
+  responseContent: '子代理收尾',
+  responseTimestamp: '2026-10-13T02:03:00.000Z',
+  subagentSessionId: 'rop-sub-1',
+  subagentType: 'research',
+  subagentName: 'rop-研究员',
+  agentName: 'research',
+  parentResponseTurnId: 'rop-t-parent-ack',
+  status: 'completed',
+  subagentTokens: 160,
+  subagentLatencyMs: 150_000,
+  member: { taskId: 'ses_mini_a', label: '成员A' },
 };
 
 const fetchCalls: string[] = [];
@@ -214,10 +262,10 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     return json({ items: [execRoot, execSub], root: [execRoot], subagents: [execSub], totalExecutions: 2, subagentCount: 1 });
   }
   if (u.pathname === '/api/observe/run/minidemo01/turns') {
-    return json({ items: [perfTurn, perfTurnB, perfSubTurn], total: 3, page: 1, pageSize: Number(u.searchParams.get('pageSize') ?? 200) });
+    return json({ items: [perfTurn, perfTurnB, perfSubTurn, perfSubTurnB, perfParentAckTurn], total: 5, page: 1, pageSize: Number(u.searchParams.get('pageSize') ?? 200) });
   }
   if (u.pathname === '/api/observe/run/minidemo01/bridges') {
-    return json({ items: [], total: 0 });
+    return json({ items: [perfBridge], total: 1 });
   }
   if (u.pathname === '/api/observe/run/minidemo01/tool-stats') {
     return json(perfToolStats);
@@ -358,7 +406,16 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(perf!.querySelector('.perf-bar-rise')).toBeNull();
     expect(perf!.querySelector('.perf-grow-x')).toBeNull();
 
-    // 跳转①：时间线子代理条双击 → Turns 深链（该会话首轮）
+    // 跳转①：主泳道承接 subagent 结束的活跃段双击 → 父 Agent 接收回复的 turn
+    const handback = perf!.querySelector('[data-root-segment-owner="rop-sub-1"]');
+    expect(handback).toBeTruthy();
+    ensurePushSpy().mockClear();
+    await act(async () => {
+      handback!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('turn=rop-t-parent-ack');
+
+    // 跳转②：时间线子代理条双击 → Turns 深链（该会话首轮）
     const subBar = perf!.querySelector('[data-bar="rop-exec-sub"]');
     expect(subBar).toBeTruthy();
     ensurePushSpy().mockClear();
@@ -369,7 +426,7 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('tab=turns');
     expect(String(ensurePushSpy().mock.calls[0]?.[2])).toContain('turn=rop-t-sub0');
 
-    // 跳转②：热点行内定位角标 → 同一深链出口；跳转①后视图已在目标态，
+    // 跳转③：热点行内定位角标 → 同一深链出口；跳转②后视图已在目标态，
     // 同值 navigate 是 no-op——不产生冗余历史条目（条目栈零增长）
     const locateBtn = subLane!.querySelector('[title="在 Turns 时间线定位该单元"]');
     expect(locateBtn).toBeTruthy();
@@ -379,7 +436,7 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     });
     expect(ensurePushSpy().mock.calls.length).toBe(0);
 
-    // 跳转③：热点行展开 → 轮次行点击 → 该轮深链（成员A 首轮）
+    // 跳转④：热点行展开 → 轮次行点击 → 该轮深链（成员A 首轮）
     const memberLane = perf!.querySelector('[data-lane-row="ses_mini_a"]')!;
     await act(async () => {
       memberLane.querySelector('[role="button"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));

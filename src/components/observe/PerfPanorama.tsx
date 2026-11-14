@@ -23,7 +23,7 @@ import {
 } from "./perf-shared"
 import { PerfLaneList } from "./PerfLaneList"
 import { PerfToolTime } from "./PerfToolTime"
-import { AgentSwimlaneV2 } from "./AgentSwimlaneV2"
+import { AgentSwimlaneV2, type SwimTurnTarget } from "./AgentSwimlaneV2"
 import type { AgentItem, BridgeItem } from "./AgentCallGraph"
 import type { RunToolStats } from "@/lib/observe/collectors/tool-stats"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -244,13 +244,32 @@ export function PerfPanorama({ endpoints, onOpenTurn, onOpenSearch, swimlanePayl
   }, [model])
 
   // 时间线跳转：子代理条 → 该会话首轮（多次派发时按派发时刻后定位）；
-  // root 条 → 该成员首轮。唯一出口 onOpenTurn(turnId)；解析用轮次载荷直供
-  // 优先（离线导出），线上回落端点取数
+  // 主泳道承接 subagent 结束的活跃段 → 父 Agent 接收回复的 turn；无则回退子代理末轮；
+  // root 条 → 该成员首轮。
+  // 唯一出口 onOpenTurn(turnId)；解析用轮次载荷直供优先（离线导出），线上回落端点取数
   const jumpTurns = swimlanePayload?.turns ?? turns
-  const openSwimTurn = (agentSessionId: string | null, sinceMs?: number, memberTaskId?: string | null) => {
+  const openSwimTurn = (agentSessionId: string | null, sinceMs?: number, memberTaskId?: string | null, target?: SwimTurnTarget) => {
     if (!onOpenTurn || !jumpTurns) return
     if (agentSessionId) {
-      const subs = jumpTurns.filter(t => t.isSubagent && t.subagentSessionId === agentSessionId)
+      const subs = jumpTurns
+        .filter(t => t.isSubagent && t.subagentSessionId === agentSessionId)
+        .sort((a, b) => {
+          const at = a.createdAt ? new Date(a.createdAt).getTime() : Number.POSITIVE_INFINITY
+          const bt = b.createdAt ? new Date(b.createdAt).getTime() : Number.POSITIVE_INFINITY
+          return (at - bt) || (a.turnIndex - b.turnIndex)
+        })
+      if (target?.position === "last") {
+        if (target.parentTurnId) {
+          onOpenTurn(target.parentTurnId)
+          return
+        }
+        const bounded = target.atMs == null
+          ? subs
+          : subs.filter(t => t.createdAt && new Date(t.createdAt).getTime() <= target.atMs!)
+        const last = bounded.at(-1) ?? subs.at(-1)
+        if (last) onOpenTurn(last.turnId)
+        return
+      }
       const first = sinceMs
         ? subs.find(t => t.createdAt && new Date(t.createdAt).getTime() >= sinceMs) ?? subs[0]
         : subs[0]

@@ -10,7 +10,8 @@
 // Agent Swimlane V2（Perf 页执行时间线；与旧块 AgentCallGraph 同族）：
 // ①并发槽位数 = 当前可见集合的真实最大并发（旧块固定 5 槽）
 // ②底部图例 = 子代理类型（resolveSubagentIdentity 唯一入口）可勾选过滤
-// ③点击泳道内两点测时距（第三次点击重置）；双击条子跳转（member 归因随行）
+// ③点击泳道内两点测时距（第三次点击重置）；双击条子跳转（member 归因随行）；
+//   主泳道承接 subagent 结束后的活跃段时，双击优先跳父 Agent 收到回复的 turn
 import { useMemo, useState, useCallback, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardAction } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -98,11 +99,17 @@ interface TooltipData {
 
 type Measure = { a: { pct: number; t: number }; b?: { pct: number; t: number } }
 
+export type SwimTurnTarget = {
+  position: "first" | "last"
+  atMs?: number
+  parentTurnId?: string | null
+}
+
 export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns, lanes = [], lanesInferred = false }: {
   agents: AgentItem[]
   bridges: BridgeItem[]
   isProxy?: boolean
-  onViewTurns?: (agentSessionId: string | null, sinceMs?: number, memberTaskId?: string | null) => void
+  onViewTurns?: (agentSessionId: string | null, sinceMs?: number, memberTaskId?: string | null, target?: SwimTurnTarget) => void
   lanes?: string[]
   lanesInferred?: boolean
 }) {
@@ -277,6 +284,44 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
     return out
   }, [visibleSorted, spanOf, bridgeBySessionId, lanes, identityOf])
 
+  // 主泳道活跃段的交接切片：subagent 结束时刻作为切点，结束点之后到下一
+  // 个 lifecycle 边界的主活跃区归属刚结束的 subagent；结束点之前保持普通 root。
+  // 双击交接切片优先直达父会话收到该 subagent 回复的 turn。
+  const rootSegmentPieces = useMemo(() => {
+    type Piece = { start: number; end: number; owner: Span | null }
+    const piecesBySegment = new Map<string, Piece[]>()
+    const memberKeyOf = (a: AgentItem) => a.member?.taskId ?? "root"
+    const subs = [...subSpans].sort((a, b) => a.end - b.end)
+    for (const root of visibleSorted.filter(a => !a.isSubagent)) {
+      const segments = segmentsByAgent.get(root.executionId) ?? []
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i]
+        const cuts = subs
+          .filter(sub => {
+            if (!sub.agent.agentSessionId || sub.end > seg.end) return false
+            const ownerRootExecutionId = sub.agent.rootExecutionId ?? sub.agent.parentExecutionId
+            const sameOwner = ownerRootExecutionId
+              ? ownerRootExecutionId === root.executionId
+              : memberKeyOf(sub.agent) === memberKeyOf(root)
+            return sameOwner && (sub.end >= seg.start || seg.start - sub.end <= thresholdMs)
+          })
+          .map(sub => ({ at: Math.min(seg.end, Math.max(seg.start, sub.end)), owner: sub }))
+        const pieces: Piece[] = []
+        let cursor = seg.start
+        let owner: Span | null = null
+        for (const cut of cuts) {
+          if (cut.at > cursor) pieces.push({ start: cursor, end: cut.at, owner })
+          owner = cut.owner
+          cursor = cut.at
+        }
+        if (cursor < seg.end) pieces.push({ start: cursor, end: seg.end, owner })
+        if (pieces.length === 0) pieces.push({ start: seg.start, end: seg.end, owner: null })
+        piecesBySegment.set(`${root.executionId}:${i}`, pieces)
+      }
+    }
+    return piecesBySegment
+  }, [visibleSorted, segmentsByAgent, subSpans, thresholdMs])
+
   // 图例项尾的派发次数（按拆分后条数计，对齐 context 页图例的「N轮」）
   const countByKey = useMemo(() => {
     const m = new Map<string, number>()
@@ -392,8 +437,20 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
         ?? bridgeBySessionId.get(span.agent.agentSessionId ?? "")?.at(-1)?.status ?? "")
     // 拆分条只画落在本派发区间内的活跃段（裁剪到 [start,end]，另一派的段不外溢）
     const active = (segmentsByAgent.get(span.agent.executionId) ?? [])
-      .map(seg => ({ start: Math.max(seg.start, span.start), end: Math.min(seg.end, span.end) }))
-      .filter(seg => seg.end > seg.start)
+      .map((seg, index) => {
+        const start = Math.max(seg.start, span.start)
+        const end = Math.min(seg.end, span.end)
+        const pieces = span.agent.isSubagent
+          ? [{ start, end, owner: null }]
+          : rootSegmentPieces.get(`${span.agent.executionId}:${index}`) ?? [{ start, end, owner: null }]
+        return {
+          index,
+          pieces: pieces
+            .map(piece => ({ ...piece, start: Math.max(piece.start, span.start), end: Math.min(piece.end, span.end) }))
+            .filter(piece => piece.end > piece.start),
+        }
+      })
+      .filter(seg => seg.pieces.length > 0)
     const spanMs = Math.max(1, span.end - span.start)
     return (
       <div key={span.key} className="absolute pointer-events-none" style={{ left: `${startPct}%`, width: `${widthPct}%`, top: 0, height: "100%" }}>
@@ -413,13 +470,43 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
           onMouseLeave={handleMouseLeave}
         />
         {active.length > 0
-          ? active.map((seg, si) => (
-              <div key={si} className="absolute pointer-events-none" style={{
-                left: `${((seg.start - span.start) / spanMs) * 100}%`,
-                width: `${((seg.end - seg.start) / spanMs) * 100}%`,
-                top: SUB_GAP, height: SUB_BAR_H, backgroundColor: color, opacity: isErr ? 0.45 : 0.9,
-              }} />
-            ))
+          ? active.flatMap(seg => seg.pieces.map((piece, pieceIndex) => {
+              const owner = piece.owner
+              const ownerLabel = owner
+                ? identityOf(owner.agent)?.subagentType ?? owner.agent.agentName ?? "子代理"
+                : null
+              const ownerBridge = owner?.bridge
+                ?? (owner?.agent.agentSessionId ? bridgeBySessionId.get(owner.agent.agentSessionId)?.[0] : undefined)
+              return (
+                <div
+                  key={`${seg.index}:${pieceIndex}`}
+                  data-root-segment={span.agent.isSubagent ? undefined : `${span.agent.executionId}:${seg.index}:${pieceIndex}`}
+                  data-root-segment-owner={owner?.agent.agentSessionId ?? undefined}
+                  className={owner ? "absolute pointer-events-auto cursor-pointer" : "absolute pointer-events-none"}
+                  title={ownerLabel
+                    ? ownerBridge?.parentResponseTurnId
+                      ? `双击跳到父 Agent 接收 ${ownerLabel} 回复的 turn`
+                      : `双击跳到 ${ownerLabel} 最后一轮`
+                    : undefined}
+                  style={{
+                    left: `${((piece.start - span.start) / spanMs) * 100}%`,
+                    width: `${((piece.end - piece.start) / spanMs) * 100}%`,
+                    top: SUB_GAP, height: SUB_BAR_H, backgroundColor: color, opacity: isErr ? 0.45 : 0.9,
+                  }}
+                  onMouseEnter={owner ? e => handleMouseEnter(e, span) : undefined}
+                  onMouseLeave={owner ? handleMouseLeave : undefined}
+                  onDoubleClick={owner ? e => {
+                    e.stopPropagation()
+                    cancelPendingMeasure()
+                    onViewTurns?.(owner.agent.agentSessionId, undefined, owner.agent.member?.taskId ?? null, {
+                      position: "last",
+                      atMs: owner.end,
+                      parentTurnId: ownerBridge?.parentResponseTurnId ?? null,
+                    })
+                  } : undefined}
+                />
+              )
+            }))
           : (
             <div className="absolute w-full pointer-events-none" style={{ top: SUB_GAP, height: SUB_BAR_H, backgroundColor: color, opacity: isErr ? 0.4 : 0.8 }} />
           )}
@@ -601,7 +688,7 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
           )}
         </div>
         <div className="text-[11px] text-muted-foreground">
-          槽位 = 可见集合真实最大并发 · 单击泳道测时距（两点，第三下重置） · 双击条子跳 turns · 横向滚动可平移 · Ctrl/⌘ + 滚轮缩放
+          槽位 = 可见集合真实最大并发 · 单击泳道测时距（两点，第三下重置） · 双击条子跳 turns · subagent 结束后的主泳道活跃段双击跳父 Agent 接收回复的 turn · 横向滚动可平移 · Ctrl/⌘ + 滚轮缩放
         </div>
       </CardContent>
 

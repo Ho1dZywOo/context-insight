@@ -37,10 +37,24 @@ export interface MergedBridgeItem {
   subagentType: string | null;
   subagentName: string | null;
   agentName: string | null;
+  /** 父会话中 wait_agent 收到该 subagent 完成/错误结果的 turn（无则 null） */
+  parentResponseTurnId: string | null;
   status: string;
   subagentTokens: number;
   subagentLatencyMs: number;
   member: { taskId: string; label: string | null } | null;
+}
+
+function waitResultHasSubagent(resultJson: string | null, subagentSessionId: string): boolean {
+  if (!resultJson) return false;
+  try {
+    const parsed = JSON.parse(resultJson) as { status?: unknown };
+    return parsed.status != null
+      && typeof parsed.status === 'object'
+      && Object.prototype.hasOwnProperty.call(parsed.status, subagentSessionId);
+  } catch {
+    return false;
+  }
 }
 
 export interface CollectBridgesOptions {
@@ -70,7 +84,7 @@ export async function collectScopeBridges(
     .filter((id): id is string => id !== null);
   const rowIdSet = new Set(memberRowIds);
 
-  const [executions, subTurns] = await Promise.all([
+  const [executions, subTurns, waitCalls] = await Promise.all([
     subagentSessionIds.length > 0
       ? prisma.execution.findMany({
           where: { sessionId: { in: memberRowIds }, agentSessionId: { in: subagentSessionIds } },
@@ -81,6 +95,25 @@ export async function collectScopeBridges(
       ? prisma.turn.findMany({
           where: { sessionId: { in: memberRowIds }, subagentSessionId: { in: subagentSessionIds } },
           select: { subagentSessionId: true, createdAt_ts: true, completedAt: true, latencyMs: true },
+        })
+      : Promise.resolve([]),
+    // 父侧接收 turn：wait_agent 的 result 里带 subagent 状态键。按完成时刻与桥
+    // response 邻接选最近一条；超时轮 result 不含 sid，天然不会命中。
+    subagentSessionIds.length > 0
+      ? prisma.toolCall.findMany({
+          where: {
+            toolName: 'wait_agent',
+            resultJson: { not: null },
+            completedAt: { not: null },
+            turn: { sessionId: { in: memberRowIds }, isSubagent: false },
+            OR: subagentSessionIds.map(id => ({ resultJson: { contains: `"${id}"` } })),
+          },
+          select: {
+            turnId: true,
+            resultJson: true,
+            completedAt: true,
+            turn: { select: { sessionId: true } },
+          },
         })
       : Promise.resolve([]),
   ]);
@@ -146,6 +179,7 @@ export async function collectScopeBridges(
   };
 
   const byRowId = memberByRowId(scope);
+  const PARENT_RECEIVE_MATCH_MS = 5 * 60_000;
   return bridges.map(b => {
     const timing = subagentTiming(windowedTimingTurns(b), b.dispatchTimestamp);
     // responseTimestamp 钳到同 sid 下次派发时刻：窗口按 createdAt 选 turn，
@@ -159,6 +193,19 @@ export async function collectScopeBridges(
       ? sidDispatchTimes.get(b.subagentSessionId ?? '')?.find(t => t > dMs) ?? null
       : null;
     const clampedMs = respMs !== null && nextMs !== null ? Math.min(respMs, nextMs) : respMs;
+    const parentResponseTurnId = (() => {
+      if (clampedMs === null || !b.subagentSessionId) return null;
+      let best: { turnId: string; diff: number } | null = null;
+      for (const call of waitCalls) {
+        if (call.turn.sessionId !== b.sessionId || !call.completedAt) continue;
+        if (!waitResultHasSubagent(call.resultJson, b.subagentSessionId)) continue;
+        const diff = Math.abs(call.completedAt.getTime() - clampedMs);
+        if (diff <= PARENT_RECEIVE_MATCH_MS && (!best || diff < best.diff)) {
+          best = { turnId: call.turnId, diff };
+        }
+      }
+      return best?.turnId ?? null;
+    })();
     const member = rowIdSet.has(b.sessionId) ? byRowId.get(b.sessionId) : undefined;
     return {
       bridgeId: b.id,
@@ -176,6 +223,7 @@ export async function collectScopeBridges(
       subagentType: b.subagentType,
       subagentName: b.subagentName,
       agentName: b.subagentType ?? b.subagentName ?? (b.subagentSessionId ? executionMap.get(b.subagentSessionId) ?? null : null),
+      parentResponseTurnId,
       status: b.status,
       subagentTokens: Number(b.subagentTokens),
       subagentLatencyMs: timing?.latencyMs ?? Number(b.subagentLatencyMs),
