@@ -28,6 +28,7 @@ import { pageSessionErrorTotal } from '@/lib/collection/session-asset';
 import type { RunMemberIdentity, RunMemberStats } from '@/lib/collection/types';
 import { isSoloRunId, soloTaskIdOf } from '@/lib/run/identity';
 import { resolveSoloRun } from '@/lib/run/solo';
+import { invalidateObservationCaches } from '@/lib/observe/invalidation';
 
 /** 观测聚合（bundle/solo 共用）：Σ成员指标（活跃拆分批量一次，与统一列表
  *  同款两段式）+ 页级错误计数 + 成员身份名册（Overview 单元身份卡：Tool/
@@ -162,6 +163,9 @@ export const DELETE = withRouteLog(
       const stored = readRun(runId);
       const owned = stored?.meta?.data.ownedSessions ?? [];
       const deletedSessions = await deleteOwnedSessionRows(prisma, runsRoot(), owned);
+      // 级联删除了本 run 的会话行 → 观测缓存单点失效：不失效则 60s 内重导
+      // 同一 run 时作用域缓存仍捂着已删行 id，观测端点按 IN(死行) 静默查空
+      invalidateObservationCaches();
       const ok = deleteRun(runId);
       if (!ok) {
         return NextResponse.json({ error: `Run not found: ${runId}`, reason: 'run-not-found' }, { status: 404 });
