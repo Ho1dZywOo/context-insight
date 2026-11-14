@@ -18,7 +18,8 @@ import { useEffect, useMemo, useRef, useState, memo } from "react";
 import { useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { BotIcon, FileSearchIcon, SparklesIcon, WorkflowIcon } from "lucide-react";import {
+import { BotIcon, FileSearchIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
+import {
   subscribeSkillAudit,
   getSkillAuditSnapshot,
   getSkillAuditServerSnapshot,

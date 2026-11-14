@@ -70,7 +70,10 @@ describe('codex 流式 shell wire 语义助手（tool-conventions 单点）', ()
   it('writeStdinSessionIdOf / writeStdinCharsOf：参数解析，缺损/坏 JSON → null', () => {
     expect(writeStdinSessionIdOf('{"session_id": 70953, "chars": ""}')).toBe(70953);
     expect(writeStdinSessionIdOf('{"chars": ""}')).toBeNull();
-    expect(writeStdinSessionIdOf('{"session_id": "70953"}')).toBeNull();
+    expect(writeStdinSessionIdOf('{"session_id": "70953"}')).toBe(70953);
+    expect(writeStdinSessionIdOf('{"session_id": "abc"}')).toBeNull();
+    expect(writeStdinSessionIdOf('{"session_id": ""}')).toBeNull();
+    expect(writeStdinSessionIdOf('{"session_id": -1}')).toBeNull();
     expect(writeStdinSessionIdOf('{oops')).toBeNull();
     expect(writeStdinSessionIdOf(null)).toBeNull();
     expect(writeStdinCharsOf('{"session_id": 88888, "chars": "y\\n"}')).toBe('y\n');

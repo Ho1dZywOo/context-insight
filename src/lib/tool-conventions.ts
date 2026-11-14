@@ -411,12 +411,17 @@ export function codexChunkExitCodeOf(resultJson: string): number | null {
 }
 
 /** write_stdin 参数里的 session_id（codex 流式 shell 轮询的目标会话），适配器
- *  卷回时关联属主 exec_command；缺损/非数/坏 JSON → null */
+ *  卷回时关联属主 exec_command；缺损/非数/坏 JSON → null。session_id 序列化
+ *  形态按 codex 版本可能是 number 或纯数字字符串——与 exec 侧
+ *  codexStreamSessionIdOf 的 Number 收窄对齐，字符串形态同样关联（否则
+ *  ownerBySession 静默 miss，轮询退化为孤儿轮） */
 export function writeStdinSessionIdOf(argsJson: string | null): number | null {
   if (!argsJson) return null;
   try {
-    const v = (JSON.parse(argsJson) as Record<string, unknown>)?.session_id;
-    return typeof v === 'number' ? v : null;
+    const raw = (JSON.parse(argsJson) as Record<string, unknown>)?.session_id;
+    if (typeof raw === 'number') return Number.isInteger(raw) && raw >= 0 ? raw : null;
+    if (typeof raw === 'string' && /^\d+$/.test(raw)) return Number(raw);
+    return null;
   } catch {
     return null;
   }
