@@ -297,11 +297,14 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i]
         const cuts = subs
-          .filter(sub =>
-            Boolean(sub.agent.agentSessionId)
-            && memberKeyOf(sub.agent) === memberKeyOf(root)
-            && sub.end <= seg.end
-            && (sub.end >= seg.start || seg.start - sub.end <= thresholdMs))
+          .filter(sub => {
+            if (!sub.agent.agentSessionId || sub.end > seg.end) return false
+            const ownerRootExecutionId = sub.agent.rootExecutionId ?? sub.agent.parentExecutionId
+            const sameOwner = ownerRootExecutionId
+              ? ownerRootExecutionId === root.executionId
+              : memberKeyOf(sub.agent) === memberKeyOf(root)
+            return sameOwner && (sub.end >= seg.start || seg.start - sub.end <= thresholdMs)
+          })
           .map(sub => ({ at: Math.min(seg.end, Math.max(seg.start, sub.end)), owner: sub }))
         const pieces: Piece[] = []
         let cursor = seg.start

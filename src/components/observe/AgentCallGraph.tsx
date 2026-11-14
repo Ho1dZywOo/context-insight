@@ -19,6 +19,8 @@ export interface AgentItem {
   agentSessionId: string | null
   isSubagent: boolean
   parentExecutionId: string | null
+  /** executions 收集器注入：subagent 所属 root execution（嵌套派发时仍指向根） */
+  rootExecutionId?: string | null
   tokens: number
   maxSingleCallTokens: number
   cost: number

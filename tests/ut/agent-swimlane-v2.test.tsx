@@ -42,13 +42,16 @@ function mkAgent(over: {
   agentSessionId?: string
   agentName?: string
   activeIntervals?: Array<{ start: number; end: number }>
+  parentExecutionId?: string | null
+  rootExecutionId?: string | null
 }): AgentItem {
   return {
     executionId: over.executionId,
     agentName: over.agentName ?? 'general',
     agentSessionId: over.agentSessionId ?? null,
     isSubagent: over.isSubagent ?? true,
-    parentExecutionId: null,
+    parentExecutionId: over.parentExecutionId ?? null,
+    rootExecutionId: over.rootExecutionId ?? null,
     tokens: 1000,
     maxSingleCallTokens: 500,
     cost: 0,
@@ -115,7 +118,14 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     const T = Date.parse(T0)
     const ownedAgents = [
       mkAgent({
-        executionId: 'root',
+        executionId: 'rootA',
+        span: { start: T, end: T + 600_000 },
+        isSubagent: false,
+        agentName: 'build',
+        activeIntervals: [{ start: T, end: T + 600_000 }],
+      }),
+      mkAgent({
+        executionId: 'rootB',
         span: { start: T, end: T + 600_000 },
         isSubagent: false,
         agentName: 'build',
@@ -126,6 +136,7 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
         span: { start: T + 100_000, end: T + 200_000 },
         agentSessionId: 'ses_g1',
         agentName: '⑦ group 同步',
+        rootExecutionId: 'rootA',
       }),
     ]
     const onViewTurns = vi.fn()
@@ -134,10 +145,12 @@ describe('AgentSwimlaneV2 点击二元性：跳转 × 测时距', () => {
     ]), onViewTurns)
 
     const rootPieces = [...el.querySelectorAll<HTMLElement>('[data-root-segment]')]
-    expect(rootPieces).toHaveLength(2)
-    expect(rootPieces[0].hasAttribute('data-root-segment-owner')).toBe(false)
-    const handback = el.querySelector<HTMLElement>('[data-root-segment-owner="ses_g1"]')
-    expect(handback).toBe(rootPieces[1])
+    expect(rootPieces.filter(p => p.getAttribute('data-root-segment')?.startsWith('rootA:'))).toHaveLength(2)
+    expect(rootPieces.filter(p => p.getAttribute('data-root-segment')?.startsWith('rootB:'))).toHaveLength(1)
+    const ownedPieces = [...el.querySelectorAll<HTMLElement>('[data-root-segment-owner="ses_g1"]')]
+    expect(ownedPieces).toHaveLength(1)
+    expect(ownedPieces[0].getAttribute('data-root-segment')).toMatch(/^rootA:/)
+    const handback = ownedPieces[0]
     expect(handback!.getAttribute('title')).toContain('父 Agent 接收')
     dblclick(handback!)
 

@@ -45,6 +45,18 @@ export interface MergedBridgeItem {
   member: { taskId: string; label: string | null } | null;
 }
 
+function waitResultHasSubagent(resultJson: string | null, subagentSessionId: string): boolean {
+  if (!resultJson) return false;
+  try {
+    const parsed = JSON.parse(resultJson) as { status?: unknown };
+    return parsed.status != null
+      && typeof parsed.status === 'object'
+      && Object.prototype.hasOwnProperty.call(parsed.status, subagentSessionId);
+  } catch {
+    return false;
+  }
+}
+
 export interface CollectBridgesOptions {
   /** 成员 taskId 过滤（须在作用域内；调用方校验） */
   member?: string | null;
@@ -94,7 +106,7 @@ export async function collectScopeBridges(
             resultJson: { not: null },
             completedAt: { not: null },
             turn: { sessionId: { in: memberRowIds }, isSubagent: false },
-            OR: subagentSessionIds.map(id => ({ resultJson: { contains: id } })),
+            OR: subagentSessionIds.map(id => ({ resultJson: { contains: `"${id}"` } })),
           },
           select: {
             turnId: true,
@@ -186,7 +198,7 @@ export async function collectScopeBridges(
       let best: { turnId: string; diff: number } | null = null;
       for (const call of waitCalls) {
         if (call.turn.sessionId !== b.sessionId || !call.completedAt) continue;
-        if (!call.resultJson?.includes(b.subagentSessionId)) continue;
+        if (!waitResultHasSubagent(call.resultJson, b.subagentSessionId)) continue;
         const diff = Math.abs(call.completedAt.getTime() - clampedMs);
         if (diff <= PARENT_RECEIVE_MATCH_MS && (!best || diff < best.diff)) {
           best = { turnId: call.turnId, diff };
