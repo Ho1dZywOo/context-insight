@@ -122,6 +122,51 @@ const skillsNoTime = {
   events: skillsAll.events.map(e => ({ ...e, turnCreatedAt: null })),
 };
 
+// 与产品同口径的钟面读数（测试期望值镜像用户可见语义，时区中立）
+const clockOf = (ts: string): string => {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+const evOf = (id: string, turnCreatedAt: string) => ({
+  id, skillName: 'rop-skill-x', skillVersion: 1, eventType: 'invoke', success: true,
+  errorMessage: null, durationMs: 40, turnIndex: 0, turnId: 'rop-t-a0',
+  turnCreatedAt, agentName: 'build', isSubagent: false, subagentSessionId: null,
+  turnTokens: { totalTokens: 100, inputTokens: 50, outputTokens: 40, reasoningTokens: 5, cacheReadTokens: 10, cacheWriteTokens: 4 },
+  member: { taskId: 'ses_mini_a', label: '成员A' },
+});
+
+// 单事件变体（客户现场：单技能单调用——时间线无跨度）
+const skillsSingle = {
+  skills: [{ skillName: 'rop-skill-x', version: 1, invocationCount: 1, members: ['甲成员'] }],
+  events: [evOf('ev-x-single', '2026-10-13T02:05:06.000Z')],
+  dispatches: [],
+  total: 1,
+};
+
+// 同秒簇变体（同秒 3 连发：显示粒度上无跨度）
+const skillsSameSecond = {
+  skills: [{ skillName: 'rop-skill-x', version: 1, invocationCount: 3, members: ['甲成员'] }],
+  events: [
+    evOf('ev-x-s1', '2026-10-13T02:05:06.100Z'),
+    evOf('ev-x-s2', '2026-10-13T02:05:06.300Z'),
+    evOf('ev-x-s3', '2026-10-13T02:05:06.500Z'),
+  ],
+  dispatches: [],
+  total: 3,
+};
+
+// 跨秒小跨度变体（09.9 → 10.1：比例编码成立，但中点刻度与末端同文须去重）
+const skillsCrossSecond = {
+  skills: [{ skillName: 'rop-skill-x', version: 1, invocationCount: 2, members: ['甲成员'] }],
+  events: [
+    evOf('ev-x-c1', '2026-10-13T02:05:09.900Z'),
+    evOf('ev-x-c2', '2026-10-13T02:05:10.100Z'),
+  ],
+  dispatches: [],
+  total: 2,
+};
+
 const fileReadsAll = {
   files: [
     {
@@ -398,6 +443,76 @@ describe('Run 详情 Skills/Files tab（run-observe-parity 刀D）', () => {
       expect(text).not.toContain('run 时刻');
       // 点仍渲染（3 次），跳转闭环不受影响
       expect(tab.querySelectorAll('circle[data-skill-dot]').length).toBe(3);
+    } finally {
+      skillsVariant.current = skillsAll;
+    }
+  });
+
+  // ── 时间线轴几何（显示粒度三态：可分辨 / 同一秒内 / 时间戳缺失） ──────────
+  // 判别点：刻度永不同文重复（客户现场：单次调用时间线出现三枚 15:56:08）。
+
+  it('时间线轴·可分辨跨度：三枚刻度全不同文（现状锁）', async () => {
+    await renderPage('?tab=skills');
+    const svg = document.querySelector('svg[data-skill-timeline][data-dim="calls"]')!;
+    const labels = [...svg.querySelectorAll('text[data-skill-tick]')].map(t => t.textContent);
+    expect(labels).toHaveLength(3);
+    expect(new Set(labels).size).toBe(3);
+  });
+
+  it('时间线轴·单事件：刻度收拢为一枚时刻、点居中（不再三枚同文 + 贴边）', async () => {
+    skillsVariant.current = skillsSingle;
+    try {
+      await renderPage('?tab=skills');
+      const tab = document.querySelector('[data-run-tab="skills"]')!;
+      expect(tab.textContent).toContain('run 时刻（同一秒内）');
+      const svg = tab.querySelector('svg[data-skill-timeline][data-dim="calls"]')!;
+      const ticks = [...svg.querySelectorAll('text[data-skill-tick]')];
+      expect(ticks).toHaveLength(1);
+      expect(ticks[0]!.textContent).toBe(clockOf('2026-10-13T02:05:06.000Z'));
+      expect(ticks[0]!.getAttribute('text-anchor')).toBe('middle');
+      const dots = svg.querySelectorAll('circle[data-skill-dot]');
+      expect(dots).toHaveLength(1);
+      expect(Number(dots[0]!.getAttribute('cx'))).toBe(148 + (720 - 148 - 14) / 2);
+    } finally {
+      skillsVariant.current = skillsAll;
+    }
+  });
+
+  it('时间线轴·同秒簇：一枚刻度、点按序铺开（毫秒差不夸大成全程宽度）', async () => {
+    skillsVariant.current = skillsSameSecond;
+    try {
+      await renderPage('?tab=skills');
+      const tab = document.querySelector('[data-run-tab="skills"]')!;
+      expect(tab.textContent).toContain('run 时刻（同一秒内）');
+      const svg = tab.querySelector('svg[data-skill-timeline][data-dim="calls"]')!;
+      const ticks = [...svg.querySelectorAll('text[data-skill-tick]')];
+      expect(ticks).toHaveLength(1);
+      expect(ticks[0]!.textContent).toBe(clockOf('2026-10-13T02:05:06.100Z'));
+      const dots = [...svg.querySelectorAll('circle[data-skill-dot]')];
+      expect(dots).toHaveLength(3);
+      // 事件序几何：ord/(n-1) 均分图区宽（148 / 427 / 706），同秒毫秒差不伪称全程比例
+      expect(dots.map(d => Number(d.getAttribute('cx')))).toEqual([148, 148 + 279, 148 + 558]);
+    } finally {
+      skillsVariant.current = skillsAll;
+    }
+  });
+
+  it('时间线轴·跨秒小跨度：位置=真实比例，中点刻度与末端同文则去重', async () => {
+    skillsVariant.current = skillsCrossSecond;
+    try {
+      await renderPage('?tab=skills');
+      const tab = document.querySelector('[data-run-tab="skills"]')!;
+      expect(tab.textContent).toContain('run 时刻');
+      expect(tab.textContent).not.toContain('run 时刻（同一秒内）');
+      const svg = tab.querySelector('svg[data-skill-timeline][data-dim="calls"]')!;
+      const ticks = [...svg.querySelectorAll('text[data-skill-tick]')];
+      expect(ticks).toHaveLength(2);
+      expect(ticks.map(t => t.textContent)).toEqual([
+        clockOf('2026-10-13T02:05:09.900Z'),
+        clockOf('2026-10-13T02:05:10.100Z'),
+      ]);
+      const dots = [...svg.querySelectorAll('circle[data-skill-dot]')];
+      expect(dots.map(d => Number(d.getAttribute('cx')))).toEqual([148, 148 + 558]);
     } finally {
       skillsVariant.current = skillsAll;
     }
