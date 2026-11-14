@@ -100,7 +100,8 @@ async function probeOpencodeRefresh(
       ? `type = 'assistant' AND json_extract(data, '$.time.completed') IS NULL`
       : `json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.time.completed') IS NULL`;
     const latestRoleExpr = isV2 ? 'type' : `json_extract(data, '$.role')`;
-    const latestOrder = isV2 ? 'ORDER BY time_created DESC, seq DESC' : 'ORDER BY time_created DESC';
+    const latestParentOrder = isV2 ? 'ORDER BY seq DESC' : 'ORDER BY time_created DESC';
+    const latestSubOrder = 'ORDER BY time_created DESC';
 
     // v2 事件源表混有控制面行（idle/shell/*-switched）与未知未来类型，
     // adapter 一律不产 turn（见 opencode-db.ts v2 reader 的跳过清单）。
@@ -142,11 +143,11 @@ async function probeOpencodeRefresh(
     const streaming = (incompleteFreshParent.cnt + incompleteFreshSub.cnt) > 0;
 
     const latestParent = db.prepare(
-      `SELECT ${latestRoleExpr} as role FROM ${msgTable} WHERE session_id = ? ${latestOrder} LIMIT 1`
+      `SELECT ${latestRoleExpr} as role FROM ${msgTable} WHERE session_id = ? ${latestParentOrder} LIMIT 1`
     ).get(taskId) as { role: string | null } | undefined;
 
     const latestSub = db.prepare(
-      `SELECT ${latestRoleExpr} as role FROM ${msgTable} WHERE session_id IN (SELECT id FROM ${sessTable} WHERE parent_id = ?) ${latestOrder} LIMIT 1`
+      `SELECT ${latestRoleExpr} as role FROM ${msgTable} WHERE session_id IN (SELECT id FROM ${sessTable} WHERE parent_id = ?) ${latestSubOrder} LIMIT 1`
     ).get(taskId) as { role: string | null } | undefined;
 
     const pendingInput = (latestParent?.role === 'user' || latestSub?.role === 'user');
@@ -196,7 +197,7 @@ async function probeOpencodeRefreshMixed(
         ? `type = 'assistant' AND json_extract(data, '$.time.completed') IS NULL`
         : `json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.time.completed') IS NULL`;
       const latestRoleExpr = gen === 2 ? 'type' : `json_extract(data, '$.role')`;
-      const latestOrder = gen === 2 ? 'ORDER BY time_created DESC, seq DESC' : 'ORDER BY time_created DESC';
+      const latestOrder = gen === 2 ? 'ORDER BY seq DESC' : 'ORDER BY time_created DESC';
 
       const stats = db.prepare(
         `SELECT COUNT(*) as cnt, MAX(time_updated) as max_updated FROM ${msgTable} WHERE session_id = ?${importableFilter}`

@@ -134,6 +134,8 @@ describe('lake 治理形态全覆盖 + parity（与 proxy/src/redactor.ts 字节
     'sk-' + 'a'.repeat(40),                                 // DeepSeek/Moonshot/OpenAI legacy (sk- + 28+)
     'abcdef0123456789abcdef0123456789.abcdefghijklmnop',   // zhipu bigmodel 32hex.16-20
     'Bearer AAAABBBBCCCCDDDD12345678',                      // Bearer 凭据
+    'Authorization: Token opaqueCredential_0123456789abcdef', // Token Authorization 凭据
+    'authorization: token x',                                // 大小写变体与短值
   ];
 
   it('每个厂家前缀键：清洗后无明文 + 复检零残留 + parity', () => {
@@ -154,6 +156,35 @@ describe('lake 治理形态全覆盖 + parity（与 proxy/src/redactor.ts 字节
     expect(output).not.toContain('sk-ant-api03-ZZZZ9999');
     expect(output).toContain('…');
     expect(governance.redactString(text)).toBe(proxyRedactor.redactString(text));
+  });
+
+  it('通用 api_key 回显形态：裸值与引号值清洗打码 + parity', () => {
+    for (const text of [
+      'api_key=opaqueCredential_0123456789abcdef',
+      'api-key: "opaqueCredential_0123456789abcdef"',
+      'api_key=short',
+    ]) {
+      const { output, residue } = governance.governText(text);
+      expect(residue).toEqual([]);
+      expect(output).not.toContain('opaqueCredential_0123456789abcdef');
+      expect(output).toContain(text.endsWith('short') ? '****' : '…');
+      expect(governance.redactString(text)).toBe(proxyRedactor.redactString(text));
+    }
+  });
+
+  it('Token/Basic 普通英文短语不误伤，Authorization scheme 覆盖大小写', () => {
+    const cases: Array<[string, string]> = [
+      ['Token usage increased', 'Token usage increased'],
+      ['Token count and Token limit', 'Token count and Token limit'],
+      ['Basic usage instructions', 'Basic usage instructions'],
+      ['Authorization: Token x', 'Authorization: Token ****'],
+      ['authorization: token abc123', 'authorization: token ****'],
+      ['authorization: bearer abc123', 'authorization: bearer ****'],
+    ];
+    for (const [text, expected] of cases) {
+      expect(governance.redactString(text)).toBe(expected);
+      expect(governance.redactString(text)).toBe(proxyRedactor.redactString(text));
+    }
   });
 
   it('JSON 字段形态："api_key":"xxx" 清洗打码 + parity', () => {
