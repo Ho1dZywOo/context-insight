@@ -106,7 +106,6 @@ export interface TurnsBridge {
   subagentType: string | null;
   subagentName: string | null;
   agentName: string | null;
-  parentResponseTurnId?: string | null;
   status: string;
   subagentTokens: number;
   subagentLatencyMs: number;
