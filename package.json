@@ -2,6 +2,17 @@
   "name": "context-insight",
   "version": "1.0.4",
   "description": "Session-level observability tool for LLM coding agents (opencode/Claude Code)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guixu-labs/context-insight.git"
+  },
+  "homepage": "https://github.com/guixu-labs/context-insight#readme",
+  "bugs": {
+    "url": "https://github.com/guixu-labs/context-insight/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "bin": {
@@ -39,7 +50,9 @@
     "e2e": "playwright test",
     "e2e:headed": "playwright test --headed",
     "e2e:debug": "playwright test --debug",
-    "e2e:report": "playwright show-report"
+    "e2e:report": "playwright show-report",
+    "release:prepare": "node scripts/release/build-artifacts.mjs",
+    "release:verify": "node scripts/release/check-tarballs.mjs && node scripts/release/smoke-install.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

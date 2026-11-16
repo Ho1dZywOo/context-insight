@@ -36,6 +36,7 @@ for (const suffix of ['', '-wal', '-shm', '-journal']) {
   const f = TEST_DB + suffix;
   if (existsSync(f)) rmSync(f);
 }
+writeFileSync(TEST_DB, '');
 const prismaBin = require.resolve('prisma/build/index.js');
 const r = spawnSync(process.execPath, [prismaBin, 'migrate', 'deploy'], {
   cwd: PKG_DIR,

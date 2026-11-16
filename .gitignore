@@ -122,3 +122,7 @@ playwright-report/
 
 # CLI bundle (npm prepack artifact, esbuild → dist/cli.mjs)
 dist/
+
+# release artifacts
+release-artifacts/
+.cannbot-pack/

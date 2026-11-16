@@ -81,17 +81,16 @@ describe("npm publish readiness (npm pack --dry-run)", () => {
     const forbidden = (p: string) =>
       p === "tests" || p.startsWith("tests/") ||
       p === "docs" || p.startsWith("docs/") ||
-      p === ".env" ||
-      p.endsWith("dev.db") || p.endsWith("dev.db-journal") ||
-      // SQLite WAL 边车：.npmignore 曾只排 dev.db/-journal 漏了这两个——并行
-      // 测试热写 WAL 时 npm pack 读到变异文件报 EOF，安静态则会静默进包。
-      // test.db 同族同理：测试库本体与边车都不属于运行时产物，静默态会连同
-      // 测试数据一起进包
-      p.endsWith("dev.db-wal") || p.endsWith("dev.db-shm") ||
-      p.endsWith("test.db") || p.endsWith("test.db-journal") ||
-      p.endsWith("test.db-wal") || p.endsWith("test.db-shm") ||
+      p === ".github" || p.startsWith(".github/") ||
+      p === ".env" || p.startsWith(".env.") ||
+      /\.db(?:-(?:journal|wal|shm))?$/.test(p) ||
       p === "package-lock.json" ||
       p === ".next" || p.startsWith(".next/") ||
+      p === ".next-e2e" || p.startsWith(".next-e2e/") ||
+      p === "playwright-report" || p.startsWith("playwright-report/") ||
+      p === "test-results" || p.startsWith("test-results/") ||
+      p === "release-artifacts" || p.startsWith("release-artifacts/") ||
+      p === ".cannbot-pack" || p.startsWith(".cannbot-pack/") ||
       p === "home" || p.startsWith("home/")
     const leaked = files.filter(forbidden)
     expect(leaked, `以下文件不应进包: ${leaked.join(", ")}`).toEqual([])
@@ -118,6 +117,13 @@ describe("npm publish readiness (npm pack --dry-run)", () => {
     expect(pkgJson.scripts?.postinstall).toBe("node scripts/postinstall.mjs")
     expect(pkgJson.license).toBeTruthy()
     expect(pkgJson.engines?.node).toMatch(/>=22\.14/)
+    expect(pkgJson.repository).toMatchObject({
+      type: "git",
+      url: "git+https://github.com/guixu-labs/context-insight.git",
+    })
+    expect(pkgJson.homepage).toBe("https://github.com/guixu-labs/context-insight#readme")
+    expect(pkgJson.bugs).toEqual({ url: "https://github.com/guixu-labs/context-insight/issues" })
+    expect(pkgJson.publishConfig?.access).toBe("public")
   }, 120_000)
 
   it("CLI bundle 可运行：dist/cli.mjs --version 输出与展示版本一致（node_modules 内别名免疫）", () => {
