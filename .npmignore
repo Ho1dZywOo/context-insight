@@ -1,3 +1,8 @@
+# release artifacts
+release-artifacts/
+.cannbot-pack/
+.github/
+
 # 测试
 tests/
 coverage/
@@ -21,6 +26,10 @@ build/
 # 这里不忽略 public/export-view.js
 
 # 运行时数据（用户机器生成）
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 dev.db
 dev.db-journal
 dev.db-wal
@@ -64,7 +73,7 @@ tmp/
 # IDE
 .DS_Store
 
-# 锁文件（平台特定，全局装时重生成）
+# 锁文件由仓根 package-lock.json 管理，但 npm 发布物不携带
 package-lock.json
 
 # 调试日志
@@ -73,6 +82,3 @@ npm-debug.log*
 
 # smart-agent Python 缓存与测试（保留源码 server.py 等）
 smart-agent/tests/
-
-# cannbot 品牌变体打包工作区（scripts/pack-cannbot.mjs）
-.cannbot-pack/

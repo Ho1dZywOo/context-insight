@@ -49,6 +49,7 @@ export INSIGHT_DIST_DIR=".next-e2e"
 
 # --- 1) e2e.db：migrations 重放（同一基线；夹具会话从物理上不可能泄进用户库） ---
 rm -f "$DB" "$DB-wal" "$DB-shm" "$DB-journal"
+: > "$DB"
 npx prisma migrate deploy
 
 # --- 2) 构建：BUILD_ID 新鲜度复用（源码/配置比 BUILD_ID 新才重建；判定

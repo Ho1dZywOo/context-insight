@@ -20,6 +20,7 @@ import { VERSION } from '../../src/lib/version'
 
 const PKG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const TGZ = path.join(PKG_DIR, '.cannbot-pack', `cannbot-insight-${VERSION}.tgz`)
+const MAIN_PKG = JSON.parse(fs.readFileSync(path.join(PKG_DIR, 'package.json'), 'utf8'))
 
 const TEXT_EXTS = new Set([
   '.ts', '.tsx', '.js', '.mjs', '.cjs', '.json', '.md', '.mdx', '.py',
@@ -94,6 +95,32 @@ describe('cannbot 品牌变体打包（pack-cannbot.mjs）', () => {
     })
     expect(pkg.version).toBe(VERSION)
     expect(pkg.private).toBeUndefined()
+    expect(pkg.repository).toEqual(MAIN_PKG.repository)
+    expect(pkg.homepage).toBe(MAIN_PKG.homepage)
+    expect(pkg.bugs).toEqual(MAIN_PKG.bugs)
+    expect(pkg.publishConfig?.access).toBe('public')
+  })
+
+  it('发布包不携带测试数据库、构建目录和 CI 配置', () => {
+    const leaked: string[] = []
+    const walk = (dir: string) => {
+      for (const name of fs.readdirSync(dir)) {
+        const full = path.join(dir, name)
+        if (fs.statSync(full).isDirectory()) { walk(full); continue }
+        const rel = path.relative(extracted, full)
+        if (/\.db(?:-(?:journal|wal|shm))?$/.test(rel) ||
+            rel === '.github' || rel.startsWith('.github/') ||
+            rel === 'release-artifacts' || rel.startsWith('release-artifacts/') ||
+            rel === '.next' || rel.startsWith('.next/') ||
+            rel === '.next-e2e' || rel.startsWith('.next-e2e/') ||
+            rel === 'test-results' || rel.startsWith('test-results/') ||
+            rel === 'playwright-report' || rel.startsWith('playwright-report/')) {
+          leaked.push(rel)
+        }
+      }
+    }
+    walk(extracted)
+    expect(leaked).toEqual([])
   })
 
   it('CLI bundle 实跑：--version 输出 CANNBot-Insight 品牌串', () => {
