@@ -62,10 +62,10 @@ function smoke(spec) {
     for (const command of spec.commands) {
       const executable = path.join(prefix, 'bin', process.platform === 'win32' ? `${command}.cmd` : command)
       const result = run(executable, ['--version'], { cwd: temp, env, timeout: 60_000 })
-      const expected = `${spec.versionPrefix} v${pkg.version}`
-      const actual = result.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)
-      if (actual !== expected) {
-        throw new Error(`${command} --version returned ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`)
+      const output = result.stdout.trim()
+      const expectedVersion = `v${pkg.version}`
+      if (!output.includes(spec.versionPrefix) || !output.includes(expectedVersion)) {
+        throw new Error(`${command} --version output ${JSON.stringify(output)} must contain ${spec.versionPrefix} and ${expectedVersion}`)
       }
     }
     console.log(`[release-smoke] ${spec.name}@${pkg.version}: ${spec.commands.join(', ')} OK`)

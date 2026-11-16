@@ -128,7 +128,12 @@ for (const spec of packages) {
   if (manifest.scripts?.postinstall !== 'node scripts/postinstall.mjs') {
     errors.push(`${spec.name}: postinstall script mismatch`)
   }
-  if (JSON.stringify(manifest.bin) !== JSON.stringify(spec.bins)) {
+  const actualBins = manifest.bin && typeof manifest.bin === 'object' && !Array.isArray(manifest.bin)
+    ? manifest.bin
+    : {}
+  const expectedBinEntries = Object.entries(spec.bins)
+  if (Object.keys(actualBins).length !== expectedBinEntries.length ||
+      !expectedBinEntries.every(([name, target]) => actualBins[name] === target)) {
     errors.push(`${spec.name}: bin mismatch: ${JSON.stringify(manifest.bin)}`)
   }
   if (!String(manifest.repository?.url ?? '').includes(expectedRepo)) {

@@ -8,11 +8,25 @@ on:
     paths:
       - ".github/workflows/release-dry-run.yml"
       - ".npmignore"
+      - "bin/**"
+      - "next.config.ts"
       - "package.json"
+      - "prisma/**"
+      - "public/**"
+      - "scripts/build-cli.mjs"
+      - "scripts/build-export-view.mjs"
+      - "scripts/build-guard.mjs"
+      - "scripts/ensure-test-db.mjs"
       - "scripts/pack-cannbot.mjs"
       - "scripts/release/**"
+      - "src/cli/index.ts"
+      - "src/export-view/**"
+      - "src/lib/branding.ts"
+      - "src/lib/version.ts"
+      - "tests/e2e/boot/boot-server.sh"
       - "tests/pipeline/cannbot-pack.test.ts"
       - "tests/pipeline/npm-publish.test.ts"
+      - "tsconfig.json"
 
 permissions:
   contents: read
