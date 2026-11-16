@@ -8,19 +8,20 @@
 
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
 // Integration test for Audit v4 Step 1 — deterministic agent-IO extraction.
-// Runs against the real dev DB; gracefully skips when no session with a bridge exists.
+// Runs against the real dev DB; gracefully skips when no bridge has a subagent session.
 
 import { describe, it, expect } from "vitest";
 import { prisma } from "../setup";
 import { buildAgentIO } from "@/lib/export/agent-io-export";
 
 describe("buildAgentIO (v4 Step 1)", () => {
-  it("extracts a flat agent tree with envelope + I/O from a session that has bridges", { timeout: 60_000 }, async () => {
+  it("extracts a flat agent tree with envelope + I/O from a session that has a subagent bridge", { timeout: 60_000 }, async () => {
     const bridge = await prisma.interactionBridge.findFirst({
+      where: { subagentSessionId: { not: null } },
       include: { session: { select: { taskId: true, framework: true } } },
     });
     if (!bridge) {
-      // No bridge data in this DB — nothing to assert, pass vacuously.
+      // No subagent bridge data in this DB — nothing to assert, pass vacuously.
       expect(bridge).toBeNull();
       return;
     }

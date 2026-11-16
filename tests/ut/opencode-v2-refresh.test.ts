@@ -31,6 +31,8 @@ const PROBE_ID_PENDING = 'ses_v2probe001ffeV2SampleF03';
 const PROBE_ID_SETTLED = 'ses_v2probe001ffeV2SampleF04';
 const PROBE_ID_SUBPARENT = 'ses_v2probe001ffeV2SampleF05';
 const PROBE_SUB_ID = 'ses_v2probesub1ffeV2SampleG05';
+const PROBE_SEQ_DRIFT_ID = 'ses_v2seqdrift001ffeV2SampleIii';
+const PROBE_SUB_SEQ_DRIFT_ID = 'ses_v2subseqdrift001ffeV2SampleKkk';
 
 const createdSessionIds: string[] = [];
 
@@ -59,7 +61,7 @@ function v2AssistantMsg(sessionId: string, seq: number, text: string, at: number
   return { id: `msg_${sessionId}_${seq}`, sessionId, type: 'assistant', seq, data, at };
 }
 
-function writeDb(sessions: Array<{ id: string; parentId: string | null; title: string | null; created: number }>, msgs: V2Msg[]): void {
+function writeDb(sessions: Array<{ id: string; parentId: string | null; title: string | null; created: number }>, msgs: V2Msg[], mixed = false): void {
   // 逐 session 重写而非删库重建：库是全文件共享夹具，重建会抹掉其它用例的
   // 数据，制造声明顺序依赖（用例必须可单独跑、任意顺序跑）
   const db = new Database(DB_FILE);
@@ -72,6 +74,10 @@ function writeDb(sessions: Array<{ id: string; parentId: string | null; title: s
     db.exec(`CREATE TABLE IF NOT EXISTS session_message (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL,
       time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`);
+    if (mixed) {
+      db.exec('CREATE TABLE IF NOT EXISTS session (id TEXT PRIMARY KEY, parent_id TEXT)');
+      db.exec('CREATE TABLE IF NOT EXISTS message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)');
+    }
     const ids = sessions.map(x => x.id);
     const delS = db.prepare('DELETE FROM session_v2 WHERE id = ?');
     const delM = db.prepare('DELETE FROM session_message WHERE session_id = ?');
@@ -188,6 +194,63 @@ describe('opencode v2 活跃度探针（probeAutoRefresh）', () => {
       ],
     );
     const p = await probe(PROBE_ID_PENDING);
+    expect(p.pendingInput).toBe(true);
+    expect(p.settled).toBe(false);
+  });
+
+  it('v2 latest message follows seq when time_created regresses', async () => {
+    await createProbeSession(PROBE_SEQ_DRIFT_ID);
+    const now = Date.now();
+    writeDb(
+      [{ id: PROBE_SEQ_DRIFT_ID, parentId: null, title: null, created: now - 120_000 }],
+      [
+        v2AssistantMsg(PROBE_SEQ_DRIFT_ID, 5, 'completed response', now - 20_000),
+        v2UserMsg(PROBE_SEQ_DRIFT_ID, 6, 'follow-up', now - 60_000),
+      ],
+    );
+    const p = await probe(PROBE_SEQ_DRIFT_ID);
+    expect(p.pendingInput).toBe(true);
+    expect(p.settled).toBe(false);
+  });
+
+  it('mixed v1/v2 databases use v2 seq for the selected v2 session', async () => {
+    const taskId = 'ses_v2mixedseqdrift001ffeV2SampleJjj';
+    await createProbeSession(taskId);
+    const now = Date.now();
+    writeDb(
+      [{ id: taskId, parentId: null, title: null, created: now - 120_000 }],
+      [
+        v2AssistantMsg(taskId, 5, 'completed response', now - 20_000),
+        v2UserMsg(taskId, 6, 'follow-up', now - 60_000),
+      ],
+      true,
+    );
+    const p = await probe(taskId);
+    expect(p.pendingInput).toBe(true);
+    expect(p.settled).toBe(false);
+  });
+
+  it('cross-session subagent latest input follows time_created, not per-session seq', async () => {
+    const parentId = PROBE_SUB_SEQ_DRIFT_ID;
+    const longerSubId = `${parentId}_long`;
+    const recentSubId = `${parentId}_recent`;
+    await createProbeSession(parentId);
+    const now = Date.now();
+    writeDb(
+      [
+        { id: parentId, parentId: null, title: null, created: now - 120_000 },
+        { id: longerSubId, parentId, title: 'longer subagent history', created: now - 120_000 },
+        { id: recentSubId, parentId, title: 'recent subagent input', created: now - 120_000 },
+      ],
+      [
+        v2UserMsg(parentId, 4, 'parent question', now - 50_000),
+        v2AssistantMsg(parentId, 5, 'parent response', now - 40_000),
+        v2UserMsg(longerSubId, 4, 'older subagent question', now - 30_000),
+        v2AssistantMsg(longerSubId, 10, 'older subagent response', now - 20_000),
+        v2UserMsg(recentSubId, 4, 'latest subagent question', now - 10_000),
+      ],
+    );
+    const p = await probe(parentId);
     expect(p.pendingInput).toBe(true);
     expect(p.settled).toBe(false);
   });
