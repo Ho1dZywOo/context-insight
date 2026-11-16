@@ -16,7 +16,7 @@ const registry = 'https://registry.npmjs.org/'
 const packageNames = ['context-insight', 'cannbot-insight']
 
 function usage() {
-  console.error('Usage: node scripts/release/preflight-publish.mjs --tag vX.Y.Z --confirm X.Y.Z [--mode dry-run|publish]')
+  console.error('Usage: node scripts/release/preflight-publish.mjs --tag vX.Y.Z --confirm X.Y.Z --dist-tag next|dev [--mode dry-run|publish] [--promote-latest true|false]')
 }
 
 function readArg(name) {
@@ -31,8 +31,10 @@ if (process.argv.includes('--help')) {
 
 const tag = readArg('--tag')
 const confirmVersion = readArg('--confirm')
+const distTag = readArg('--dist-tag') ?? 'next'
 const mode = readArg('--mode') ?? 'dry-run'
-if (!tag || !confirmVersion || !['dry-run', 'publish'].includes(mode)) {
+const promoteLatest = readArg('--promote-latest') === 'true'
+if (!tag || !confirmVersion || !['next', 'dev'].includes(distTag) || !['dry-run', 'publish'].includes(mode)) {
   usage()
   process.exit(2)
 }
@@ -40,6 +42,8 @@ if (!tag || !confirmVersion || !['dry-run', 'publish'].includes(mode)) {
 function fail(message) {
   throw new Error(message)
 }
+
+if (distTag === 'dev' && promoteLatest) fail('dev releases cannot promote latest')
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -109,10 +113,14 @@ const versionSource = fs.readFileSync(path.join(root, 'src/lib/version.ts'), 'ut
 const displayVersion = /export const VERSION = "([^"]+)"/.exec(versionSource)?.[1]
 const version = sourcePackage.version
 
-if (!parseSemver(version)) fail(`package.json version is not semver: ${version}`)
+const parsedVersion = parseSemver(version)
+if (!parsedVersion) fail(`package.json version is not semver: ${version}`)
 if (displayVersion !== version) fail(`version mismatch: package.json=${version} version.ts=${displayVersion ?? 'missing'}`)
 if (tag !== `v${version}`) fail(`tag ${tag} does not match package version v${version}`)
 if (confirmVersion !== version) fail(`confirm version ${confirmVersion} does not match package version ${version}`)
+if (distTag === 'dev' && parsedVersion.prerelease.length === 0) {
+  fail(`dev releases require a prerelease version such as 1.0.5-dev.20261116.1, got ${version}`)
+}
 
 const head = run('git', ['rev-parse', 'HEAD'])
 const tagCommit = run('git', ['rev-parse', `refs/tags/${tag}^{commit}`])
@@ -132,6 +140,7 @@ for (const name of packageNames) {
   states[name] = {
     latest: distTags.latest ?? null,
     next: distTags.next ?? null,
+    dev: distTags.dev ?? null,
     exactExists,
   }
 
@@ -140,15 +149,16 @@ for (const name of packageNames) {
     if (distTags.latest && compareSemver(version, distTags.latest) <= 0) {
       errors.push(`${name} version ${version} is not newer than latest ${distTags.latest}`)
     }
-    if (distTags.next && compareSemver(version, distTags.next) < 0) {
-      errors.push(`${name} version ${version} is lower than next ${distTags.next}`)
+    const channelVersion = distTags[distTag]
+    if (channelVersion && compareSemver(version, channelVersion) < 0) {
+      errors.push(`${name} version ${version} is lower than ${distTag} ${channelVersion}`)
     }
   }
 }
 
 for (const name of packageNames) {
   const state = states[name]
-  console.log(`[release-preflight] ${name}: latest=${state.latest ?? '(none)'} next=${state.next ?? '(none)'} exact=${state.exactExists ? 'exists' : 'absent'}`)
+  console.log(`[release-preflight] ${name}: latest=${state.latest ?? '(none)'} next=${state.next ?? '(none)'} dev=${state.dev ?? '(none)'} exact=${state.exactExists ? 'exists' : 'absent'}`)
 }
 if (mode === 'dry-run') {
   console.log('[release-preflight] dry-run: registry conflicts are reported but do not block')
@@ -156,4 +166,4 @@ if (mode === 'dry-run') {
   for (const error of errors) console.error(`[release-preflight] ${error}`)
   process.exit(1)
 }
-console.log(`[release-preflight] ${mode}: ${tag} / ${version} OK`)
+console.log(`[release-preflight] ${mode}: ${tag} / ${version} / ${distTag} OK`)

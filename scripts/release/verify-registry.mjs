@@ -21,14 +21,14 @@ function readArg(name) {
 }
 
 if (process.argv.includes('--help')) {
-  console.error('Usage: node scripts/release/verify-registry.mjs --tag latest|next --version X.Y.Z')
+  console.error('Usage: node scripts/release/verify-registry.mjs --tag latest|next|dev --version X.Y.Z')
   process.exit(0)
 }
 
 const tag = readArg('--tag')
 const version = readArg('--version')
 if (!tag || !version) {
-  console.error('Usage: node scripts/release/verify-registry.mjs --tag latest|next --version X.Y.Z')
+  console.error('Usage: node scripts/release/verify-registry.mjs --tag latest|next|dev --version X.Y.Z')
   process.exit(2)
 }
 

@@ -19,6 +19,14 @@ on:
         options:
           - dry-run
           - publish
+      dist_tag:
+        description: "Publish channel; dev leaves next and latest unchanged"
+        required: true
+        default: next
+        type: choice
+        options:
+          - next
+          - dev
       promote_latest:
         description: "After next verification, promote both packages to latest"
         required: true
@@ -57,7 +65,7 @@ jobs:
         run: git fetch origin main:refs/remotes/origin/main --force
 
       - name: Validate release identity
-        run: node scripts/release/preflight-publish.mjs --tag "${{ inputs.release_tag }}" --confirm "${{ inputs.confirm_version }}" --mode "${{ inputs.mode }}"
+        run: node scripts/release/preflight-publish.mjs --tag "${{ inputs.release_tag }}" --confirm "${{ inputs.confirm_version }}" --mode "${{ inputs.mode }}" --dist-tag "${{ inputs.dist_tag }}" --promote-latest "${{ inputs.promote_latest }}"
 
       - name: Read package version
         id: version
@@ -165,23 +173,24 @@ jobs:
       - name: Verify downloaded checksums
         run: sha256sum -c release-artifacts/SHA256SUMS
 
-      - name: Publish packages to next
+      - name: Publish packages to selected dist-tag
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.version }}
+          DIST_TAG: ${{ inputs.dist_tag }}
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "NPM_TOKEN is not configured in the npm-release environment" >&2
             exit 1
           fi
-          npm publish "release-artifacts/context-insight-${VERSION}.tgz" --tag next --access public --provenance
-          npm publish "release-artifacts/cannbot-insight-${VERSION}.tgz" --tag next --access public --provenance
+          npm publish "release-artifacts/context-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
+          npm publish "release-artifacts/cannbot-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
 
-      - name: Verify packages from npm next
-        run: node scripts/release/verify-registry.mjs --tag next --version "${{ needs.preflight.outputs.version }}"
+      - name: Verify packages from selected dist-tag
+        run: node scripts/release/verify-registry.mjs --tag "${{ inputs.dist_tag }}" --version "${{ needs.preflight.outputs.version }}"
 
       - name: Promote packages to latest
-        if: inputs.promote_latest == true
+        if: inputs.promote_latest == true && inputs.dist_tag != 'dev'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.version }}
@@ -194,5 +203,5 @@ jobs:
           npm dist-tag add "cannbot-insight@${VERSION}" latest
 
       - name: Verify packages from npm latest
-        if: inputs.promote_latest == true
+        if: inputs.promote_latest == true && inputs.dist_tag != 'dev'
         run: node scripts/release/verify-registry.mjs --tag latest --version "${{ needs.preflight.outputs.version }}"
