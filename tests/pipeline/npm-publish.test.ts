@@ -91,6 +91,7 @@ describe("npm publish readiness (npm pack --dry-run)", () => {
       p === "test-results" || p.startsWith("test-results/") ||
       p === "release-artifacts" || p.startsWith("release-artifacts/") ||
       p === ".cannbot-pack" || p.startsWith(".cannbot-pack/") ||
+      p === "scripts/release" || p.startsWith("scripts/release/") ||
       p === "home" || p.startsWith("home/")
     const leaked = files.filter(forbidden)
     expect(leaked, `以下文件不应进包: ${leaked.join(", ")}`).toEqual([])
