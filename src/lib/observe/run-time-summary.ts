@@ -6,12 +6,25 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// Run 时间口径单一源（Overview = Perf）：
-// - wall = 全部执行 span 的最早开始 → 最晚结束
-// - active = turn 事件点 + assistant 推理窗口的并集，固定 5min 间隔聚类
-// - llmActive = 主 Agent 与 subagent 的 assistant 推理窗口并集（重叠只算一次）
-// - inactive = wall - active
-// proxy 反推窗口以完成时刻为锚向前生成；反推时长最多 10min。
+// Run 时间口径单一源（Overview 与 Perf 必须展示同一组数字）。
+//
+// Wall Clock（墙钟）：
+//   从最早 execution span.start 到最晚 execution span.end 的真实时间跨度。
+//   多成员并行时重叠只算一次，不能用 Σ成员 session 时长代替。
+//
+// Agent Active（活跃）：
+//   把每个 turn 的 createdAt_ts 当成一个事件点，再加上 assistant 推理窗口；
+//   所有区间合并后，相邻间隔 <= 5min 的片段继续合并。
+//   这是“事件聚类活跃”，不是工具连续执行时长，也不使用整个 turn 生命周期。
+//
+// LLM Active（模型活跃）：
+//   只统计 assistant 的模型推理窗口，主 Agent 和 subagent 都包含，重叠只算一次。
+//   不包含工具执行、等待工具结果、等待资源或用户空闲。
+//
+// Idle（非活跃）：
+//   Wall Clock - Agent Active。
+//
+// 必须满足：LLM Active <= Agent Active <= Wall Clock。
 
 import {
   ACTIVE_GAP_THRESHOLD_MS,
@@ -49,6 +62,7 @@ export interface RunTimeSummary {
 
 export interface RunTimeObservability {
   summary: RunTimeSummary
+  /** 每个成员会话自己的固定 5min 事件聚类活跃值；run 级 Active 另做全成员并集。 */
   activeByRow: Map<string, { activeMs: number | null }>
 }
 
@@ -59,10 +73,17 @@ function sumSegments(segments: Array<{ start: number; end: number }>): number {
 function llmWindowOf(turn: RunTimeTurnRow, isProxy: boolean): [number, number] | null {
   const ts = turn.createdAt_ts?.getTime()
   if (!Number.isFinite(ts) || turn.role !== 'assistant' || turn.latencyMs <= 0) return null
+
+  // proxy：createdAt_ts 是响应完成时刻，用 wire latency 向前反推；
+  // latency 可能包含异常伪值，因此反推窗口最多 10min。
   if (isProxy && !turn.completedAt) {
     const latency = Math.min(turn.latencyMs, ACTIVE_LATENCY_CAP_MS)
     return [ts! - latency, ts!]
   }
+
+  // native：createdAt_ts 是 turn 开始，latencyMs 是模型推理耗时。
+  // completedAt 是 turn 整体结束，可能包含长时间工具执行/等待，不能直接拿它
+  // 当 LLM 推理结束；这里只用它做上界防御。
   const completed = turn.completedAt?.getTime()
   const end = Number.isFinite(completed)
     ? Math.min(ts! + turn.latencyMs, completed!)
@@ -82,21 +103,27 @@ export function buildRunTimeObservability(
   }
 
   const spans: Array<{ start: number; end: number }> = []
+  // activeWindows = turn 事件点 + LLM 推理窗口；用于 Agent Active。
   const activeWindows: Array<[number, number]> = []
+  // llmWindows 只保存 assistant 推理窗口；用于 LLM Active。
   const llmWindows: Array<[number, number]> = []
   const windowsBySession = new Map<string, Array<[number, number]>>()
   for (const session of sessions) {
     const isProxy = isProxyVersion(session.version)
     const rows = turnsBySession.get(session.id) ?? []
+    // Wall Clock 的 execution 包络来自主 Agent + subagent 的 turns 跨度。
     for (const entry of buildAgentSpans(rows, isProxy).values()) {
       if (entry.span) spans.push(entry.span)
     }
     const sessionWindows: Array<[number, number]> = []
     for (const turn of rows) {
+      // 每个 turn 的时间点都参与事件聚类（不论角色），保证 Overview 原有
+      // “turn 事件活跃”口径不丢失。
       const ts = turn.createdAt_ts?.getTime()
       if (Number.isFinite(ts)) sessionWindows.push([ts!, ts!])
       const llm = llmWindowOf(turn, isProxy)
       if (llm) {
+        // LLM 窗口同时进入 LLM Active 和 Agent Active，保证前者是后者子集。
         llmWindows.push(llm)
         sessionWindows.push(llm)
       }
@@ -127,7 +154,9 @@ export function buildRunTimeObservability(
     .map(([a, b]) => [Math.max(start, a), Math.min(end, b)] as [number, number])
     .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && (keepPoints ? b >= a : b > a))
   const wallMs = end - start
+  // LLM Active：推理窗口精确并集，不做 5min 间隔扩张；并行调用重叠只算一次。
   const llmActiveMs = Math.min(wallMs, sumSegments(clusterActiveSegments(clip(llmWindows, false), 0)))
+  // Agent Active：事件点 + 推理窗口，固定 5min 间隔聚类；0 宽事件点必须保留。
   const activeMs = Math.min(
     wallMs,
     sumSegments(clusterActiveSegments(clip(activeWindows, true), ACTIVE_GAP_THRESHOLD_MS)),
@@ -141,6 +170,8 @@ export function buildRunTimeObservability(
     }
     const sessionStart = session.startTime.getTime()
     const sessionEnd = session.endTime?.getTime() ?? Math.max(...windows.map(([, b]) => b))
+    // 成员级 active 仅用于 memberStats 展示；run 级 Active 仍是全成员并集，
+    // 多成员并行时不能把这里的值直接相加来冒充 run 级活跃。
     const sessionActive = sumSegments(clusterActiveSegments(
       windows
         .map(([a, b]) => [Math.max(sessionStart, a), Math.min(sessionEnd, b)] as [number, number])
