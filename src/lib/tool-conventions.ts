@@ -235,9 +235,9 @@ export function isShellToolCall(toolName: string): boolean {
 }
 
 /**
- * shell 命令的连接文本（供文本扫描）：`{"command": string}` 直取；数组
- * 形态 join ' '。无 command 键（如 exec 的 input 形态）→ null，调用方
- * 自行回落原始 args。
+ * shell 命令的连接文本（供文本扫描）：`command` / Codex 原生 `cmd`
+ * 字符串直取；数组形态 join ' '。无命令键（如 exec 的 input 形态）→ null，
+ * 调用方自行回落原始 args。
  */
 export function shellCommandOf(argsJson: string | null): string | null {
   const parts = shellCommandArgsOf(argsJson);
@@ -247,16 +247,20 @@ export function shellCommandOf(argsJson: string | null): string | null {
 /**
  * shell 命令的参数段（供逐段文件读提取）：字符串命令 → [整串]；数组
  * 命令 → 各元素（`["bash","-lc","cat a"]` 的载荷在末元素——逐元素尝试
- * 避免连接后头部变 bash 导致漏提取）。无 command 键 → []。
+ * 避免连接后头部变 bash 导致漏提取）。command / cmd 双键兼容
+ * （opencode 与 Codex 原生）。无命令键 → []。
  */
 export function shellCommandArgsOf(argsJson: string | null): string[] {
   if (!argsJson) return [];
   try {
     const parsed: unknown = JSON.parse(argsJson);
     if (typeof parsed !== 'object' || parsed === null) return [];
-    const c = (parsed as Record<string, unknown>).command;
-    if (typeof c === 'string') return [c];
-    if (Array.isArray(c) && c.length > 0 && c.every(x => typeof x === 'string')) return c as string[];
+    const args = parsed as Record<string, unknown>;
+    for (const key of ['command', 'cmd']) {
+      const c = args[key];
+      if (typeof c === 'string' && c) return [c];
+      if (Array.isArray(c) && c.length > 0 && c.every(x => typeof x === 'string')) return c as string[];
+    }
   } catch {
     // 非 JSON
   }

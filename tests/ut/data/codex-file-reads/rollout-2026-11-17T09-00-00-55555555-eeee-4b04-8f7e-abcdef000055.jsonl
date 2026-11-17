@@ -1,0 +1,8 @@
+{"timestamp":"2026-11-17T09:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"55555555-eeee-4b04-8f7e-abcdef000055","timestamp":"2026-11-17T09:00:00.000Z","cwd":"/home/user/project","cli_version":"0.167.0","model_provider":"test-provider","thread_source":"user"}}
+{"timestamp":"2026-11-17T09:00:01.000Z","ordinal":1,"type":"turn_context","payload":{"model":"test-model-file-reads","turn_id":"turn-1"}}
+{"timestamp":"2026-11-17T09:00:02.000Z","ordinal":2,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"检查 app.ts 和 README"}]}}
+{"timestamp":"2026-11-17T09:00:03.000Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"开始检查。"}]}}
+{"timestamp":"2026-11-17T09:00:04.000Z","ordinal":4,"type":"response_item","payload":{"type":"function_call","call_id":"call_file_read","name":"exec_command","arguments":"{\"cmd\":\"sed -n '10,20p' /home/user/project/src/app.ts && cat /home/user/project/README.md\",\"workdir\":\"/home/user/project\",\"yield_time_ms\":10000}"}}
+{"timestamp":"2026-11-17T09:00:05.000Z","ordinal":5,"type":"token_usage_record","payload":{"usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":135}}}
+{"timestamp":"2026-11-17T09:00:06.000Z","ordinal":6,"type":"response_item","payload":{"type":"function_call_output","call_id":"call_file_read","output":"app.ts lines 10-20\nREADME contents"}}
+{"timestamp":"2026-11-17T09:00:07.000Z","ordinal":7,"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"检查完成。"}}

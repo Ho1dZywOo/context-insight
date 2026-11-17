@@ -24,6 +24,14 @@
     ]
   },
   {
+    "name": "原生 Codex exec_command：cmd 字符串",
+    "argsJson": "{\"cmd\":\"sed -n '10,20p' /w/src/app.ts && cat /w/README.md\"}",
+    "expect": [
+      { "filePath": "/w/src/app.ts", "type": "partial", "start": 10, "end": 20 },
+      { "filePath": "/w/README.md", "type": "full", "start": 0, "end": null }
+    ]
+  },
+  {
     "name": "cd 前缀 / 管道 / sed -i 写操作不计读",
     "argsJson": "{\"command\":\"cd /w && ls -la | grep foo && sed -i 's/a/b/' /w/c.txt\"}",
     "expect": []
