@@ -247,4 +247,36 @@ describe('POST /api/ingest/import-file — Session.model 最频次提取', () =>
     const s2 = await prisma.session.findFirst({ where: { taskId: 'model-freq-tie-it' } })
     expect(s2!.model).toBe('glm-4.7')
   })
+
+  it('子代理模型轮数更多时不覆盖主 agent 模型', async () => {
+    const sid = 'model-root-only-it'
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-root-only-'))
+    const rootFile = path.join(dir, `${sid}.jsonl`)
+    const subDir = path.join(dir, sid, 'subagents')
+    fs.mkdirSync(subDir, { recursive: true })
+    fs.writeFileSync(
+      rootFile,
+      turn(0, 'claude-opus-5[1m]', 'root').map(l => JSON.stringify(l)).join('\n') + '\n',
+    )
+    for (let i = 0; i < 5; i++) {
+      fs.writeFileSync(
+        path.join(subDir, `sub-${i}.jsonl`),
+        turn(i + 1, 'claude-sonnet-5-5', `subagent ${i}`).map(l => JSON.stringify(l)).join('\n') + '\n',
+      )
+    }
+    try {
+      await prisma.session.deleteMany({ where: { taskId: sid } })
+      const res = await POST(req({ source: 'claude-jsonl', sessionId: sid, filePath: rootFile }))
+      expect(res.status).toBe(200)
+      const s = await prisma.session.findFirst({ where: { taskId: sid } })
+      expect(s).not.toBeNull()
+      expect(s!.model).toBe('claude-opus-5[1m]')
+      expect(await prisma.turn.count({
+        where: { sessionId: s!.id, isSubagent: true, role: 'assistant' },
+      })).toBe(5)
+      createdSessionIds.push(s!.id)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 });
