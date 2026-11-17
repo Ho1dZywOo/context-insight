@@ -56,6 +56,28 @@ const LFS_NEUTRALIZE = '-c filter.lfs.process= -c filter.lfs.smudge=cat -c filte
 // 私有仓匿名 401 时 git 会退到终端问用户名，把 HTTP 请求冻到超时、提示
 // 串进服务器终端（现场形态：进 viewer 页面终端停在 Username for ...）。
 // 快速失败，错误文案由 classifyLakeError 分诊 auth-failed
+//
+// lake git 子进程环境（合同模型）：GIT_CONFIG_GLOBAL 缺省指空——全局层
+// （~/.gitconfig / $XDG git config）是机器个人状态，不参与服务端网络面。
+// 现场事故实证：全局 url.*.insteadOf 把 UI 显式配置的 https 数据仓静默
+// 改道 ssh，22 端口不通即超时（classifyLakeError 只能 unknown），用户配置
+// 的地址与实际协议脱钩——URL/协议是显式合同，机器不得改写。三层边界：
+//   ① 显式 process.env.GIT_CONFIG_GLOBAL（运维/测试意图）穿透——cred UT 的
+//      诱饵全局 helper、受控环境的合规定制照常参与；
+//   ② 系统层（/etc/gitconfig，管理员域）保留——机房代理等合法生效；
+//   ③ 凭据层 amb 兜底语义不受影响：单源在管期间 -c 清位项隔离（确定性），
+//      撤销后回归机器自然形态（系统级 helper 仍生效，个人级走全局文件——
+//      被 ① 封的是这一档，产品有三条官方凭据通道，见 MissingPushCredentialsError）。
+// 代理需要显式走 https_proxy 等 env（git 原生认），不再隐式吃个人 gitconfig。
+function lakeGitEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL ?? os.devNull,
+    ...(extra ?? {}),
+    GIT_TERMINAL_PROMPT: '0',
+  };
+}
+
 export function runGit(
   cmd: string,
   cwd: string,
@@ -67,7 +89,7 @@ export function runGit(
     : cmd;
   return execSync(neutral, {
     cwd, stdio: 'pipe', timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024,
-    env: { ...process.env, ...(opts?.env ?? {}), GIT_TERMINAL_PROMPT: '0' },
+    env: lakeGitEnv(opts?.env),
     ...(opts?.input != null ? { input: opts.input } : {}),
   });
 }
@@ -276,7 +298,7 @@ function setLocalCredHelpers(dir: string, helperPath: string | null): void {
   const run = (args: string[]): void => {
     const r = spawnSync('git', args, {
       cwd: dir, stdio: 'pipe', timeout: 10_000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: lakeGitEnv(),
     });
     // exit 5 = unset 目标不存在（首次安装/已清理），预期内
     if (r.status !== 0 && r.status !== 5) {
@@ -1347,7 +1369,7 @@ function spawnGitAuthed(
   timeoutMs: number,
   opts?: { maxBuffer?: number; input?: string },
 ): SpawnSyncReturns<Buffer> {
-  const base = { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout: timeoutMs, maxBuffer: opts?.maxBuffer ?? 256 * 1024 * 1024 };
+  const base = { cwd, env: lakeGitEnv(), timeout: timeoutMs, maxBuffer: opts?.maxBuffer ?? 256 * 1024 * 1024 };
   if (!auth) return spawnSync('git', argv, { ...base, ...(opts?.input != null ? { input: opts.input, stdio: ['pipe', 'pipe', 'pipe'] as const } : { stdio: ['ignore', 'pipe', 'pipe'] as const }) });
   if (/[\r\n]/.test(auth.username) || /[\r\n]/.test(auth.password)) {
     throw new Error('git credentials contain newline (invalid for credential helper protocol)');
