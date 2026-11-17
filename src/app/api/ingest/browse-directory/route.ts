@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
 // This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
+// Please refer to the License for details. You should not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
@@ -12,8 +12,74 @@ import { expandHome, checkImportablePath } from '@/lib/ingest/import-paths';
 import { fsRoots } from '@/lib/ingest/browse-roots';
 import { MANIFEST_FILENAMES } from '@/lib/run/model';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { logError, logWarn } from '@/lib/logger';
+
+// 目录条目数无界（如 /tmp 顶层 12 万+ 临时目录），浏览接口的性能纪律：
+// - 条目全量返回（浏览是找东西，不裁剪数据——大目录靠前端虚拟滚动消化）
+// - IO 分批并发、每条目至多一次 stat（withFileTypes 一次 readdir 完成分组，
+//   不再有排序比较器×2 + map 的重复 stat 风暴）
+// - bundle manifest 探测设目录数上限：探测是 isBundleDir 高亮的锦上添花，
+//   每目录 2 次 access——12 万目录级（实测命中恒 0 的工具临时目录海）跳过；
+//   普通工作目录（<上限）保持真值探测
+const PROBE_DIR_LIMIT = 2000;
+const IO_BATCH = 256;
+
+interface EntryPayload {
+  name: string;
+  fullPath: string;
+  isDir: boolean;
+  size: number;
+  mtime: number;
+  isImportableFile: boolean;
+  importableType: string | null;
+  isBundleDir: boolean;
+}
+
+async function statFile(dir: string, name: string): Promise<EntryPayload> {
+  const full = path.join(dir, name);
+  try {
+    const s = await fsp.stat(full);
+    // importableType 单点判定（agent-source-framework 注册表嗅探）：声明序即
+    // 优先级——前缀精确嗅探（context_session_ / rollout-）先于扩展名兜底
+    // （.db / .jsonl），codex 的 rollout-*.jsonl 不再误判成 claude 捕获件；
+    // 压缩三形态（.jsonl.7z/.gz）由 claude 兜底覆盖
+    const importableType = sniffImportableFile(name);
+    return {
+      name,
+      fullPath: full,
+      isDir: false,
+      size: s.size,
+      mtime: s.mtimeMs,
+      isImportableFile: importableType != null,
+      importableType,
+      isBundleDir: false,
+    };
+  } catch (e) {
+    logWarn('route:ingest/browse-directory', '目录项读取失败', { name, error: e instanceof Error ? e.message : String(e) });
+    return {
+      name,
+      fullPath: full,
+      isDir: false,
+      size: 0,
+      mtime: 0,
+      isImportableFile: false,
+      importableType: null,
+      isBundleDir: false,
+    };
+  }
+}
+
+// 分批并发：一次全量 Promise.all 在 10 万级条目下会压垮事件循环回调队列
+async function mapBatched<T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += IO_BATCH) {
+    const batch = items.slice(i, i + IO_BATCH);
+    out.push(...await Promise.all(batch.map(fn)));
+  }
+  return out;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -75,60 +141,67 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const names = fs.readdirSync(resolved).sort((a, b) => {
-      try {
-        const aIsDir = fs.statSync(path.join(resolved, a)).isDirectory();
-        const bIsDir = fs.statSync(path.join(resolved, b)).isDirectory();
-        if (aIsDir !== bIsDir) return aIsDir ? -1 : 1;
-        return a.localeCompare(b);
-      } catch {
-        return a.localeCompare(b);
+    // withFileTypes：Dirent 自带 isDirectory，一次 readdir 同时完成分组——
+    // 每个条目至多再花一次 stat，消灭排序比较器×2 + map 的重复 stat 风暴。
+    // 软链例外：Dirent.isDirectory() 对指向目录的软链恒 false（不跟随），需
+    // 一次 stat 解析归类——指向目录的软链并入 dirNames（否则被当普通文件、
+    // 点击不可导航），指向文件的软链并入 fileNames（statFile 的 stat 跟随链）。
+    const dirents = fs.readdirSync(resolved, { withFileTypes: true });
+    const dirNames: string[] = [];
+    const fileNames: string[] = [];
+    for (const d of dirents) {
+      if (d.isDirectory()) {
+        dirNames.push(d.name);
+      } else if (d.isSymbolicLink()) {
+        try {
+          if (fs.statSync(path.join(resolved, d.name)).isDirectory()) dirNames.push(d.name);
+          else fileNames.push(d.name);
+        } catch {
+          fileNames.push(d.name); // 悬空软链：statFile 兜底（读取失败 → 占位）
+        }
+      } else {
+        fileNames.push(d.name);
       }
-    });
+    }
+    dirNames.sort((a, b) => a.localeCompare(b));
 
-    const entries = names.map(name => {
+    // 文件：并发 stat（size/mtime/importable 嗅探在 stat 内完成）
+    const fileEntries = await mapBatched(fileNames, (name) => statFile(resolved, name));
+
+    // 目录：manifest 探测仅在目录数上限内做（isBundleDir 高亮）；目录 mtime
+    // 恒 0（组内名字序，消费方 sortDirEntries 单点）。超限目录海（如 /tmp 顶层
+    // 12 万+）跳过探测——浏览照常全量可见可导航，只是 bundle 高亮不标。
+    const probe = dirNames.length <= PROBE_DIR_LIMIT;
+    const dirEntries = await mapBatched(dirNames, async (name) => {
       const full = path.join(resolved, name);
-      try {
-        const s = fs.statSync(full);
-        const isDir = s.isDirectory();
-        // importableType 单点判定（agent-source-framework 注册表嗅探）：
-        // 声明序即优先级——前缀精确嗅探（context_session_ / rollout-）先于
-        // 扩展名兜底（.db / .jsonl），codex 的 rollout-*.jsonl 不再误判成
-        // claude 捕获件；压缩三形态（.jsonl.7z/.gz）由 claude 兜底覆盖
-        const importableType = isDir ? null : sniffImportableFile(name);
-        // run 域展示提示（增量字段，读方按需消费）：目录内含 bundle 清单文件
-        // 即标记——BundleImport 浏览视图高亮可导入的 workflow-bundle 目录。
-        // 候选名与 import-service 共用 model.MANIFEST_FILENAMES（同一事实源）。
-        const isBundleDir = isDir
-          && MANIFEST_FILENAMES.some(n => fs.existsSync(path.join(full, n)));
-        return {
-          name,
-          fullPath: full,
-          isDir,
-          size: isDir ? 0 : s.size,
-          mtime: s.mtimeMs,
-          isImportableFile: importableType != null,
-          importableType,
-          isBundleDir,
-        };
-      } catch (e) {
-        logWarn('route:ingest/browse-directory', '目录项读取失败', { name, error: e instanceof Error ? e.message : String(e) });
-        return {
-          name,
-          fullPath: full,
-          isDir: false,
-          size: 0,
-          mtime: 0,
-          isImportable: false,
-          isImportableFile: false,
-          importableType: null,
-        };
+      // run 域展示提示：目录内含 bundle 清单文件（workflow.json/manifest.json，
+      // 候选名与 import-service 共用 model.MANIFEST_FILENAMES 同一事实源）即
+      // 标记——BundleImport 浏览视图高亮可导入的 workflow-bundle 目录
+      let isBundleDir = false;
+      if (probe) {
+        for (const n of MANIFEST_FILENAMES) {
+          if (await fsp.access(path.join(full, n)).then(() => true, () => false)) {
+            isBundleDir = true;
+            break;
+          }
+        }
       }
+      return {
+        name,
+        fullPath: full,
+        isDir: true,
+        size: 0,
+        mtime: 0,
+        isImportableFile: false,
+        importableType: null,
+        isBundleDir,
+      } satisfies EntryPayload;
     });
 
+    // 目录优先置顶；组内排序交给消费方（前端 sortDirEntries 单点）
     return NextResponse.json({
       isDirectory: true,
-      entries,
+      entries: [...dirEntries, ...fileEntries],
       parentPath: roots.parentOf(resolved),
       currentPath: resolved,
     });

@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Fixed
+- 【数据仓克隆被机器配置改道 ssh】lake git 调用缺省不读全局层 gitconfig（`GIT_CONFIG_GLOBAL` 缺省指空；显式设置该变量可穿透，系统层 /etc/gitconfig 保留）。此前客户机 `~/.gitconfig` 的 `url.*.insteadOf` 会把 UI 显式配置的 https 数据仓静默改道 ssh——22 端口不通即超时、classifyLakeError 只能 unknown，用户配置的地址与实际协议脱钩。现 URL/协议按显式合同执行，机器个人配置不参与服务端网络面；代理请显式走 `https_proxy` 等标准环境变量（git 原生认）。
+- 【导入浏览卡死在超大目录】导入向导的目录浏览此前对无界目录毫无防御——逐条目重复 stat 且同步阻塞（实测 12.6 万条目的 /tmp：5.2 秒才出响应，前端渲染 12 万行直接卡死）。现条目全量返回一条不裁，服务端 IO 分批并发、前端表格窗口化虚拟滚动——同目录不到 1 秒打开，滚动/搜索全程流畅；超大目录中 bundle 目录的高亮探测设有目录数边界（普通工作目录不受影响）。
+- 【子代理类型被昵称冒充】子代理的 Execution/派发桥 `subagentType` 此前拿不到真值时把昵称小写冒充类型（真机 01a1c5d6：designer/developer 两个角色存成了 'averroes'/'euclid'）——泳道、关系图、甘特图按类型分组的语义被拆成一人一组。根治类型通道断链：codex 子 rollout 的 `agent_role` 与 spawn 参数 `agent_type` 双源取值（子侧线程事实优先）、opencode 标题 `@name` 即类型双通道同填、spawn 派发桥补 `agent_type` 参数键；下游不再从昵称兜底造假，无真值即如实为空走通用回退。存量会话重导源文件即得真值。
+
+## [1.0.4] - 2026-11-14
+
+### Added
+- 【启动器浏览器熔断】`./start.sh` 服务模式支持 `CONTEXT_NO_BROWSER`：置任意非空值时跳过「Server ready」后的开浏览器（打印地址代替）——与 cpx 侧 `openBrowser` 同名同语义。此前 CI/headless/测试环境跑 start.sh，WSL 分支是绝对路径 exec（`/mnt/c/Windows/System32/cmd.exe`，PATH 桩拦不住），会在用户 Windows 桌面真弹浏览器
+
 ### Changed
 - 【Audit 面板移除 Run 域】引擎型工作流的编排规程在数据里没有全局共享版本——各成员的「编排声明」实为各自的任务技能或派工单，Run 域拿排头成员的任务技能冒充 run 级声明对全 run 审计，名不副实。现 Audit 收敛为 Skill / Agent / Workflow 三域
 
@@ -25,12 +35,6 @@
 - 【Audit 对账恢复不到 B 形技能正文（codex）】Audit 的 skill 对账此前自带一套与摄取/展示侧平行的恢复词表（只认 invoke 事件 + skill 工具族 `<skill_content>`），codex 等 B 形会话（无 read/skill 工具，模型用 exec_command cat 读 SKILL.md → turn-split 合成 use 事件）全链 404（客户现场：`所选成员均恢复不到 skill "cannbay-report" 的正文（无 invoke 事件 / resultJson）`）。根治：所有 SKILL.md 正文恢复统一收口 skill-content 单点（三通道分类器 `skillMdReadsOfToolCall`）——Audit 对账（`recoverSkillBody`）、Skills 面板、LLM 声明提取（规程候选）共用同一词表，通道扩展不再双头漂移；shell 通道补剥模型自印的 `====…SKILL.md====` 回显横幅。配套：`resolveWorkflowSkillName` 接受 use 事件（B 形 root 声明定位）；`--transcript` 序列化为 B 形加载在源工具调用前合成 Skill 锚点（sift `--kind skill` 切段前提，合成只发生在审计视图序列化出口、不进 DB）；落盘 SKILL.md 的 frontmatter 由 `ensureSkillFrontmatter` 单点保证（read/shell 通道原文自带则对齐名字、缺则注入合成头，不再双头）
 - 【Windows 导入浏览出不了 C 盘】导入向导的目录浏览导航模型此前假设文件系统是单一根的树，而 Windows 多盘符、无公共根——`path.dirname('C:\\') === 'C:\\'`，向上导航到盘根即死锁，其他盘结构性不可达（客户实测「只能浏览 C 盘的东西」）。现引入「文件系统根层级」（新模块 `ingest/browse-roots`，平台差异单点）：win32 盘根之上是虚拟盘符列表层级（空串标识，A–Z 探测列出真实存在的盘），POSIX 根层级即 `/`（到顶 parentPath 为 null，向上按钮不再自指）；前端以 `!== null` 判父级（空串是合法层级标识），根层级头部显示「此电脑（所有盘符）」，手动输入留空 = 从根层级浏览（平台中立）
 
-## [1.0.4] - 2026-11-11
-
-### Added
-- 【启动器浏览器熔断】`./start.sh` 服务模式支持 `CONTEXT_NO_BROWSER`：置任意非空值时跳过「Server ready」后的开浏览器（打印地址代替）——与 cpx 侧 `openBrowser` 同名同语义。此前 CI/headless/测试环境跑 start.sh，WSL 分支是绝对路径 exec（`/mnt/c/Windows/System32/cmd.exe`，PATH 桩拦不住），会在用户 Windows 桌面真弹浏览器
-
-### Fixed
 - 【Codex apply_patch 丢失导致 Context 回到 1970】Codex `custom_tool_call/custom_tool_call_output`（`apply_patch`）此前未被解析，后续 usage 被保留成无时间空 turn，Context 时间轴被拉到 1970。现按 call_id 生成并回填工具调用；Context 同时忽略 epoch/非法时间戳
 - 【Codex 会话 contextBay 往返失效】Codex 原生会话上传后物化为 `<sid>.native.jsonl.7z`，重新导入此前被固定送进 claude 适配器并创建 0-turn placeholder。现按文件内容选择 Codex 适配器、透明解压 `.7z/.gz`、识别 `.native` 命名；上传时同时收集并压缩 `spawn_agent` 引用的子代理 rollout，回拉后主会话与子代理均恢复
 - 【solo run 上传误走 bundle】solo run 页头的上传入口现按底层会话上传（携带 taskId/framework），不再把 `solo:<taskId>` 当作 bundle ID；旧客户端误调 `bundle-upload` 时返回明确指引

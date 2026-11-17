@@ -73,13 +73,14 @@ interface SessionMetaInfo {
   parentThreadId: string | null;
   threadSource: string | null;
   agentNickname: string | null;
+  agentRole: string | null;
   cliVersion: string | null;
   timestamp: string | null;
 }
 
 const EMPTY_META: SessionMetaInfo = {
   id: null, parentThreadId: null, threadSource: null,
-  agentNickname: null, cliVersion: null, timestamp: null,
+  agentNickname: null, agentRole: null, cliVersion: null, timestamp: null,
 };
 
 // 内容级识别（SourceDescriptor.detectContent 能力）：rollout 恒明文（无压缩
@@ -181,6 +182,7 @@ function readSessionMeta(lines: CodexRolloutLine[]): SessionMetaInfo {
         parentThreadId: typeof p.parent_thread_id === 'string' ? p.parent_thread_id : null,
         threadSource: typeof p.thread_source === 'string' ? p.thread_source : null,
         agentNickname: typeof p.agent_nickname === 'string' ? p.agent_nickname : null,
+        agentRole: typeof p.agent_role === 'string' ? p.agent_role : null,
         cliVersion: typeof p.cli_version === 'string' ? p.cli_version : null,
         timestamp: typeof p.timestamp === 'string' ? p.timestamp : null,
       };
@@ -824,11 +826,17 @@ export function listSessions(dirPath: string): SessionListItem[] {
 interface SpawnedAgent {
   id: string;
   nickname: string | null;
+  // 派发角色（designer/developer/…）：父侧 spawn 参数 agent_type 与子侧
+  // meta agent_role 双源——子侧是 codex 记录的线程事实（优先），父侧覆盖
+  // 老版本子文件无 agent_role 的形态。角色是类型分组维度（泳道/关系图/
+  // 甘特按 subagentType 分组），昵称是实例名——两者不得混用。
+  role: string | null;
 }
 
 function extractSpawnedAgents(lines: CodexRolloutLine[]): SpawnedAgent[] {
   const callOutputByCallId = new Map<string, string>();
   const spawnCallIds: string[] = [];
+  const spawnRoleByCallId = new Map<string, string>();
   const waitTargets = new Set<string>();
 
   for (const line of lines) {
@@ -837,6 +845,14 @@ function extractSpawnedAgents(lines: CodexRolloutLine[]): SpawnedAgent[] {
     if (payload.type === 'function_call') {
       if (payload.name === 'spawn_agent') {
         if (typeof payload.call_id === 'string') spawnCallIds.push(payload.call_id);
+        // spawn 参数携带派发角色（agent_type）——输出 JSON 只有 agent_id +
+        // nickname，角色必须从调用侧参数读
+        try {
+          const args = JSON.parse(typeof payload.arguments === 'string' ? payload.arguments : '{}') as { agent_type?: unknown };
+          if (typeof args.agent_type === 'string' && args.agent_type && typeof payload.call_id === 'string') {
+            spawnRoleByCallId.set(payload.call_id, args.agent_type);
+          }
+        } catch { /* ignore */ }
       } else if (payload.name === 'wait_agent') {
         // 兜底信号：spawn 输出缺失（异常截断）时按等待目标补发现（无昵称）
         try {
@@ -859,14 +875,18 @@ function extractSpawnedAgents(lines: CodexRolloutLine[]): SpawnedAgent[] {
       const parsed = JSON.parse(out) as { agent_id?: string; nickname?: string };
       if (typeof parsed.agent_id === 'string' && parsed.agent_id && !seen.has(parsed.agent_id)) {
         seen.add(parsed.agent_id);
-        agents.push({ id: parsed.agent_id, nickname: typeof parsed.nickname === 'string' ? parsed.nickname : null });
+        agents.push({
+          id: parsed.agent_id,
+          nickname: typeof parsed.nickname === 'string' ? parsed.nickname : null,
+          role: spawnRoleByCallId.get(callId) ?? null,
+        });
       }
     } catch { /* ignore */ }
   }
   for (const target of waitTargets) {
     if (!seen.has(target)) {
       seen.add(target);
-      agents.push({ id: target, nickname: null });
+      agents.push({ id: target, nickname: null, role: null });
     }
   }
   return agents;
@@ -911,6 +931,9 @@ export function readSubagentInteractions(filePath: string, sessionId: string): R
     for (const interaction of interactions) {
       interaction.subagent_session_id = sub.agent.id;
       if (sub.agent.nickname) interaction.subagent_name = sub.agent.nickname;
+      // 派发角色（designer/developer/…）：类型分组维度的权威值，与昵称
+      // （实例名）分通道传递——下游 execution-split 不再需要从昵称兜底
+      if (sub.agent.role) interaction.subagent_type = sub.agent.role;
     }
     result.push(...interactions);
   }
@@ -961,7 +984,13 @@ function discoverSubagentRollouts(
     // 以 spawn 输出为准（老版本文件）
     if (childMeta.parentThreadId && childMeta.parentThreadId !== parentSessionId) continue;
     out.push({
-      agent: { id: agent.id, nickname: childMeta.agentNickname ?? agent.nickname },
+      agent: {
+        id: agent.id,
+        nickname: childMeta.agentNickname ?? agent.nickname,
+        // 子侧 meta 是 codex 记录的线程事实（优先）；老版本子文件无
+        // agent_role 时退父侧 spawn 参数的 agent_type
+        role: childMeta.agentRole ?? agent.role,
+      },
       filePath: childFile,
       lines: childLines,
     });

@@ -121,15 +121,13 @@ export function splitExecutions(
 
     const subFinalResult = subTurns[subTurns.length - 1]?.contentSummary ?? null;
 
-    // Use explicit subagent_type from interactions if available, otherwise derive from name
+    // 类型只认真值：interaction 显式 subagent_type（各 adapter 的权威角色/
+    // 类型通道）优先，缺省时只认 @type 引用语法（claude @agent 形态——@ 后
+    // 本就是类型名）。昵称小写冒充类型是造假（type=averroes 把类型分组
+    // 泳道/关系图拆成一人一组），宁可 null 走消费端通用回退
     const subagentNameField = subSubagentName ?? subAgentName;
-    let subagentType: string | null = subSubagentType ?? null;
-    if (!subagentType) {
-      if (subagentNameField) {
-        const typeMatch = subagentNameField.match(/^@(\w+)/);
-        subagentType = typeMatch ? typeMatch[1] : subagentNameField.toLowerCase();
-      }
-    }
+    const subagentType = subSubagentType
+      ?? (subagentNameField?.match(/^@([\w.-]+)/)?.[1] ?? null);
 
     executions.push({
       id: subId,

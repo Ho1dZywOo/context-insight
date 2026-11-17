@@ -13,12 +13,12 @@
 // 外壳，本地会话表漏掉 table-fixed（auto 布局 + 单元格基语 nowrap 默认）
 // → 长内容把表撑破卡片右缘。列内可变文本一律配 truncate span。
 
-import type { ReactNode } from "react";
+import type { ReactNode, UIEvent } from "react";
 import { Table } from "@/components/ui/table";
 
-export function TableCard({ children }: { children: ReactNode }) {
+export function TableCard({ children, onScroll }: { children: ReactNode; onScroll?: (e: UIEvent<HTMLDivElement>) => void }) {
   return (
-    <div className="max-h-[320px] overflow-y-auto overflow-x-hidden rounded-xl border border-border/40">
+    <div className="max-h-[320px] overflow-y-auto overflow-x-hidden rounded-xl border border-border/40" onScroll={onScroll}>
       <Table className="table-fixed">{children}</Table>
     </div>
   );

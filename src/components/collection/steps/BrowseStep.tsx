@@ -1,5 +1,5 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
 // Please refer to the License for details. You may not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
@@ -12,8 +12,10 @@
 // 双绿并存：可导入文件（绿，点击直导 = 会话）与 bundle 目录（绿，点击即导 =
 // run job）在同一张表；普通目录点击导航。过滤/排序状态内聚（进入新目录由
 // 父组件换 entries 即重置——过滤词对新目录无意义）。
+// 大目录（如 /tmp 顶层 12 万+ 条目）条目全量返回，渲染走窗口化虚拟滚动——
+// 表格行恒定高度，滚动容器只渲染可视窗口附近的行，前后 spacer 行撑起总高。
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -49,9 +51,17 @@ interface BrowseStepProps {
   onBack: () => void;
 }
 
+// 行高纪律：虚拟滚动的窗口换算单点（表格行 h-10 = 40px 与此常量必须同步）
+const ROW_H = 40;
+// 超过该行数才启用窗口化；小列表直接全渲染（行为与既有语义完全一致）
+const VIRTUAL_MIN = 200;
+// 视口行数上限（TableCard max-h 320px / 40px ≈ 8 行可见）+ 双向 overscan
+const VIEWPORT_ROWS = 8 + 2 * 6;
+
 export function BrowseStep({ entries, currentDir, parentDir, loading, error, onEntryClick, onGoUp, onBack }: BrowseStepProps) {
   const [filter, setFilter] = useState("");
   const [sortAsc, setSortAsc] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
 
   // 进入新目录重置过滤（旧词对新目录无意义）；排序方向跨目录保留（旧弹窗
   // 语义）。render 期状态调整（React 官方 reset-on-prop-change 模式），不用
@@ -60,14 +70,31 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
   if (prevDir !== currentDir) {
     setPrevDir(currentDir);
     setFilter("");
+    setScrollTop(0);
   }
 
   const query = filter.trim().toLowerCase();
-  const filtered = query
-    ? entries.filter(e => e.name.toLowerCase().includes(query))
-    : entries;
-  const importableTotal = entries.filter(e => e.isImportableFile).length;
-  const bundleTotal = entries.filter(e => e.isBundleDir).length;
+  // 计数一次遍历出三值：十万级条目下每键三遍 filter 会顿挫
+  const { filtered, importableTotal, bundleTotal } = useMemo(() => {
+    const hits: DirEntry[] = [];
+    let importable = 0;
+    let bundle = 0;
+    for (const e of entries) {
+      if (e.isImportableFile) importable++;
+      if (e.isBundleDir) bundle++;
+      if (!query || e.name.toLowerCase().includes(query)) hits.push(e);
+    }
+    return { filtered: query ? hits : entries, importableTotal: importable, bundleTotal: bundle };
+  }, [entries, query]);
+
+  const sorted = useMemo(() => sortDirEntries(filtered, sortAsc), [filtered, sortAsc]);
+
+  const virtualize = sorted.length > VIRTUAL_MIN;
+  const startIndex = virtualize ? Math.max(0, Math.floor(scrollTop / ROW_H) - 6) : 0;
+  const endIndex = virtualize
+    ? Math.min(sorted.length, startIndex + VIEWPORT_ROWS)
+    : sorted.length;
+  const visible = virtualize ? sorted.slice(startIndex, endIndex) : sorted;
 
   return (
     <div className="space-y-3 overflow-hidden">
@@ -103,12 +130,12 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
               </span>
             )}
           </div>
-          <TableCard>
+          <TableCard onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
             <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[40px]"></TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead className="w-[150px]">
+                  <TableHead className="w-[40px] sticky top-0 z-[1] bg-background"></TableHead>
+                  <TableHead className="sticky top-0 z-[1] bg-background">Name</TableHead>
+                  <TableHead className="w-[150px] sticky top-0 z-[1] bg-background">
                     <span
                       role="button"
                       className="inline-flex items-center gap-0.5 cursor-pointer select-none hover:text-foreground"
@@ -121,22 +148,27 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
                         : <ChevronDownIcon className="size-3.5" />}
                     </span>
                   </TableHead>
-                  <TableHead className="w-[80px]">Size</TableHead>
-                  <TableHead className="w-[100px]">Type</TableHead>
+                  <TableHead className="w-[80px] sticky top-0 z-[1] bg-background">Size</TableHead>
+                  <TableHead className="w-[100px] sticky top-0 z-[1] bg-background">Type</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.length === 0 && (
+                {sorted.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center text-muted-foreground py-4">
                       {query ? "No entries match your filter" : "Empty directory"}
                     </TableCell>
                   </TableRow>
                 )}
-                {sortDirEntries(filtered, sortAsc).map(entry => (
+                {virtualize && startIndex > 0 && (
+                  <TableRow style={{ height: startIndex * ROW_H }}>
+                    <TableCell colSpan={5} className="p-0 border-0" />
+                  </TableRow>
+                )}
+                {visible.map(entry => (
                   <TableRow
                     key={entry.fullPath}
-                    className="cursor-pointer hover:bg-foreground/[0.04]"
+                    className="h-10 cursor-pointer hover:bg-foreground/[0.04]"
                     onClick={() => onEntryClick(entry)}
                   >
                     <TableCell>
@@ -181,6 +213,11 @@ export function BrowseStep({ entries, currentDir, parentDir, loading, error, onE
                     </TableCell>
                   </TableRow>
                 ))}
+                {virtualize && endIndex < sorted.length && (
+                  <TableRow style={{ height: (sorted.length - endIndex) * ROW_H }}>
+                    <TableCell colSpan={5} className="p-0 border-0" />
+                  </TableRow>
+                )}
               </TableBody>
           </TableCard>
         </>

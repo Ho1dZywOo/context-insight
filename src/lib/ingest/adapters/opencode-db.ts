@@ -635,7 +635,11 @@ function _readSession(db: Database.Database, sessionId: string): RawInteraction[
         agent,
         subagent_name: isSubagent ? subagent_name : null,
         subagent_session_id: isSubagent ? sessionId : null,
-        subagent_type: null,
+        // opencode 无实例昵称——标题里的 @name 就是 agent 类型（派发时的
+        // subagent_type），类型通道必须同填：泳道/关系图按类型分组，此前
+        // 只进 name 通道 → execution-split 无真值可读。name 通道保留同值
+        // 作显示身份
+        subagent_type: isSubagent ? subagent_name : null,
         tool_calls,
         usage,
         model,
@@ -861,7 +865,9 @@ function v2AssistantRow(
     agent: isCompaction ? 'compaction' : (typeof msgData.agent === 'string' ? msgData.agent : null),
     subagent_name: subagentName,
     subagent_session_id: subagentSessionId,
-    subagent_type: null,
+    // opencode 无实例昵称——标题 @name 就是 agent 类型，类型通道同填
+    // （与 v1 reader 同语义；泳道/关系图按类型分组需要真值）
+    subagent_type: subagentName,
     tool_calls: toolCalls.length > 0 ? toolCalls : null,
     usage: v2TokenUsage(msgData),
     model: modelRefString(msgData.model),
@@ -925,7 +931,8 @@ function _readSessionV2(db: Database.Database, sessionId: string): RawInteractio
           agent: null,
           subagent_name: isSubagent ? subagent_name : null,
           subagent_session_id: isSubagent ? sessionId : null,
-          subagent_type: null,
+          // 同 assistant 行：@name 即类型，双通道同填
+          subagent_type: isSubagent ? subagent_name : null,
           tool_calls: null,
           usage: null,
           model: null,

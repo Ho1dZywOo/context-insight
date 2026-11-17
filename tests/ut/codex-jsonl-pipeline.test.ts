@@ -282,6 +282,19 @@ describe('codex-jsonl 子代理发现（spawn 输出 + parent_thread_id 交叉�
     expect(kepler.every(s => s.subagent_name === 'Kepler')).toBe(true);
   });
 
+  it('子代理类型双源：子 meta agent_role 优先，老版子文件无角色退父侧 spawn 参数', () => {
+    const subs = readSubagentInteractions(mainFile, MAIN);
+    // Euclid 子 rollout 的 session_meta 带 agent_role（新格式）→ 子侧事实优先
+    const euclid = subs.filter(s => s.subagent_session_id === SUB1);
+    expect(euclid.every(s => s.subagent_type === 'designer')).toBe(true);
+    // Kepler 子 rollout 无 agent_role（老格式）→ 退父侧 spawn 参数的 agent_type
+    const kepler = subs.filter(s => s.subagent_session_id === SUB2);
+    expect(kepler.every(s => s.subagent_type === 'developer')).toBe(true);
+    // 昵称（实例名）与角色（类型分组维度）分通道——类型通道喂昵称会把
+    // 泳道/关系图按类型分组拆成一人一组（type=averroes 回归锁）
+    expect(euclid.every(s => s.subagent_type !== s.subagent_name)).toBe(true);
+  });
+
   it('listSubagentRolloutFiles：parent_thread_id 不匹配的文件不进入上传集合', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-sub-parent-'));
     const mainCopy = path.join(root, path.basename(mainFile));
@@ -401,6 +414,22 @@ describe('codex-jsonl 全链路导入（rollout → adapter → normalize → tu
     expect(euclidBridge!.status).toBe('completed');
     expect(euclidBridge!.subagentTokens).toBeGreaterThan(0); // 子代理轮 token 聚合
     expect(euclidBridge!.responseContent).toContain('阅读'); // 子代理最终轮内容
+
+    // Bridge 类型通道：spawn 参数 agent_type 进派发桥（此前 agentTypeArgKeys
+    // 为空 → 恒 null）
+    expect(euclidBridge!.subagentType).toBe('designer');
+    expect(keplerBridge!.subagentType).toBe('developer');
+
+    // Execution 类型真值（泳道/关系图/甘特的类型分组维度）：此前 codex 从不
+    // 打 subagent_type → execution-split 兜底把昵称小写冒充类型（Euclid →
+    // 'euclid'，类型分组被拆成一人一组）。双源真值：子 meta agent_role
+    // 优先，老版子文件无角色退父侧 spawn 参数
+    const executions = await prisma.execution.findMany({ where: { sessionId: session!.id } });
+    expect(executions.filter(e => e.isSubagent)).toHaveLength(2);
+    const euclidExec = executions.find(e => e.subagentName === 'Euclid')!;
+    const keplerExec = executions.find(e => e.subagentName === 'Kepler')!;
+    expect(euclidExec.subagentType).toBe('designer');
+    expect(keplerExec.subagentType).toBe('developer');
   });
 
   it('import-file 路由（目录路径）：UI「列表选择→导入」流程子代理不丢失', async () => {
