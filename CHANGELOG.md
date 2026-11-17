@@ -2,7 +2,7 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [1.0.5] - 2026-11-17
 
 ### Fixed
 - 【codex 会话写操作全家失明】codex 没有独立的 Write/Edit 工具——文件创建与修改全走 `apply_patch`，此前复卷写素材、评分卡「写入」统计、改代码判定、验证窗口、自清理登记对 codex 会话全部失明（清自己建的目录还被误判高危删除）。现 `apply_patch` 全量进恢复与评分：新建文件全文进复卷，改代码 / 验证运行 / 自清理按 codex 形态正确判定，六维评分卡对 codex 会话恢复有效。
