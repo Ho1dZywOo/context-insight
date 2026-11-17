@@ -47,6 +47,11 @@ export interface RunTimeSummary {
   llmActiveMs: number
 }
 
+export interface RunTimeObservability {
+  summary: RunTimeSummary
+  activeByRow: Map<string, { activeMs: number | null }>
+}
+
 function sumSegments(segments: Array<{ start: number; end: number }>): number {
   return segments.reduce((sum, seg) => sum + Math.max(0, seg.end - seg.start), 0)
 }
@@ -65,10 +70,10 @@ function llmWindowOf(turn: RunTimeTurnRow, isProxy: boolean): [number, number] |
   return end > ts! ? [ts!, end] : null
 }
 
-export function buildRunTimeSummary(
+export function buildRunTimeObservability(
   sessions: RunTimeSessionRow[],
   turns: RunTimeTurnRow[],
-): RunTimeSummary {
+): RunTimeObservability {
   const turnsBySession = new Map<string, RunTimeTurnRow[]>()
   for (const turn of turns) {
     const rows = turnsBySession.get(turn.sessionId) ?? []
@@ -79,21 +84,25 @@ export function buildRunTimeSummary(
   const spans: Array<{ start: number; end: number }> = []
   const activeWindows: Array<[number, number]> = []
   const llmWindows: Array<[number, number]> = []
+  const windowsBySession = new Map<string, Array<[number, number]>>()
   for (const session of sessions) {
     const isProxy = isProxyVersion(session.version)
     const rows = turnsBySession.get(session.id) ?? []
     for (const entry of buildAgentSpans(rows, isProxy).values()) {
       if (entry.span) spans.push(entry.span)
     }
+    const sessionWindows: Array<[number, number]> = []
     for (const turn of rows) {
       const ts = turn.createdAt_ts?.getTime()
-      if (Number.isFinite(ts)) activeWindows.push([ts!, ts!])
+      if (Number.isFinite(ts)) sessionWindows.push([ts!, ts!])
       const llm = llmWindowOf(turn, isProxy)
       if (llm) {
         llmWindows.push(llm)
-        activeWindows.push(llm)
+        sessionWindows.push(llm)
       }
     }
+    activeWindows.push(...sessionWindows)
+    windowsBySession.set(session.id, sessionWindows)
   }
 
   const sessionStarts = sessions.map(s => s.startTime.getTime()).filter(Number.isFinite)
@@ -102,12 +111,15 @@ export function buildRunTimeSummary(
   const end = spans.length > 0 ? Math.max(...spans.map(s => s.end)) : (sessionEnds.length > 0 ? Math.max(...sessionEnds) : null)
   if (start == null || end == null || end <= start) {
     return {
-      start: start != null ? new Date(start).toISOString() : null,
-      end: end != null ? new Date(end).toISOString() : null,
-      wallMs: 0,
-      activeMs: null,
-      idleMs: null,
-      llmActiveMs: 0,
+      summary: {
+        start: start != null ? new Date(start).toISOString() : null,
+        end: end != null ? new Date(end).toISOString() : null,
+        wallMs: 0,
+        activeMs: null,
+        idleMs: null,
+        llmActiveMs: 0,
+      },
+      activeByRow: new Map(),
     }
   }
 
@@ -120,12 +132,39 @@ export function buildRunTimeSummary(
     wallMs,
     sumSegments(clusterActiveSegments(clip(activeWindows, true), ACTIVE_GAP_THRESHOLD_MS)),
   )
-  return {
-    start: new Date(start).toISOString(),
-    end: new Date(end).toISOString(),
-    wallMs,
-    activeMs,
-    idleMs: Math.max(0, wallMs - activeMs),
-    llmActiveMs: Math.min(llmActiveMs, activeMs),
+  const activeByRow = new Map<string, { activeMs: number | null }>()
+  for (const session of sessions) {
+    const windows = windowsBySession.get(session.id) ?? []
+    if (windows.length === 0) {
+      activeByRow.set(session.id, { activeMs: null })
+      continue
+    }
+    const sessionStart = session.startTime.getTime()
+    const sessionEnd = session.endTime?.getTime() ?? Math.max(...windows.map(([, b]) => b))
+    const sessionActive = sumSegments(clusterActiveSegments(
+      windows
+        .map(([a, b]) => [Math.max(sessionStart, a), Math.min(sessionEnd, b)] as [number, number])
+        .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b >= a),
+      ACTIVE_GAP_THRESHOLD_MS,
+    ))
+    activeByRow.set(session.id, { activeMs: Math.min(sessionActive, Math.max(0, sessionEnd - sessionStart)) })
   }
+  return {
+    summary: {
+      start: new Date(start).toISOString(),
+      end: new Date(end).toISOString(),
+      wallMs,
+      activeMs,
+      idleMs: Math.max(0, wallMs - activeMs),
+      llmActiveMs: Math.min(llmActiveMs, activeMs),
+    },
+    activeByRow,
+  }
+}
+
+export function buildRunTimeSummary(
+  sessions: RunTimeSessionRow[],
+  turns: RunTimeTurnRow[],
+): RunTimeSummary {
+  return buildRunTimeObservability(sessions, turns).summary
 }
