@@ -15,7 +15,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardAction } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { clusterActiveSegments } from "@/lib/active-time"
+import { ACTIVE_LATENCY_CAP_MS, clusterActiveSegments } from "@/lib/active-time"
 import { resolveSubagentIdentity } from "@/lib/subagent-identity"
 import { resolveLaneKey } from "@/lib/swimlane-lanes"
 import { assignLaneSlots, computeMaxConcurrency } from "@/lib/swimlane-slots"
@@ -218,7 +218,10 @@ export function AgentSwimlaneV2({ agents, bridges, isProxy = false, onViewTurns,
     const m = new Map<string, Array<{ start: number; end: number }>>()
     for (const a of visible) {
       const raw = a.activeIntervals ?? []
-      const ivs: Array<[number, number]> = raw.map(s => [s.start, Math.min(s.end, s.start + thresholdMs)])
+      const ivs: Array<[number, number]> = raw.map(s => {
+        const maxSpanMs = s.inferred ? Math.min(thresholdMs, ACTIVE_LATENCY_CAP_MS) : thresholdMs
+        return [s.start, Math.min(s.end, s.start + maxSpanMs)]
+      })
       m.set(a.executionId, clusterActiveSegments(ivs, thresholdMs))
     }
     return m

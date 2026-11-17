@@ -96,11 +96,13 @@ export interface PerfLaneStat {
   firstTurnId: string | null
 }
 
-/** 泳道内执行切片：按全局切片序号（createdAt 升序）编 #N，切片值与画像
- *  墙钟同口径（start→next），不按泳道重算 */
+/** 泳道内执行切片：按全局执行序号编 #N；墙钟取该执行自身 span，
+ *  活跃按固定 5min 事件聚类，不复用全局切片。 */
 export interface LaneExec {
   ord: number
-  sliceMs: number
+  wallMs: number
+  activeMs: number
+  inactiveMs: number
   exec: ExecItem
 }
 
