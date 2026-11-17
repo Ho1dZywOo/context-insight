@@ -19,6 +19,7 @@ import {
   isShellToolCall,
   shellCommandOf,
   shellCommandArgsOf,
+  shellReadCommandOf,
 } from '../../src/lib/tool-conventions.ts';
 
 describe('tool-conventions（框架工具调用约定）', () => {
@@ -204,7 +205,11 @@ describe('tool-conventions（框架工具调用约定）', () => {
     it('shellCommandOf：数组 command join（codex exec_command）', () => {
       expect(shellCommandOf('{"command":["bash","-lc","cat a.txt"]}')).toBe('bash -lc cat a.txt');
     });
-    it('shellCommandOf：无 command 键 / 坏 JSON / null → null（调用方回落原始 args）', () => {
+    it('shellCommandOf：原生 Codex cmd 键兼容', () => {
+      expect(shellCommandOf('{"cmd":"sed -n 5,9p a.txt && cat b.txt"}')).toBe('sed -n 5,9p a.txt && cat b.txt');
+      expect(shellCommandOf('{"cmd":["bash","-lc","cat a.txt"]}')).toBe('bash -lc cat a.txt');
+    });
+    it('shellCommandOf：无命令键 / 坏 JSON / null → null（调用方回落原始 args）', () => {
       expect(shellCommandOf('{"input":"exec_command({cmd:\\"...\\"})"}')).toBeNull();
       expect(shellCommandOf('not json')).toBeNull();
       expect(shellCommandOf(null)).toBeNull();
@@ -213,7 +218,14 @@ describe('tool-conventions（框架工具调用约定）', () => {
     it('shellCommandArgsOf：字符串 → [整串]；数组 → 各元素（载荷在末元素，逐元素防漏）', () => {
       expect(shellCommandArgsOf('{"command":"cat a && cat b"}')).toEqual(['cat a && cat b']);
       expect(shellCommandArgsOf('{"command":["bash","-lc","cat a; rg foo b"]}')).toEqual(['bash', '-lc', 'cat a; rg foo b']);
+      expect(shellCommandArgsOf('{"cmd":"cat a && cat b"}')).toEqual(['cat a && cat b']);
+      expect(shellCommandArgsOf('{"cmd":["bash","-lc","cat a; rg foo b"]}')).toEqual(['bash', '-lc', 'cat a; rg foo b']);
       expect(shellCommandArgsOf('{"input":"x"}')).toEqual([]);
+    });
+    it('shellReadCommandOf：复用参数键优先级，不与 Files 分析分叉', () => {
+      const argsJson = '{"command":"cat /a/SKILL.md","cmd":"cat /b/SKILL.md"}';
+      expect(shellReadCommandOf(argsJson)).toBe('cat /a/SKILL.md');
+      expect(shellReadCommandOf(argsJson)).toBe(shellCommandOf(argsJson));
     });
   });
 });
