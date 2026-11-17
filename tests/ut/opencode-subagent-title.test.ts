@@ -65,12 +65,16 @@ describe('opencode 子代理标题双格式解析', () => {
     const rows = readSession(db, 'ses_title_sub');
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0]!.subagent_name).toBe('acme-ops-architect');
+    // @name 是 opencode 的 agent 类型（派发 subagent_type）——类型通道同填，
+    // 泳道/关系图按类型分组才有真值（此前只进 name 通道 → 类型恒空）
+    expect(rows[0]!.subagent_type).toBe('acme-ops-architect');
   });
 
   it('旧序（v2 夹具既有形态）：@(build) subagent: scan logs → build（回归）', () => {
     const db = buildDb('old-order.db', '@(build) subagent: scan logs');
     const rows = readSession(db, 'ses_title_sub');
     expect(rows[0]!.subagent_name).toBe('build');
+    expect(rows[0]!.subagent_type).toBe('build');
   });
 
   it('新序简名：(@build subagent) → build', () => {

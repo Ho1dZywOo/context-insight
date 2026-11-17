@@ -152,7 +152,7 @@ describe('resolveDispatchToolCall：参数键解析', () => {
     expect(recMode.agentType).toBe('plan');
   });
 
-  it('spawn_agent：message/items 双形态 prompt + 结果 JSON agent_id/nickname', () => {
+  it('spawn_agent：message/items 双形态 prompt + 结果 JSON agent_id/nickname + 参数 agent_type 类型通道', () => {
     const recMsg = resolveDispatchToolCall(tc('spawn_agent', { message: 'fix the build' }, '{"agent_id":"ses_sp1","nickname":"fork-1"}'))!;
     expect(recMsg.content).toBe('fix the build');
     expect(recMsg.resultSessionId).toBe('ses_sp1');
@@ -163,6 +163,15 @@ describe('resolveDispatchToolCall：参数键解析', () => {
     }, '{"agent_id":"ses_sp2","nickname":"fork-2"}'))!;
     expect(recItems.content).toBe('分析构建日志');
     expect(recItems.resultSessionId).toBe('ses_sp2');
+
+    // 真机 spawn 参数携带派发角色 agent_type（designer/developer/…）——
+    // 派发桥此前丢弃该键 → 类型显示恒空（真机核实 01a1c5d6 双 spawn）
+    const recTyped = resolveDispatchToolCall(tc('spawn_agent', {
+      message: '当前阶段：Stage 1 Golden 基线', agent_type: 'designer',
+    }, '{"agent_id":"ses_sp3","nickname":"fork-3"}'))!;
+    expect(recTyped.agentType).toBe('designer');
+    // 老格式（fixture 主线）：无 agent_type 参数不误造
+    expect(recMsg.agentType).toBeNull();
   });
 
   it('结果侧子会话 id 提取器三形态：task_id 文本 / <task id> XML / JSON agent_id', () => {

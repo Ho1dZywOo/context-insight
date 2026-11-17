@@ -171,6 +171,49 @@ describe('execution-split', () => {
     });
   });
 
+  describe('subagent 类型通道纪律（昵称≠类型）', () => {
+    // 回归锁：此前无显式类型时兜底把昵称小写冒充类型（Averroes →
+    // 'averroes'），泳道/关系图按类型分组被拆成一人一组。类型只认真值：
+    // 显式 subagent_type 或 @type 引用语法，缺省即 null（消费端有通用回退）
+    function subExecFor(sub: { name: string | null; type: string | null }): { subagentType: string | null; subagentName: string | null } {
+      resetTurnIdCounter();
+      resetIdCounter();
+      const interactions: RawInteraction[] = [
+        {
+          role: 'assistant',
+          content: 'sub work',
+          timestamp: '2026-01-01T00:00:01.000Z',
+          timeInfo: { created: 1735689601000, completed: 1735689605000 },
+          agent: null, subagent_name: sub.name, subagent_session_id: 'ses_type_channel', subagent_type: sub.type,
+          tool_calls: null,
+          usage: { total: 500, input: 400, output: 100, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, inputMessagesTokens: 400 },
+          model: 'test', modelID: null, providerID: null, latency: 4000, finish_reason: 'stop',
+        },
+      ];
+      const normalized = normalize(interactions, 'opencode-db');
+      const splitResult = splitIntoTurns(normalized, 'session-type-channel');
+      const executions = splitExecutions(splitResult.turns, splitResult.toolCalls, splitResult.skillEvents, 'session-type-channel');
+      const subExecRow = executions.find(e => e.isSubagent)!;
+      return { subagentType: subExecRow.subagentType, subagentName: subExecRow.subagentName };
+    }
+
+    it('裸昵称不冒充类型：无类型 → subagentType 为 null（不再小写造假）', () => {
+      const r = subExecFor({ name: 'Averroes', type: null });
+      expect(r.subagentName).toBe('Averroes');
+      expect(r.subagentType).toBeNull();
+    });
+
+    it('@type 引用语法仍提取（claude @agent 形态的既有语义）', () => {
+      const r = subExecFor({ name: '@code-reviewer', type: null });
+      expect(r.subagentType).toBe('code-reviewer');
+    });
+
+    it('显式 subagent_type 权威优先（@语法不覆盖真值）', () => {
+      const r = subExecFor({ name: '@whatever', type: 'designer' });
+      expect(r.subagentType).toBe('designer');
+    });
+  });
+
   describe('session with no subagents produces just 1 root ExecutionRow', () => {
     it('only root execution when no subagent turns', () => {
       resetTurnIdCounter();

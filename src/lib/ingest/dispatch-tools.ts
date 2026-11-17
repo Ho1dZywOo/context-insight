@@ -79,10 +79,11 @@ export const DISPATCH_TOOLS: readonly DispatchToolSpec[] = [
   },
   {
     // codex spawn_agent：任务文本 wire 双形态（0.161 message 直传；0.162 只传
-    // fork_context+items，items 内纯文本项）；输出是干净 JSON {agent_id, nickname}
+    // fork_context+items，items 内纯文本项）；输出是干净 JSON {agent_id, nickname}；
+    // 参数携带派发角色 agent_type（designer/developer/…）——派发桥的类型显示
     names: ['spawn_agent'],
     sessionIdArgKeys: [],
-    agentTypeArgKeys: [],
+    agentTypeArgKeys: ['agent_type'],
     displayNameArgKeys: [],
     contentArgKeys: [],
     promptArgKeys: ['prompt', 'task'],
