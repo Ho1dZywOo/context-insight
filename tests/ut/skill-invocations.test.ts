@@ -162,6 +162,18 @@ describe('detectSkillInvocations — shell 读类命令通道', () => {
     ])).toHaveLength(0);
   });
 
+  it('exec 的 input 内嵌 exec_command({cmd:"cat …/SKILL.md"}) → 技能信号（检测面与归因面同源）', () => {
+    const out = detectSkillInvocations([
+      tc('exec', { input: 'exec_command({cmd:"cat /s/data-analysis/SKILL.md"})' }, 'call_in'),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({
+      skillName: 'data-analysis',
+      filePath: '/s/data-analysis/SKILL.md',
+      sourceToolCallId: 'call_in',
+    });
+  });
+
   it('引号包裹的路径剥离后识别', () => {
     const out = detectSkillInvocations([
       tc('exec_command', { cmd: 'cat "/s/cannbay-report/SKILL.md"' }),

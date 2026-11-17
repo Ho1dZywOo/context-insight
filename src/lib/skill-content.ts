@@ -14,8 +14,8 @@ import {
   parseReadToolArgs,
   unwrapSkillContent,
   isShellToolCall,
-  shellReadCommandOf,
-  detectSkillMdReads,
+  shellCommandTextsOf,
+  detectSkillMdReadsOfShell,
   shellReadHasRangeLimit,
   skillNameOfSkillMdPath,
 } from './tool-conventions';
@@ -143,10 +143,11 @@ export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
     // shell 读类命令（codex 无 read 工具，读 SKILL.md 走 exec_command 的
     // cat/sed/…）：候选骨架走命令侧检测（与摄取侧 detectSkillMdReads 同源），
     // 正文走 shell-restore 引擎按技能名归因取行——两者按 SKILL.md 路径的
-    // 父目录名对上即有正文，对不上（混 dump/管道/无锚点）即空串
-    const cmd = shellReadCommandOf(tc.argsJson);
-    if (!cmd) return [];
-    const detected = detectSkillMdReads(cmd);
+    // 父目录名对上即有正文，对不上（混 dump/管道/无锚点）即空串。
+    // 检测面与归因面同源（shellCommandTextsOf）：command/cmd 键与 codex input
+    // 内嵌 exec_command 两形态都参与，否则 input 形态读 SKILL.md 检测恒空。
+    const cmds = shellCommandTextsOf(tc.argsJson);
+    const detected = detectSkillMdReadsOfShell(tc.argsJson);
     if (detected.length === 0) return [];
     const attributed = new Map<string, ReturnType<typeof restoreShellReads>[number]>();
     for (const entry of restoreShellReads(tc.argsJson, tc.resultJson)) {
@@ -154,6 +155,7 @@ export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
       if (name != null && entry.lines.size > 0) attributed.set(name, entry);
     }
     const truncated = SHELL_TRUNCATED_RE.test(tc.resultJson);
+    const rangeLimited = cmds.some((c) => shellReadHasRangeLimit(c));
     return detected.map(read => {
       const entry = attributed.get(read.skillName);
       if (!entry) {
@@ -164,7 +166,7 @@ export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
         skillName: read.skillName,
         source: 'shell' as const,
         content,
-        fullRead: !shellReadHasRangeLimit(cmd) && !truncated && covered > 0,
+        fullRead: !rangeLimited && !truncated && covered > 0,
         maxLine,
         lineMap: entry.lines,
         ts: tsOf(tc),

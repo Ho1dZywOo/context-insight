@@ -35,7 +35,7 @@
 //   · cat 只在区域可界定时归因（后随锚或流尾），行号从 1 起
 //   · tail 无文件起点，不归因（分析层照常计读取）
 //   · 多文件 dump、sed -i、带管道的段一律不归因
-import { shellCommandArgsOf, stripExecOutputHeader } from './tool-conventions';
+import { shellCommandArgsOf, shellExecInputCommandsOf, stripExecOutputHeader } from './tool-conventions';
 import { isFilePathLike } from './file-reads';
 
 export interface ShellRestoreEntry {
@@ -497,20 +497,8 @@ function commandTextsOf(argsJson: string | null): string[] {
   const texts: string[] = [];
   const parts = shellCommandArgsOf(argsJson);
   if (parts.length > 0) texts.push(parts.join('\n'));
-  let inner = '';
-  try {
-    const a = JSON.parse(argsJson ?? '') as { input?: unknown };
-    if (typeof a.input === 'string') inner = a.input;
-  } catch {
-    // 非 JSON / 无 input
-  }
-  if (inner) {
-    const cmds: string[] = [];
-    for (const m of inner.matchAll(/exec_command\(\{cmd:"((?:[^"\\]|\\.)*)"/g)) {
-      cmds.push(m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\'));
-    }
-    if (cmds.length > 0) texts.push(cmds.join('\n'));
-  }
+  const inner = shellExecInputCommandsOf(argsJson);
+  if (inner.length > 0) texts.push(inner.join('\n'));
   return texts;
 }
 

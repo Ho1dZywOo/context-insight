@@ -26,6 +26,7 @@ import {
   isDispatchOnlyAgent,
   dispatchOnlySkillNames,
   getInflightAudit,
+  extractFileContent,
 } from "@/lib/sift-audit";
 
 /** 造一个最小 mock prisma：只实现 recoverSkillBody 用到的两个方法。 */
@@ -85,6 +86,35 @@ describe("stripSkillContent", () => {
 
   it("无尾部标记 → 原文不变（trimEnd）", () => {
     expect(stripSkillRuntimeTail("# 规程\n\n用户请求")).toBe("# 规程\n\n用户请求");
+  });
+});
+
+describe("extractFileContent（read/write 内容提取单点）", () => {
+  it("read → 剥行号正文 + basename", () => {
+    const ex = extractFileContent({
+      toolName: "read",
+      argsJson: '{"filePath":"/x/STATE.md"}',
+      resultJson: "<content>1: # state\n2: - [ ] a</content>",
+    });
+    expect(ex).toEqual({ content: "# state\n- [ ] a", basename: "STATE.md" });
+  });
+
+  it("write → argsJson.content 正文 + basename", () => {
+    const ex = extractFileContent({
+      toolName: "write",
+      argsJson: JSON.stringify({ filePath: "/x/STATE.md", content: "# state" }),
+      resultJson: null,
+    });
+    expect(ex).toEqual({ content: "# state", basename: "STATE.md" });
+  });
+
+  it("apply_patch（写通道，裸 patch 文本）→ null：写产物不作为声明内容源", () => {
+    const ex = extractFileContent({
+      toolName: "apply_patch",
+      argsJson: "*** Begin Patch\n*** Add File: /x/STATE.md\n+# state\n*** End Patch\n",
+      resultJson: null,
+    });
+    expect(ex).toBeNull();
   });
 });
 
@@ -510,6 +540,15 @@ describe("recoverPlanFileDeclaration（named-Read 单路：计划文件名白名
   it("argsJson 为 null → 跳过（无 basename，不入 named 桶）", async () => {
     const prisma = makePlanPrisma([
       { toolName: "read", argsJson: null, resultJson: `<content>${planBody}</content>` },
+    ]);
+    expect(await recoverPlanFileDeclaration("ses_1", prisma)).toBeNull();
+  });
+
+  it("apply_patch Add File STATE.md → null（写通道终态自证，不作为计划层）", async () => {
+    const patch =
+      "*** Begin Patch\n*** Add File: /x/STATE.md\n+# 工作流\n+## Tasks\n+- [x] 1. 创建工作区\n*** End Patch\n";
+    const prisma = makePlanPrisma([
+      { toolName: "apply_patch", argsJson: patch, resultJson: null },
     ]);
     expect(await recoverPlanFileDeclaration("ses_1", prisma)).toBeNull();
   });

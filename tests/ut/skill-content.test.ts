@@ -208,6 +208,30 @@ describe('skillMdReadsOfToolCall（三通道单点分类器）', () => {
   });
 });
 
+describe('codex exec input 形态 shell 读（检测面与归因面同源）', () => {
+  const inputTc = (result: string): SkillToolCall => ({
+    toolName: 'exec',
+    argsJson: JSON.stringify({ input: 'exec_command({cmd:"cat /home/u/.agents/skills/data-analysis/SKILL.md"})' }),
+    resultJson: result,
+    startedAt: t(1),
+  });
+
+  it('skillMdReadsOfToolCall：input 内嵌 exec_command 读 SKILL.md → 正文（此前检测恒空漏检）', () => {
+    const reads = skillMdReadsOfToolCall(inputTc('# 数据分析技能\n\n按步骤执行。\n'));
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({ skillName: 'data-analysis', source: 'shell', fullRead: true });
+    expect(reads[0].content).toBe('# 数据分析技能\n\n按步骤执行。');
+  });
+
+  it('selectSkillContent：input 形态读 SKILL.md → 完整正文胜出', () => {
+    const r = selectSkillContent([inputTc('# 数据分析技能\n\n按步骤执行。\n')], 'data-analysis');
+    expect(r).not.toBeNull();
+    expect(r!.source).toBe('shell');
+    expect(r!.fullRead).toBe(true);
+    expect(r!.content).toBe('# 数据分析技能\n\n按步骤执行。');
+  });
+});
+
 describe('skill-content', () => {
   describe('extractSkillNameFromReadPath', () => {
     it('extracts parent dir of SKILL.md (forward slash)', () => {

@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import { shellCommandArgsOf, type ReadToolArgs } from './tool-conventions';
+import { shellCommandArgsOf, shellExecInputCommandsOf, type ReadToolArgs } from './tool-conventions';
 
 export interface ReadRange {
   type: 'full' | 'partial';
@@ -183,18 +183,9 @@ function fileReadsFromCommandText(cmd: string, seen: Set<string>, out: ExecFileR
 }
 
 export function extractExecFileReads(argsJson: string | null): ExecFileRead[] {
-  if (!argsJson) return [];
-  let input = '';
-  try {
-    const a = JSON.parse(argsJson) as { input?: unknown };
-    if (typeof a.input === 'string') input = a.input;
-  } catch {
-    return [];
-  }
   const out: ExecFileRead[] = [];
   const seen = new Set<string>();
-  for (const m of input.matchAll(/exec_command\(\{cmd:"((?:[^"\\]|\\.)*)"/g)) {
-    const cmd = m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
+  for (const cmd of shellExecInputCommandsOf(argsJson)) {
     fileReadsFromCommandText(cmd, seen, out);
   }
   return out;

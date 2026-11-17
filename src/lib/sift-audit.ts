@@ -16,7 +16,6 @@ import { buildAgentRoleNameMap } from "@/lib/agent-role-name-map";
 import { unwrapSkillContent, SHELL_TOOL_NAMES, isShellToolCall } from "@/lib/tool-conventions";
 import { restoreShellReads, renderShellEntryText } from "@/lib/shell-restore";
 import { extractShellFileReads } from "@/lib/file-reads";
-import { parseApplyPatch } from "@/lib/apply-patch";
 // skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
 // client bundle 安全；Audit 对账与 Skills 面板共用同一恢复词表，通道扩展不再双头漂移。
 import { selectSkillContent } from "@/lib/skill-content";
@@ -423,10 +422,12 @@ function isPlanFilename(filePath: string | null): boolean {
 }
 
 /**
- * 从一个文件工具调用（read/write/apply_patch）提取 content + filePath + basename。
+ * 从一个文件工具调用（read/write）提取 content + filePath + basename。
  * Read：resultJson 的 `<content>…</content>`，剥行号（opencode 格式 `1: line\n2: line`）。
- * Write：argsJson.content（JSON parse）。apply_patch：Add File 段全文（Update/Delete
- * 无全文语义不产 content）。无 content → null。
+ * Write：argsJson.content（JSON parse）。无 content → null。
+ * apply_patch（codex 写通道）不在此提取：它是终态自证写产物，计划/资源声明恢复
+ * 只取读承诺态（见 recoverPlanFileDeclaration 的「早读=承诺态」），且其裸 patch
+ * 文本无法走本文件 JSON-only 的 extractFilePath 取 basename（恒 null，无命中可能）。
  * 确定性提取与 LLM 提取（llm-workflow-extract 候选收集）共用——两路正文字节一致。
  */
 export function extractFileContent(tc: {
@@ -446,9 +447,6 @@ export function extractFileContent(tc: {
     } catch {
       /* ignore */
     }
-  } else if (tn === "apply_patch" && tc.argsJson) {
-    const adds = parseApplyPatch(tc.argsJson)?.filter((p) => p.action === "add" && p.addLines && p.addLines.length > 0) ?? [];
-    if (adds.length > 0) content = adds[0].addLines!.join("\n");
   }
   if (!content) return null;
   const fp = extractFilePath(tc.argsJson);
