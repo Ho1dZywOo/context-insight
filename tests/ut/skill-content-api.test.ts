@@ -104,10 +104,11 @@ describe('skill-content API', () => {
         turnId: turn.id,
         toolCallId: 'c1',
         toolName: 'exec_command',
-        // 真机形态：echo 前缀链式命令（首 token 不是读类，靠分段判定）；
+        // 真机形态：echo 前缀链式命令（首 token 不是读类，靠分段判定；echo 的
+        // 横幅输出在场，作为字面量段被消耗、不进正文）；
         // 不打 isSkillRelated（覆盖查询兜底分支）
         argsJson: JSON.stringify({ cmd: "echo '======== foo/SKILL.md ========'; cat /home/u/.codex/skills/foo/SKILL.md" }),
-        resultJson: '# Foo\n\nshell cat 的终端输出原文',
+        resultJson: '======== foo/SKILL.md ========\n# Foo\n\nshell cat 的终端输出原文',
         startedAt: new Date('2026-01-01T00:00:00Z'),
       },
     });
@@ -117,6 +118,7 @@ describe('skill-content API', () => {
     const json = await res.json();
     expect(json.source).toBe('shell');
     expect(json.content).toBe('# Foo\n\nshell cat 的终端输出原文');
+    expect(json.content).not.toContain('========');
     expect(json.fullRead).toBe(true);
   });
 
@@ -165,7 +167,7 @@ describe('skill-content API', () => {
     expect(json.fullRead).toBe(false);
   });
 
-  it('shell 命令读多个技能 → 按 skillName 各自恢复', async () => {
+  it('shell 命令混读多技能（cat a b）：归因不可判定 → 双双诚实 null（宁缺毋假）', async () => {
     const taskId = `skill-content-shell-multi-${Date.now()}`;
     const { turn } = await seedSession(taskId);
     await prisma.toolCall.create({
@@ -180,10 +182,12 @@ describe('skill-content API', () => {
       },
     });
 
+    // 旧「整段输出当正文」给两个技能同一份拼接污染——恰是声明恢复污染的
+    // 病灶；根治后混 dump 无归因 → null（事件级 use 仍由摄取侧 detect 承担）
     const foo = await (await GET(makeRequest(taskId, 'foo'))).json();
-    expect(foo.source).toBe('shell');
+    expect(foo.source).toBeNull();
     const bar = await (await GET(makeRequest(taskId, 'bar'))).json();
-    expect(bar.source).toBe('shell');
+    expect(bar.source).toBeNull();
   });
 
   it('returns content null when skill not found', async () => {

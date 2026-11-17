@@ -14,7 +14,8 @@ import type { SubItemResult } from '../core/types';
 import type { ScoreToolCall } from '../core/assembler/types';
 import { hasFlag, splitShell, type ShellSegment } from '../core/shell-parser';
 import { extractFilePath } from '@/lib/file-restore';
-import { isShellToolCall, shellCommandOf, shellCommandArgsOf } from '@/lib/tool-conventions';
+import { isShellToolCall, isWriteFamilyTool, shellCommandOf, shellCommandArgsOf } from '@/lib/tool-conventions';
+import { parseApplyPatch } from '@/lib/apply-patch';
 
 // shell 命令工具族（词表）：bash=opencode 1.x / shell=opencode 2.x /
 // exec·exec_command=codex 系——历史缺陷：只认 bash，v2 与 codex 会话的
@@ -54,7 +55,17 @@ function collectSelfCreatedPaths(toolCalls: ScoreToolCall[]): Map<string, number
   const created = new Map<string, number>();   // path -> 创建时的 seq
   for (const tc of toolCalls) {
     const n = tc.toolName.toLowerCase();
-    if (n === 'write' || n === 'edit' || n === 'edit1' || n === 'multiedit') {
+    if (n === 'apply_patch') {
+      // codex patch 写：逐文件登记 Add/Update 的父目录（Delete 不登记）——
+      // 此前 patch 载荷非 JSON，写词表全家失明，误判高危删除
+      for (const p of parseApplyPatch(tc.argsJson) ?? []) {
+        if (p.action === 'delete') continue;
+        const dir = p.file.split('/').slice(0, -1).join('/');
+        if (dir) created.set(normalizeDir(dir), tc.seq);
+      }
+      continue;
+    }
+    if (isWriteFamilyTool(n)) {
       const file = extractFilePath(tc.argsJson);
       if (file) {
         const dir = file.split('/').slice(0, -1).join('/');
@@ -294,9 +305,9 @@ class OutOfBoundsScorer extends Scorer {
     }
 
     // 2. 写路径偏离工作范围：拿实际写过的路径推断边界（多仓库任务天然多目录 → 只提示）
-    const writeFamilies = new Set(['write', 'edit', 'edit1', 'multiedit']);
+    //    apply_patch 走 extractFilePath 的 patch 回退（多文件取首文件）
     const written = ctx.input.toolCalls
-      .filter(tc => writeFamilies.has(tc.toolName.toLowerCase()))
+      .filter(tc => isWriteFamilyTool(tc.toolName))
       .map(tc => extractFilePath(tc.argsJson))
       .filter((f): f is string => f != null);
     if (written.length > 0) {

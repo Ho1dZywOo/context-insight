@@ -234,6 +234,18 @@ export function isShellToolCall(toolName: string): boolean {
   return SHELL_TOOL_EXACT.has(toolName.toLowerCase());
 }
 
+/** 写工具族词表（单一真理源）——claude/opencode 的 Write/Edit 家族 +
+ *  codex 的 apply_patch（argsJson 是裸 patch 文本，路径提取须走
+ *  apply-patch 解析器，见 extractFilePath 的 patch 回退）。 */
+export const WRITE_TOOL_NAMES: readonly string[] = ['write', 'edit', 'edit1', 'multiedit', 'apply_patch'];
+
+const WRITE_TOOL_EXACT = new Set(WRITE_TOOL_NAMES);
+
+/** 写工具族判定（大小写不敏感）——评分/自清理/改代码判定/测试识别等全部消费方统一走这里 */
+export function isWriteFamilyTool(toolName: string): boolean {
+  return WRITE_TOOL_EXACT.has(toolName.toLowerCase());
+}
+
 /**
  * shell 命令的连接文本（供文本扫描）：`command` / Codex 原生 `cmd`
  * 字符串直取；数组形态 join ' '。无命令键（如 exec 的 input 形态）→ null，

@@ -10,6 +10,7 @@
 // 用 Read/Grep/Glob 自己取证。复用 collectForScoring 的口径——与代码评分读同一份数据。
 
 import fs from 'node:fs/promises';
+import { WRITE_TOOL_NAMES } from '@/lib/tool-conventions';
 import path from 'node:path';
 import os from 'node:os';
 import type { PrismaClient } from '@prisma/client';
@@ -30,7 +31,6 @@ export function safeId(taskId: string): string {
   return taskId.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80);
 }
 
-const WRITE_FAMILY = new Set(['write', 'edit', 'edit1', 'multiedit']);
 const TODO_FAMILY = new Set(['todowrite', 'todo_write', 'todo']);
 
 /** 维度切片：按维度过滤工具白名单 / turn 范围 / 是否带 bridges / 是否带项目说明 */
@@ -43,11 +43,11 @@ interface DimensionSlice {
 }
 
 const SLICES: Record<string, DimensionSlice> = {
-  D1: { tools: [...TODO_FAMILY, 'bash', ...WRITE_FAMILY], turns: 'root', bridges: true, memory: true },
+  D1: { tools: [...TODO_FAMILY, 'bash', ...WRITE_TOOL_NAMES], turns: 'root', bridges: true, memory: true },
   // D2 白名单必须带提问工具：用户答复（tool_result 回填）是授权证据——漏了它，
   // 高危操作的授权链评审看不见，只能按"无用户消息"误判自作主张（现场 §f5fe259d）
-  D2: { tools: ['bash', ...WRITE_FAMILY, 'question', 'askuserquestion'], turns: 'root', bridges: false, memory: true },
-  D3: { tools: ['bash', ...WRITE_FAMILY], turns: 'root', bridges: false, memory: false },
+  D2: { tools: ['bash', ...WRITE_TOOL_NAMES, 'question', 'askuserquestion'], turns: 'root', bridges: false, memory: true },
+  D3: { tools: ['bash', ...WRITE_TOOL_NAMES], turns: 'root', bridges: false, memory: false },
   D5: { tools: [], turns: 'root', bridges: true, memory: false },
   D6: { tools: [], turns: 'user', bridges: false, memory: false },
 };

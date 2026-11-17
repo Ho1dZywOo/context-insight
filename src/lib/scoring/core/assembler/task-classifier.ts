@@ -12,6 +12,7 @@
 // 声明解析无材料（capture 孪生走 system 文本判 operator，native 只能看任务文本）。
 
 import { extractFilePath } from '@/lib/file-restore';
+import { isWriteFamilyTool } from '@/lib/tool-conventions';
 import { taskClassRegexes } from './task-classes';
 import type { ScoreToolCall, WorkflowDeclaration } from './types';
 
@@ -29,9 +30,8 @@ export function classifyTask(
   if (decl?.taskTypeTags?.includes('operator')) return 'operator';
   if (operator && taskText && operator.taskText.test(taskText.slice(0, 500))) return 'operator';
 
-  const writeFamilies = new Set(['write', 'edit', 'edit1', 'multiedit']);
   const writtenFiles = toolCalls
-    .filter(tc => writeFamilies.has(tc.toolName.toLowerCase()))
+    .filter(tc => isWriteFamilyTool(tc.toolName))
     .map(tc => extractFilePath(tc.argsJson))
     .filter((f): f is string => f != null);
 

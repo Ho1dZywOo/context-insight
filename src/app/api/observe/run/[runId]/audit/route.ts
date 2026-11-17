@@ -43,6 +43,7 @@ import {
   buildStructuredRecords,
 } from '@/lib/sift-audit';
 import { recoverAgentMdFromSystem } from '@/lib/agent-md-session-recover';
+import { recoverAgentMdFromSession } from '@/lib/agent-md-recover';
 import { resolveScanRoot, scanAgentDirs, resolveAgentMd } from '@/lib/agent-md-scan';
 import { makeStreamingAuditResponse } from '@/lib/sift-runner';
 import type { AuditLayerInfo, AuditMemberMap, AuditMemberRef } from '@/lib/sift-audit-types';
@@ -159,6 +160,21 @@ export const POST = withRouteLog(
             `---\nname: ${name}\ndescription: recovered from session system injection\n---\n${viaSystem.content}\n`,
           );
         } else {
+          // 会话内读取层（codex 原生导入的主路径：子 rollout 无 system 注入字段，
+          // agent 定义在仓库里、运行时经 cat/sed 读取——shell-restore 归因即
+          // 运行时生效原文，比磁盘扫描准：读的是哪份就是哪份）
+          let viaSession: Awaited<ReturnType<typeof recoverAgentMdFromSession>> = null;
+          for (const m of withSession) {
+            viaSession = await recoverAgentMdFromSession(prisma, sessions.get(m.taskId)!.id, name);
+            if (viaSession) break;
+          }
+          if (viaSession) {
+            skillPath = path.join(tmp, 'agent.md');
+            fs.writeFileSync(
+              skillPath,
+              `---\nname: ${name}\ndescription: recovered from session reads\n---\n${viaSession.content}\n`,
+            );
+          } else {
           // 磁盘扫描兜底：消歧用全体涉事会话的派发名并集
           const scanRoot = resolveScanRoot();
           if (!scanRoot) {
@@ -186,6 +202,7 @@ export const POST = withRouteLog(
             );
           }
           skillPath = resolved.mdPath;
+          }
         }
       } else {
         // root：单成员的组合声明

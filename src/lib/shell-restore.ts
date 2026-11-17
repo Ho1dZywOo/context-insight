@@ -35,7 +35,7 @@
 //   · cat 只在区域可界定时归因（后随锚或流尾），行号从 1 起
 //   · tail 无文件起点，不归因（分析层照常计读取）
 //   · 多文件 dump、sed -i、带管道的段一律不归因
-import { shellCommandArgsOf } from './tool-conventions';
+import { shellCommandArgsOf, stripExecOutputHeader } from './tool-conventions';
 import { isFilePathLike } from './file-reads';
 
 export interface ShellRestoreEntry {
@@ -69,11 +69,14 @@ function splitLines(s: string): string[] {
   return (s.endsWith('\n') ? s.slice(0, -1) : s).split('\n');
 }
 
-/** resultJson → 定位流：剥截断 banner，按内联标记切头尾；尾段从 M 倒数定位 */
+/** resultJson → 定位流：先剥 codex 终端元数据壳（Chunk ID/Wall time/…/Output:
+ *  ——proxy 捕获形态保留此壳，原生导入已剥，无壳原样），再剥截断 banner，
+ *  按内联标记切头尾；尾段从 M 倒数定位 */
 function buildPositionedStream(resultJson: string): PositionedStream {
-  const m = resultJson.match(TRUNC_BANNER);
+  const bare = stripExecOutputHeader(resultJson);
+  const m = bare.match(TRUNC_BANNER);
   const total = m ? Number(m[1]) : null;
-  const content = m ? resultJson.slice(m[0].length) : resultJson;
+  const content = m ? bare.slice(m[0].length) : bare;
 
   TRUNC_MARKER.lastIndex = 0;
   const markers = [...content.matchAll(TRUNC_MARKER)];
@@ -541,4 +544,14 @@ export function restoreShellReads(argsJson: string | null, resultJson: string | 
     }
   }
   return [...merged].map(([filePath, lines]) => ({ filePath, lines }));
+}
+
+/** 恢复条目 → 声明文本（行序拼接）：缺口行**跳过**而非渲染 gap 标记——
+ *  声明消费方（sift 对账/计划恢复）要的是可对账指令文本，未观测到的行
+ *  不可知、不参与对账；行号空洞由 maxLine/covered 如实表达。 */
+export function renderShellEntryText(entry: ShellRestoreEntry): { content: string; maxLine: number; covered: number } {
+  const nums = [...entry.lines.keys()].sort((a, b) => a - b);
+  const content = nums.map(n => entry.lines.get(n)!).join('\n');
+  const maxLine = nums.length > 0 ? nums[nums.length - 1] : 0;
+  return { content, maxLine, covered: nums.length };
 }

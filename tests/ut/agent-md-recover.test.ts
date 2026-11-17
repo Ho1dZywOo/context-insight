@@ -11,13 +11,15 @@ import { selectRecoveredAgentMd, recoverAgentMdFromSession, type RecoverToolCall
 import type { PrismaClient } from '@prisma/client';
 
 /**
- * agent-md-recover 纯函数测试（Read 结果恢复的拼合/消歧逻辑）。
+ * agent-md-recover（Read + shell 双通道会话内恢复）纯函数与 DB 层测试。
  *
- * v2.06 起 agent-content API 的声明主路径改为 system 注入（agent-md-session-recover，
- * 不依赖子代理 Read 过该文件）；本模块不再被路由调用（库保留，供需要 Read 证据的
- * 场景复用）。分段拼合/多插件消歧逻辑仍有值，纯函数级锁定。
- * 数据流：read ToolCall（opencode `N: ` + <content> 信封 / claude `N\t`）→
- * selectRecoveredAgentMd（按文件分组 + 分段拼合 + 最新读取消歧）。
+ * audit agent 对账的声明三级降级之一（system 注入 > **本模块会话内读取** >
+ * 磁盘扫描）：codex 原生导入的子 rollout 无 system 注入字段（agent-md-session-recover
+ * 天然无数据）、agent 定义在仓库里由子代理运行时 cat/sed 读取——本模块经
+ * shell-restore 引擎归因恢复运行时生效原文（读的是哪份就是哪份）。
+ * 数据流：Read ToolCall（opencode `N: ` 信封 / claude `N\t`）+ shell 隐式读
+ * （codex exec_command 的 cat/sed）→ selectRecoveredAgentMd（按文件分组 +
+ * 分段拼合 + 最新读取消歧）。
  */
 
 function opencodeReadResult(filePath: string, lines: string[]): string {
@@ -101,6 +103,49 @@ describe('selectRecoveredAgentMd（Read 结果拼合/消歧）', () => {
     expect(
       selectRecoveredAgentMd([tc('read', '/ws/agents/other.md', '<content>...</content>', new Date())], 'nobody')
     ).toBeNull();
+  });
+});
+
+describe('selectRecoveredAgentMd（shell 通道——codex 现场形态）', () => {
+  const fp = '/repo/.agents/skills/day0/agents/developer.md';
+  const body = ['---', 'name: developer', '---', '', '# developer', '', '1. 检查图健康'];
+  function shellTc(cmd: string, result: string, at: number): RecoverToolCallRow {
+    return {
+      toolName: 'exec_command',
+      argsJson: JSON.stringify({ cmd, workdir: '/repo' }),
+      resultJson: result,
+      startedAt: new Date(at),
+    };
+  }
+
+  it('codex exec_command cat agents/x.md → 归因恢复原文（此前 codex 子代理声明全灭）', () => {
+    const r = selectRecoveredAgentMd([shellTc(`cat ${fp}`, `${body.join('\n')}\n`, 1)], 'developer');
+    expect(r).not.toBeNull();
+    expect(r!.source).toBe(fp);
+    expect(r!.fullRead).toBe(true);
+    expect(r!.content).toBe(body.join('\n'));
+  });
+
+  it('多段链（sed 区间 + 无关命令输出）只归因 .md 自己的行；混 dump 宁缺毋假', () => {
+    const noisy = `pwd && printf '== md ==' && sed -n '1,7p' ${fp}`;
+    const out = `/repo\n== md ==\n${body.join('\n')}\n`;
+    const ok = selectRecoveredAgentMd([shellTc(noisy, out, 1)], 'developer');
+    expect(ok!.content).toBe(body.join('\n'));
+    // 多文件 dump（cat a.md b.md）：归因不可判定 → null（不拿拼接输出充数）
+    const mixed = selectRecoveredAgentMd(
+      [shellTc(`cat ${fp} /repo/agents/other.md`, 'developer\nother\n', 1)],
+      'developer',
+    );
+    expect(mixed).toBeNull();
+  });
+
+  it('分段读跨调用拼合：sed 1,4p + sed 4,7p（重叠校准）→ 全文、截断缺口如实 gap', () => {
+    const r = selectRecoveredAgentMd([
+      shellTc(`sed -n '1,4p' ${fp}`, `${body.slice(0, 4).join('\n')}\n`, 1),
+      shellTc(`sed -n '4,7p' ${fp}`, `${body.slice(3, 7).join('\n')}\n`, 2),
+    ], 'developer');
+    expect(r!.fullRead).toBe(true);
+    expect(r!.content).toBe(body.join('\n'));
   });
 });
 

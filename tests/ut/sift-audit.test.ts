@@ -13,6 +13,7 @@ import {
   stripSkillRuntimeTail,
   recoverSkillBody,
   recoverPlanFileDeclaration,
+  recoverSkillResourceFile,
   recoverMainAgentWorkflowBody,
   resolveWorkflowSkillName,
   recoverWorkflowDeclaration,
@@ -171,7 +172,7 @@ describe("recoverSkillBody", () => {
         },
       ],
     });
-    expect(await recoverSkillBody(SID, "cannbay-report", prisma)).toBe("# CANNbay 审计报告规范\n\n五个必备章节。\n");
+    expect(await recoverSkillBody(SID, "cannbay-report", prisma)).toBe("# CANNbay 审计报告规范\n\n五个必备章节。");
   });
 
   it("B 形 read 通道（opencode read SKILL.md）→ 剥行号返回正文", async () => {
@@ -545,6 +546,97 @@ describe("recoverPlanFileDeclaration（named-Read 单路：计划文件名白名
       { toolName: "todowrite", argsJson: JSON.stringify({ todos }), resultJson: null },
     ]);
     expect(await recoverPlanFileDeclaration("ses_1", prisma)).toBeNull();
+  });
+});
+
+describe("声明恢复 shell 通道（codex 无 Read 工具——cat/sed 读计划/资源文件）", () => {
+  // B1 根治回归：codex 的文件读取全内嵌 exec_command，此前计划/资源声明恢复
+  // 只认 Read 词表 → 全灭。shell 通道两步取数（args 初筛 → 命中回捞 resultJson
+  // 归因），与 Read 通道同入「首实质读 = 承诺态」的时间序管道。
+  const planBody =
+    "# 基于 ACLNN 的 STATE\n\n## Tasks\n\n- [x] 1. 创建工作区\n- [ ] 2. 初始化日志\n- [ ] 3. 派发 developer\n" + "x".repeat(160);
+  const at = (n: number) => new Date(`2026-11-17T0${n}:00:00Z`);
+
+  const shellRow = (id: string, cmd: string, result: string, n: number) => ({
+    id,
+    toolName: "exec_command",
+    argsJson: JSON.stringify({ cmd, workdir: "/repo" }),
+    resultJson: result,
+    createdAt: at(n),
+    startedAt: at(n),
+  });
+  const readRow = (path: string, content: string, n: number) => ({
+    toolName: "read",
+    argsJson: JSON.stringify({ filePath: path }),
+    resultJson: `<content>${content}</content>`,
+    createdAt: at(n),
+    startedAt: at(n),
+  });
+
+  // findMany 按查询词表分发（read 通道 / shell 初筛 / 命中回捞三形态）
+  const makeDualPrisma = (readTcs: unknown[], shellTcs: unknown[]) =>
+    ({
+      toolCall: {
+        findMany: vi.fn().mockImplementation(async (args: { where?: { toolName?: { in?: string[] }; id?: { in?: string[] } } }) => {
+          const names = args.where?.toolName?.in ?? [];
+          if (names.includes("read")) return readTcs;
+          const idIn = args.where?.id?.in;
+          if (idIn) return shellTcs.filter(r => idIn.includes((r as { id: string }).id));
+          return shellTcs;
+        }),
+      },
+    }) as unknown as PrismaClient;
+
+  it("codex exec_command sed STATE.md → 计划声明恢复（source=STATE.md、[x] 归一 [ ]）", async () => {
+    const prisma = makeDualPrisma(
+      [],
+      [shellRow("sc-1", "sed -n '1,80p' .agents/plan/STATE.md", planBody + "\n", 2)],
+    );
+    const r = await recoverPlanFileDeclaration("ses_1", prisma);
+    expect(r).not.toBeNull();
+    expect(r!.source).toBe("STATE.md");
+    expect(r!.content).toContain("基于 ACLNN");
+    expect(r!.content).toContain("[ ] 1. 创建工作区");
+    expect(r!.content).not.toContain("[x]");
+  });
+
+  it("双通道时间序：早 shell 读（承诺态）胜过后读的 Read 终态", async () => {
+    const earlyShell = planBody; // 早期完整读
+    const lateRead = planBody.replace("- [ ] 2. 初始化日志", "- [x] 2. 初始化日志（终态）") + "\n- [x] 4. 追加结果列";
+    const prisma = makeDualPrisma(
+      [readRow("/repo/STATE.md", lateRead, 5)],
+      [shellRow("sc-1", "cat STATE.md", earlyShell + "\n", 2)],
+    );
+    const r = await recoverPlanFileDeclaration("ses_1", prisma);
+    expect(r!.content).toContain("- [ ] 2. 初始化日志");
+    expect(r!.content).not.toContain("终态");
+  });
+
+  it("shell 读非计划文件（requirements.md / 管道段）不污染 → null", async () => {
+    const prisma = makeDualPrisma(
+      [],
+      [
+        shellRow("sc-1", "cat requirements.md", "需求 A\n需求 B\n".repeat(20), 1),
+        shellRow("sc-2", "cat STATE.md | grep -c task", "3\n", 2),
+      ],
+    );
+    expect(await recoverPlanFileDeclaration("ses_1", prisma)).toBeNull();
+  });
+
+  it("codex cat skill resources/task-prompts.md → 规程层资源声明恢复", async () => {
+    const prompts =
+      "## Task 1: developer\n\n- prompt: 实现算子\n- 验收标准：pytest 全过\n\n## Task 2: verifier\n\n- prompt: 复核\n" + "y".repeat(160);
+    const prisma = {
+      toolCall: {
+        findMany: vi.fn().mockResolvedValue([
+          shellRow("sc-1", "cat .agents/skills/ops-registry-invoke-workflow/resources/task-prompts.md", prompts + "\n", 1),
+        ]),
+      },
+    } as unknown as PrismaClient;
+    const r = await recoverSkillResourceFile("ses_1", "ops-registry-invoke-workflow", prisma);
+    expect(r).not.toBeNull();
+    expect(r!.source).toBe("task-prompts.md");
+    expect(r!.content).toContain("## Task 1: developer");
   });
 });
 
