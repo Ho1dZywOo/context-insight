@@ -1,0 +1,63 @@
+{
+  "session": { "taskId": "sr-shell-codex", "framework": "codex", "label": "shell 复卷回归（现场形态）" },
+  "files": {
+    "skill/SKILL.md": ["S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08", "S09", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S19", "S20"],
+    "skill/flows.md": ["F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08"],
+    "skill/req.txt": ["R1", "R2", "R3", "R4", "R5"]
+  },
+  "calls": [
+    {
+      "id": "sr-a",
+      "tool": "exec_command",
+      "cmd": "sed -n '1,10p' skill/SKILL.md",
+      "result": "S01\nS02\nS03\nS04\nS05\nS06\nS07\nS08\nS09\nS10\n"
+    },
+    {
+      "id": "sr-b",
+      "tool": "exec_command",
+      "cmd": "sed -n '1,20p' skill/SKILL.md",
+      "result": "Warning: truncated output (original token count: 999)\nTotal output lines: 20\n\nS01\nS02\nS03\nS04…100 chars truncated…S18\nS19\nS20\n"
+    },
+    {
+      "id": "sr-c",
+      "tool": "exec_command",
+      "cmd": "wc -l skill/SKILL.md && sed -n '1,12p' skill/SKILL.md && printf '\\n-- mid --\\n' && sed -n '13,20p' skill/SKILL.md",
+      "result": "Warning: truncated output (original token count: 888)\nTotal output lines: 23\n\n20 skill/SKILL.md\nS01\nS02\nS03\nS04\nS05\nS06\nS07\nS08\nS09\nS10\nS11\nS12\n\n-- mid --\n…64 chars truncated…S17\nS18\nS19\nS20\n"
+    },
+    {
+      "id": "sr-d",
+      "tool": "exec_command",
+      "cmd": "ls -la skill 2>/dev/null; printf '\\n== doc ==\\n'; sed -n '1,200p' skill/flows.md",
+      "result": "total 4\ndrwxr-xr-x 2 u u 4096 .\ndrwxr-xr-x 2 u u 4096 ..\n-rw-r--r-- 1 u u 512 SKILL.md\n\n== doc ==\nF01\nF02\nF03\nF04\nF05\nF06\nF07\nF08\n"
+    },
+    {
+      "id": "sr-e",
+      "tool": "exec_command",
+      "cmd": "printf '%s\\n' '== req ==' && cat skill/req.txt && printf '\\n== end ==\\n'",
+      "result": "== req ==\nR1\nR2\nR3\nR4\nR5\n\n== end ==\n"
+    },
+    {
+      "id": "sr-f",
+      "tool": "exec_command",
+      "cmd": "grep -n 'S' skill/SKILL.md | sed -n '1,220p'",
+      "result": "1:S01\n2:S02\n3:S03\n4:S04\n5:S05\n"
+    },
+    {
+      "id": "sr-g",
+      "tool": "exec_command",
+      "cmd": "sed -n '1,10p' skill/SKILL.md && sed -n '13,20p' skill/SKILL.md",
+      "result": "Warning: truncated output (original token count: 777)\nTotal output lines: 18\n\nS01\nS02\nS03\nS04\nS05\nS06\nS07\nS08\n…40 chars truncated…S19\nS20\n"
+    },
+    {
+      "id": "sr-read",
+      "tool": "Read",
+      "args": { "file_path": "skill/SKILL.md", "offset": 5, "limit": 4 },
+      "result": "5\tS05\n6\tS06\n7\tS07\n8\tS08"
+    }
+  ],
+  "expect": {
+    "skill/SKILL.md": { "covered": [[1, 12], [18, 20]], "maxLine": 20, "opsUsed": 5, "source": "read" },
+    "skill/flows.md": { "covered": [[1, 8]], "maxLine": 8, "opsUsed": 1, "source": "read" },
+    "skill/req.txt": { "covered": [[1, 5]], "maxLine": 5, "opsUsed": 1, "source": "read" }
+  }
+}

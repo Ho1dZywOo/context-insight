@@ -113,10 +113,16 @@ export interface ExecFileRead {
 
 const FULL_RANGE: ReadRange = { type: 'full', start: 0, end: null };
 
-function isFilePathLike(s: string): boolean {
+/** shell 操作数的路径判定单点（分析层读取提取与恢复层归因引擎共用——
+ *  两层的文件键一致性靠同一谓词保证，禁止各写一份） */
+export function isFilePathLike(s: string): boolean {
   if (!s || s.startsWith('-')) return false;
+  if (s === '.' || s === '..') return false;
   if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(s)) return false;
   if (/^\d+$/.test(s)) return false;
+  // 点开头文件（.gitignore/.env/.bashrc）——扩展名形态判不准（.gitignore 的
+  // "扩展名" 是 9 字符，超过下方 {1,8} 上限），按 dotfile 直认
+  if (s.startsWith('.')) return true;
   return s.startsWith('/') || s.startsWith('./') || s.startsWith('../') || s.startsWith('~')
     || s.includes('/') || /\.[A-Za-z0-9]{1,8}$/.test(s);
 }

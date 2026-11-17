@@ -120,7 +120,7 @@ beforeAll(async () => {
     data: { turnId: tb0.id, toolCallId: 'rop-tc-read-b', toolName: 'Read', state: 'ok', argsJson: '{"file_path": "/repo/rop-shared.md", "offset": 1, "limit": 5}' },
   });
   await prisma.toolCall.create({
-    data: { turnId: tb1.id, toolCallId: 'rop-tc-bash', toolName: 'bash', state: 'ok', argsJson: '{"command": "cat /repo/rop-other.md"}' },
+    data: { turnId: tb1.id, toolCallId: 'rop-tc-bash', toolName: 'bash', state: 'ok', argsJson: '{"command": "cat /repo/rop-other.md"}', resultJson: 'b1\nb2\n' },
   });
   // Write 供恢复重编（file-restore / dir-restore 走 read+write 操作序）
   await prisma.toolCall.create({
@@ -219,10 +219,17 @@ describe('run 合并 Skills/Files 观测（run-observe-parity 刀D）', () => {
     expect(dr.status).toBe(200);
     expect(dr.headers.get('Content-Type')).toBe('application/zip');
     expect(dr.headers.get('Content-Disposition')).toContain('run_minidemo01_restored.zip');
-    // 重编只吃 Read/Write 工具族（bash 隐式读不进，与 session 端点行为一致）：
-    // 仅 shared.md（a/b Read + a Write）
-    expect(Number(dr.headers.get('X-Restored-Count'))).toBe(1);
+    // 重编吃 Read/Write 工具族 + shell 命令族隐式读（bash cat 的输出经归因
+    // 引擎进复卷）：shared.md（Read×2 + Write）+ other.md（bash cat 2 行）
+    expect(Number(dr.headers.get('X-Restored-Count'))).toBe(2);
     expect(Number(dr.headers.get('X-Restored-Total-Lines'))).toBeGreaterThan(0);
+
+    // bash 隐式读通道：cat 输出按行号归因进复卷（与 Read 通道同构合流）
+    const fo = await get(RUN_ID, 'file-restore', '?filePath=/repo/rop-other.md');
+    expect(fo.status).toBe(200);
+    const foData = await fo.json();
+    expect(foData.opsUsed).toBe(1);
+    expect(foData.lines.map((l: { content: string | null }) => l.content)).toEqual(['b1', 'b2']);
 
     const bad = await get(RUN_ID, 'file-restore', '?member=rop-not-in-run&filePath=/x');
     expect(bad.status).toBe(400);

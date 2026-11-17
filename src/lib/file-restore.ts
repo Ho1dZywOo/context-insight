@@ -15,6 +15,17 @@ export interface RestoreOp {
   ts: Date | null;
 }
 
+/** shell 命令族隐式读（codex exec_command / opencode bash 的 cat/sed/head）：
+ *  argsJson+resultJson 经 shell-restore 引擎归因后的已解析行表——缺口
+ *  （采集期截断丢弃段/残行）不出现，由行号空洞表达（与 Read/Write 通道
+ *  的 gap 渲染同构）。ts 参与读写时间序合并。 */
+export interface ShellRestoreOp {
+  kind: 'shell';
+  filePath: string;
+  lines: Map<number, string>;
+  ts: Date | null;
+}
+
 export interface RestoreLine {
   n: number;
   content: string | null;
@@ -102,7 +113,7 @@ export function parseWriteLines(argsJson: string | null): Map<number, string> | 
   return out;
 }
 
-export function restoreFile(ops: RestoreOp[]): RestoreResult {
+export function restoreFile(ops: Array<RestoreOp | ShellRestoreOp>): RestoreResult {
   const sorted = [...ops].sort((a, b) => {
     const ta = a.ts?.getTime() ?? -Infinity;
     const tb = b.ts?.getTime() ?? -Infinity;
@@ -116,13 +127,15 @@ export function restoreFile(ops: RestoreOp[]): RestoreResult {
     let lines: Map<number, string> | null = null;
     if (op.kind === 'read') {
       lines = parseReadLines(op.resultJson, extractOffset(op.argsJson));
-    } else {
+    } else if (op.kind === 'write') {
       lines = parseWriteLines(op.argsJson);
+    } else if (op.kind === 'shell') {
+      lines = op.lines.size > 0 ? op.lines : null;
     }
     if (!lines || lines.size === 0) continue;
     opsUsed++;
     for (const [n, content] of lines) {
-      lineMap.set(n, { content, source: op.kind });
+      lineMap.set(n, { content, source: op.kind === 'write' ? 'write' : 'read' });
     }
   }
 
