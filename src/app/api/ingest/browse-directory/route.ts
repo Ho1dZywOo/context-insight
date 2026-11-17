@@ -142,13 +142,26 @@ export async function POST(request: NextRequest) {
     }
 
     // withFileTypes：Dirent 自带 isDirectory，一次 readdir 同时完成分组——
-    // 每个条目至多再花一次 stat，消灭排序比较器×2 + map 的重复 stat 风暴
+    // 每个条目至多再花一次 stat，消灭排序比较器×2 + map 的重复 stat 风暴。
+    // 软链例外：Dirent.isDirectory() 对指向目录的软链恒 false（不跟随），需
+    // 一次 stat 解析归类——指向目录的软链并入 dirNames（否则被当普通文件、
+    // 点击不可导航），指向文件的软链并入 fileNames（statFile 的 stat 跟随链）。
     const dirents = fs.readdirSync(resolved, { withFileTypes: true });
     const dirNames: string[] = [];
     const fileNames: string[] = [];
     for (const d of dirents) {
-      if (d.isDirectory()) dirNames.push(d.name);
-      else fileNames.push(d.name);
+      if (d.isDirectory()) {
+        dirNames.push(d.name);
+      } else if (d.isSymbolicLink()) {
+        try {
+          if (fs.statSync(path.join(resolved, d.name)).isDirectory()) dirNames.push(d.name);
+          else fileNames.push(d.name);
+        } catch {
+          fileNames.push(d.name); // 悬空软链：statFile 兜底（读取失败 → 占位）
+        }
+      } else {
+        fileNames.push(d.name);
+      }
     }
     dirNames.sort((a, b) => a.localeCompare(b));
 
