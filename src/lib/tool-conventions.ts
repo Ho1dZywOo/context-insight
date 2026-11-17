@@ -282,26 +282,10 @@ export function shellCommandArgsOf(argsJson: string | null): string[] {
 /** shell 读类命令白名单（分段后的首 token，小写归一） */
 const SKILL_MD_READ_COMMANDS = new Set(['cat', 'sed', 'head', 'tail', 'less', 'more', 'nl']);
 
-/** 读类命令的连接文本：codex `cmd` 键 → claude/opencode `command` 键（有序，数组形态拼合） */
+/** 读类命令的连接文本：复用 shell 命令参数单点，保持键优先级一致 */
 export function shellReadCommandOf(argsJson: string | null): string | null {
-  if (!argsJson) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(argsJson);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const args = parsed as Record<string, unknown>;
-  for (const key of ['cmd', 'command']) {
-    const v = args[key];
-    if (typeof v === 'string' && v) return v;
-    if (Array.isArray(v)) {
-      const joined = v.filter(s => typeof s === 'string').join(' ');
-      if (joined) return joined;
-    }
-  }
-  return null;
+  const parts = shellCommandArgsOf(argsJson);
+  return parts.length > 0 ? parts.join(' ') : null;
 }
 
 /** SKILL.md 路径 → 技能名（父目录名；无父目录回落空） */

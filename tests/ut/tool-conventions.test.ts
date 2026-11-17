@@ -19,6 +19,7 @@ import {
   isShellToolCall,
   shellCommandOf,
   shellCommandArgsOf,
+  shellReadCommandOf,
 } from '../../src/lib/tool-conventions.ts';
 
 describe('tool-conventions（框架工具调用约定）', () => {
@@ -220,6 +221,11 @@ describe('tool-conventions（框架工具调用约定）', () => {
       expect(shellCommandArgsOf('{"cmd":"cat a && cat b"}')).toEqual(['cat a && cat b']);
       expect(shellCommandArgsOf('{"cmd":["bash","-lc","cat a; rg foo b"]}')).toEqual(['bash', '-lc', 'cat a; rg foo b']);
       expect(shellCommandArgsOf('{"input":"x"}')).toEqual([]);
+    });
+    it('shellReadCommandOf：复用参数键优先级，不与 Files 分析分叉', () => {
+      const argsJson = '{"command":"cat /a/SKILL.md","cmd":"cat /b/SKILL.md"}';
+      expect(shellReadCommandOf(argsJson)).toBe('cat /a/SKILL.md');
+      expect(shellReadCommandOf(argsJson)).toBe(shellCommandOf(argsJson));
     });
   });
 });
