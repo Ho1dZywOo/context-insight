@@ -20,6 +20,9 @@
 // LLM Active（模型活跃）：
 //   只统计 assistant 的模型推理窗口，主 Agent 和 subagent 都包含，重叠只算一次。
 //   不包含工具执行、等待工具结果、等待资源或用户空闲。
+//   注意 native 各框架对 latencyMs 的语义不完全一致（codex 是模型生成跨度；
+//   opencode/claude 可能是 completed-created 的 turn 跨度），因此所有 native
+//   推理窗口也统一限制在 10min 内，避免把异常长 turn 当成模型推理。
 //
 // Idle（非活跃）：
 //   Wall Clock - Agent Active。
@@ -81,13 +84,15 @@ function llmWindowOf(turn: RunTimeTurnRow, isProxy: boolean): [number, number] |
     return [ts! - latency, ts!]
   }
 
-  // native：createdAt_ts 是 turn 开始，latencyMs 是模型推理耗时。
-  // completedAt 是 turn 整体结束，可能包含长时间工具执行/等待，不能直接拿它
-  // 当 LLM 推理结束；这里只用它做上界防御。
+  // native：createdAt_ts 是 turn 开始。codex 的 latencyMs 是模型生成跨度；
+  // opencode/claude 的 latencyMs 可能等于 completed-created，包含工具执行/等待。
+  // 各框架无法在通用 TurnRow 上完全区分，因此统一取 10min 可信上界；
+  // completedAt 只作为 turn 边界上界，不能直接当 LLM 推理结束。
   const completed = turn.completedAt?.getTime()
+  const latency = Math.min(turn.latencyMs, ACTIVE_LATENCY_CAP_MS)
   const end = Number.isFinite(completed)
-    ? Math.min(ts! + turn.latencyMs, completed!)
-    : ts! + turn.latencyMs
+    ? Math.min(ts! + latency, completed!)
+    : ts! + latency
   return end > ts! ? [ts!, end] : null
 }
 
