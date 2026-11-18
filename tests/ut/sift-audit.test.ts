@@ -29,10 +29,12 @@ import {
   extractFileContent,
 } from "@/lib/sift-audit";
 
-/** 造一个最小 mock prisma：只实现 recoverSkillBody 用到的两个方法。 */
+/** 造一个最小 mock prisma：只实现 recoverSkillBody 用到的两个方法
+ *  （候选面 collector：toolCall 三通道 + turn 注入轮）。 */
 function makePrisma(opts: {
   skillEvent?: { turnId: string } | null
   toolCalls?: Array<{ toolName: string; argsJson: string | null; resultJson: string | null }>
+  turns?: Array<{ role: string; content: string | null }>
 }) {
   return {
     skillEvent: {
@@ -40,6 +42,9 @@ function makePrisma(opts: {
     },
     toolCall: {
       findMany: async () => opts.toolCalls ?? [],
+    },
+    turn: {
+      findMany: async () => opts.turns ?? [],
     },
   } as unknown as Parameters<typeof recoverSkillBody>[2];
 }
@@ -704,6 +709,8 @@ describe("resolveWorkflowSkillName + recoverWorkflowDeclaration", () => {
     },
     turn: {
       findFirst: vi.fn().mockResolvedValue(opts.turn0 ?? null),
+      // collectSkillContentCandidates 的注入轮查询（斜杠命令 system 注入）
+      findMany: vi.fn().mockResolvedValue([]),
     },
   }) as unknown as PrismaClient;
 

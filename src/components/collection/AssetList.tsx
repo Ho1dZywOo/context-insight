@@ -19,8 +19,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { BRAND_NAME, BAY_NAME, isBrandSourceType } from '@/lib/branding'
-import { isProxyVersion, agentFrameworkOf } from '@/lib/shared/session-format'
+import { BAY_NAME } from '@/lib/branding'
+import { frameworkDisplayName, isProxyVersion } from '@/lib/shared/session-format'
 import type { AssetItem, AssetKindFilter, RunAssetItem, SessionAssetItem } from '@/lib/collection/types'
 import { displayModel } from '@/lib/collection/model-display'
 import { useRouter } from 'next/navigation';
@@ -66,26 +66,16 @@ const KIND_LABELS: Record<AssetKindFilter, string> = {
   run: 'Runs',
 };
 
-const FRAMEWORK_LABELS: Record<string, string> = {
-  opencode: 'OpenCode',
-  'claude-code': 'Claude',
-  cannbot: 'CANNBot',
-  dsh: 'DSH',
-  codex: 'Codex',
-};
-
 // 会话行图标 id：跟模型走（modelIconId 在 AssetIcon 单点解析），与导入来
 // 源解耦
 function sessionIconId(item: SessionAssetItem): AssetIconId {
   return modelIconId(item.model);
 }
 
+// framework 显示名走 session-format 词表单点（品牌 sourceType / agent 归属 /
+// 未知回落三态同源），本文件不再持词表副本
 function sessionFrameworkLabel(item: SessionAssetItem): string | null {
-  const agent = agentFrameworkOf(item.framework) ?? '';
-  if (agent === 'opencode' || agent === 'claude-code' || agent === 'cannbot' || agent === 'dsh' || agent === 'codex') {
-    return FRAMEWORK_LABELS[agent] ?? agent;
-  }
-  return isBrandSourceType(item.framework) ? BRAND_NAME : null;
+  return frameworkDisplayName(item.framework);
 }
 
 function formatTokens(n: number): string {

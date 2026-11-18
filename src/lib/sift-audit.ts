@@ -19,6 +19,7 @@ import { extractShellFileReads } from "@/lib/file-reads";
 // skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
 // client bundle 安全；Audit 对账与 Skills 面板共用同一恢复词表，通道扩展不再双头漂移。
 import { selectSkillContent } from "@/lib/skill-content";
+import { collectSkillContentCandidates } from "@/lib/observe/collectors/skill-content";
 // dispatch-tools 是纯模块（唯一导入为 type-only，无 fs/db）——client bundle 安全；
 // 派发工具判定单点：task/agent/subagent/spawn_agent 及注册表未来形态自动纳入。
 import { dispatchSpecOf } from "@/lib/ingest/dispatch-tools";
@@ -774,11 +775,12 @@ export function assembleCombinedDeclaration(layers: AuditLayerInfo[]): {
 
 /**
  * 按 session + skillName 恢复该 skill 的纯 SKILL.md 正文，委托 selectSkillContent
- * 三通道单点（skill-tool `<skill_content>` / Read `<content>` / shell 读类命令
- * 终端输出）——与 Skills 面板「SKILL.md 原文」同一恢复路径。
+ * 四通道单点（skill-tool `<skill_content>` / 斜杠命令 system 注入 / Read
+ * `<content>` / shell 读类命令终端输出）——与 Skills 面板「SKILL.md 原文」
+ * 同一恢复路径。
  *
- * 候选工具调用面与 skill-content-audit handler 同宽：isSkillRelated（B 形
- * Read/shell 读取摄取时已标记）+ 兜底 Read+SKILL.md 命中。
+ * 候选面经 collectSkillContentCandidates 单点（工具调用 OR 词表 + system
+ * 注入轮），三处消费方（本函数 + 两个 handler）同宽。
  * 历史缺陷（codex 客户现场）：本函数此前自带一套 invoke 事件 + skill 工具族的
  * 平行词表，B 形会话（无 read 工具、cat 读 SKILL.md、eventType=use）全链 404。
  * 找不到 / 无正文 → null。
@@ -788,18 +790,8 @@ export async function recoverSkillBody(
   skillName: string,
   prisma: PrismaClient,
 ): Promise<string | null> {
-  const toolCalls = await prisma.toolCall.findMany({
-    where: {
-      turn: { sessionId },
-      OR: [
-        { isSkillRelated: true },
-        { toolName: { in: ["Read", "read"] }, argsJson: { contains: "SKILL.md" } },
-      ],
-    },
-    select: { toolName: true, argsJson: true, resultJson: true, startedAt: true },
-    orderBy: { createdAt: "asc" },
-  });
-  return selectSkillContent(toolCalls, skillName)?.content ?? null;
+  const { toolCalls, turns } = await collectSkillContentCandidates(prisma, sessionId);
+  return selectSkillContent(toolCalls, skillName, turns)?.content ?? null;
 }
 
 /**

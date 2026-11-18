@@ -8,11 +8,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { selectSkillContent, type SkillToolCall } from '@/lib/skill-content';
+import { selectSkillContent } from '@/lib/skill-content';
 import { recoverCombinedWorkflowDeclaration, MAIN_AGENT_WORKFLOW_NAME } from '@/lib/sift-audit';
 import { ensureWorkflowExtractPluginLoaded } from '@/lib/workflow-extract-config';
 import { withRouteLog } from '@/lib/api-route';
-import { SHELL_TOOL_NAMES } from '@/lib/tool-conventions';
+import { collectSkillContentCandidates } from '@/lib/observe/collectors/skill-content';
 
 export const GET = withRouteLog('observe/session/skill-content', async (request: NextRequest) => {
   // 激活部署根的 workflow-extract-plugins.json（server-only fs 加载；幂等）
@@ -64,34 +64,9 @@ export const GET = withRouteLog('observe/session/skill-content', async (request:
     });
   }
 
-  const toolCalls = await prisma.toolCall.findMany({
-    where: {
-      turn: { sessionId: session.id },
-      OR: [
-        { isSkillRelated: true },
-        { AND: [{ toolName: 'Read' }, { argsJson: { contains: 'SKILL.md' } }] },
-        { AND: [{ toolName: 'read' }, { argsJson: { contains: 'SKILL.md' } }] },
-        // shell 读类命令（exec_command cat …/SKILL.md——codex 主通道）；
-        // 摄取侧已给源工具行打 isSkillRelated，此分支兜旧数据与大小写变体
-        { AND: [{ toolName: { in: [...SHELL_TOOL_NAMES, 'Bash', 'Shell', 'Exec'] } }, { argsJson: { contains: 'SKILL.md' } }] },
-      ],
-    },
-    select: {
-      toolName: true,
-      argsJson: true,
-      resultJson: true,
-      startedAt: true,
-    },
-  });
+  const { toolCalls, turns } = await collectSkillContentCandidates(prisma, session.id);
 
-  const ops: SkillToolCall[] = toolCalls.map(tc => ({
-    toolName: tc.toolName,
-    argsJson: tc.argsJson,
-    resultJson: tc.resultJson,
-    startedAt: tc.startedAt ?? null,
-  }));
-
-  const result = selectSkillContent(ops, skillName);
+  const result = selectSkillContent(toolCalls, skillName, turns);
 
   if (!result) {
     return NextResponse.json(
