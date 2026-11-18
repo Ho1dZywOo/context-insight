@@ -51,8 +51,10 @@
     "e2e:headed": "playwright test --headed",
     "e2e:debug": "playwright test --debug",
     "e2e:report": "playwright show-report",
+    "release:preflight": "node scripts/release/preflight-publish.mjs",
     "release:prepare": "node scripts/release/build-artifacts.mjs",
-    "release:verify": "node scripts/release/check-tarballs.mjs && node scripts/release/smoke-install.mjs"
+    "release:verify": "node scripts/release/check-tarballs.mjs && node scripts/release/smoke-install.mjs",
+    "release:verify-registry": "node scripts/release/verify-registry.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

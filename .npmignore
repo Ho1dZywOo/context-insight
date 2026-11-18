@@ -2,6 +2,7 @@
 release-artifacts/
 .cannbot-pack/
 .github/
+scripts/release/
 
 # 测试
 tests/

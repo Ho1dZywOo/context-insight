@@ -111,6 +111,7 @@ describe('cannbot 品牌变体打包（pack-cannbot.mjs）', () => {
         if (/\.db(?:-(?:journal|wal|shm))?$/.test(rel) ||
             rel === '.github' || rel.startsWith('.github/') ||
             rel === 'release-artifacts' || rel.startsWith('release-artifacts/') ||
+            rel === 'scripts/release' || rel.startsWith('scripts/release/') ||
             rel === '.next' || rel.startsWith('.next/') ||
             rel === '.next-e2e' || rel.startsWith('.next-e2e/') ||
             rel === 'test-results' || rel.startsWith('test-results/') ||
