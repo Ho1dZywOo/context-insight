@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useState } from "react"
 import {
   PerfBenchmarkChart, perfEntrance, PERF_CARD_CLS, PERF_CARD_SM,
-  fmtMs, fmtTok, TOKEN_COLORS,
+  fmtMs, fmtTok, TOKEN_COLORS, turnElapsedMs,
   type TurnPerf, type BridgePerf, type ExecItem, type PerfLaneStat, type LaneExec,
 } from "./perf-shared"
 import { PerfLaneList } from "./PerfLaneList"
@@ -176,11 +176,12 @@ export function PerfPanorama({ endpoints, onOpenTurn, onOpenSearch, swimlanePayl
       if (lane == null) continue
       const ex = m.get(lane.laneId) ?? {
         laneId: lane.laneId, kind: lane.kind, name: lane.name, owner: lane.owner,
-        subagentType: lane.subagentType, taskDescription: null, turns: [], totalMs: 0, totalTokens: 0, totalGenTokens: 0,
+        subagentType: lane.subagentType, taskDescription: null, turns: [], totalMs: 0, llmMs: 0, totalTokens: 0, totalGenTokens: 0,
         tps: 0, cacheRead: 0, inputTokens: 0, cacheHitRate: 0, firstTurnId: t.turnId,
       }
       ex.turns.push(t)
-      ex.totalMs += t.latencyMs
+      ex.totalMs += turnElapsedMs(t)
+      ex.llmMs += Math.max(0, t.latencyMs)
       ex.totalTokens += t.totalTokens
       ex.totalGenTokens += (t.outputTokens ?? 0) + (t.reasoningTokens ?? 0)
       ex.cacheRead += t.cacheReadTokens
@@ -195,7 +196,7 @@ export function PerfPanorama({ endpoints, onOpenTurn, onOpenSearch, swimlanePayl
         s.taskDescription = cleaned.length > 50 ? cleaned.slice(0, 49) + "…" : cleaned
       }
       s.cacheHitRate = s.cacheRead + s.inputTokens > 0 ? (s.cacheRead / (s.cacheRead + s.inputTokens)) * 100 : 0
-      s.tps = s.totalMs > 0 ? s.totalGenTokens / (s.totalMs / 1000) : 0
+      s.tps = s.llmMs > 0 ? s.totalGenTokens / (s.llmMs / 1000) : 0
     }
     return [...m.values()]
   }, [turns, bridges])
