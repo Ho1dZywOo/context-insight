@@ -211,14 +211,9 @@ jobs:
 
       - name: Publish packages to selected dist-tag
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.version }}
           DIST_TAG: ${{ inputs.dist_tag }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN is not configured in the npm-release environment" >&2
-            exit 1
-          fi
           npm publish "./release-artifacts/context-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
           npm publish "./release-artifacts/cannbot-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
 
@@ -228,13 +223,8 @@ jobs:
       - name: Promote packages to latest
         if: inputs.promote_latest == true && inputs.dist_tag != 'dev'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN is not configured in the npm-release environment" >&2
-            exit 1
-          fi
           npm dist-tag add "context-insight@${VERSION}" latest
           npm dist-tag add "cannbot-insight@${VERSION}" latest
 
