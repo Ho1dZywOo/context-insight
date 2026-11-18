@@ -48,6 +48,12 @@ export interface ToolCallInfo {
   argsJson: string | null;
   resultJson: string | null;
   state: string;
+  /** 适配器解析的错误语义通道（passthrough-first）：证据只在 adapter 可见时
+   *  （codex 传输壳剥壳前、claude/codex-proxy 声明信封）解析成最终 errorType；
+   *  turn-split 直采，缺失时核心管线用 classifyToolCallError 从 resultJson 兜底。 */
+  errorType?: string | null;
+  /** 错误证据文本（≤200 字符），与 errorType 同通道同源。 */
+  errorMessage?: string | null;
   /** 工具发起时刻（ms epoch，源有则填；claude-jsonl=tool_use 行 ts，opencode=part.time_created） */
   startedAt?: number | null;
   /** 工具完成时刻（ms epoch，源有则填；claude-jsonl=tool_result 行 ts，opencode=终态 part.time_updated）。缺省 null=源无此信息，消费方降级 */

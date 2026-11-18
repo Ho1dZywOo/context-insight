@@ -20,6 +20,7 @@ import {
   writeStdinCharsOf,
   stripExecOutputHeader,
 } from '../../tool-conventions';
+import { codexExecFailureOf } from '../../tool-call-errors';
 
 // ── codex 原生会话适配器（agent-source-framework 首个新框架客户）──────
 // 数据源：~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl（codex CLI
@@ -499,6 +500,9 @@ function readSessionFromLines(lines: CodexRolloutLine[]): RawInteraction[] {
 //     如捕获裁剪起点之前发起）原样保留
 //   - 全部 exec_command 输出剥传输壳（Chunk ID/Wall time/…/Output:）——下游
 //     看到的即终端原文；旧库存量行仍带壳，读侧 stripExecOutputHeader 兼容
+//   - 失败语义随卷回定齐（state/errorType/errorMessage）：退出码/派生失败
+//     形态的证据只在剥壳前的壳层，此处解析成最终语义持久化，下游读侧与
+//     分类词表零 codex 协议知识（形态→桶映射见 tool-call-errors 单点）
 //   - 轮级卷回：纯传输轮（整轮工具全部被吸收的 write_stdin 模型往返）并入
 //     属主 exec 的轮，成为同一「节拍」（agent 的一个完整行为单元 = 动作 +
 //     等待期）——685 个计费往返不再 1:1 映射成 685 轮（其中 342 轮是传输
@@ -592,7 +596,17 @@ function rollUpStreamingExecs(result: RawInteraction[]): void {
       ? [stripExecOutputHeader(raw), ...st.parts].join('')
       : stripExecOutputHeader(raw);
     if (st != null && st.lastChunkTs != null) tc.completedAt = st.lastChunkTs;
-    if (exitCode !== null && exitCode !== 0) tc.state = 'error';
+    // 失败语义解析（raw 未剥壳——证据只在壳层：退出码在传输壳头、派生失败
+    // 形态占整个 output，剥壳即失）：state/errorType/errorMessage 一次定齐，
+    // 经 ToolCallInfo 语义通道随核心管线持久化。非零退出另以剥壳后的终端
+    // 原文提取错误原因行（退出码只说失败不说为何）。此前只写 state、证据随
+    // 剥壳丢弃 → 下游分类恒 unknown；派生拒绝/参数畸形无退出码 → 误标 completed。
+    const failure = codexExecFailureOf(raw, exitCode, tc.resultJson);
+    if (failure != null) {
+      tc.state = 'error';
+      tc.errorType = failure.kind;
+      tc.errorMessage = failure.evidence;
+    }
   }
 
   // ── 轮级卷回：纯传输轮并入属主轮（节拍 = 动作 + 等待期）────────────────

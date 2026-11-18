@@ -16,7 +16,7 @@ import { runsRoot } from '@/lib/run/run-store';
 import { getLlmActiveMsMap } from '@/lib/llm-active-map';
 import { getActiveSplitMap } from '@/lib/active-time-map';
 import { sessionDurationMs } from '@/lib/session-duration';
-import { countToolCallErrors } from '@/lib/tool-call-errors';
+import { countToolCallErrors, TOOL_CALL_ERROR_QUERY_OR } from '@/lib/tool-call-errors';
 import type { SessionAssetItem } from './types';
 
 export interface SessionRow {
@@ -180,12 +180,7 @@ export async function pageSessionErrorTotal(prisma: PrismaClient, rowIds: string
   const errorToolCalls = await prisma.toolCall.findMany({
     where: {
       turn: { sessionId: { in: rowIds } },
-      OR: [
-        { state: { in: ['error', 'failed'] } },
-        { errorType: { not: null } },
-        { resultJson: { contains: '<tool_use_error>' } },
-        { resultJson: { contains: 'Exit code' } },
-      ],
+      OR: TOOL_CALL_ERROR_QUERY_OR,
     },
     select: {
       id: true,
