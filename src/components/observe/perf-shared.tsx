@@ -45,6 +45,8 @@ export interface TurnPerf {
   cacheWriteTokens: number
   contextWindowPct: number | null
   latencyMs: number
+  /** 单轮墙钟：LLM 生成 + 同轮工具执行（不含轮间空闲）。旧载荷缺失时回退 latencyMs。 */
+  turnMs?: number | null
   model: string | null
   toolCalls: Array<{
     toolName: string
@@ -86,7 +88,10 @@ export interface PerfLaneStat {
   subagentType: string | null
   taskDescription: string | null
   turns: TurnPerf[]
+  /** 轮耗时合计：top-down 的“耗时”列口径，不再只算 LLM 响应时长。 */
   totalMs: number
+  /** 逐轮 latencyMs 合计：仅用于 TPS。Claude/Codex 通常为 LLM 响应时长；opencode 原生消息墙钟可能含工具执行。 */
+  llmMs: number
   totalTokens: number
   totalGenTokens: number
   tps: number
@@ -94,6 +99,12 @@ export interface PerfLaneStat {
   inputTokens: number
   cacheHitRate: number
   firstTurnId: string | null
+}
+
+export function turnElapsedMs(t: Pick<TurnPerf, "turnMs" | "latencyMs">): number {
+  return typeof t.turnMs === "number" && Number.isFinite(t.turnMs) && t.turnMs >= 0
+    ? t.turnMs
+    : Math.max(0, t.latencyMs)
 }
 
 /** 泳道内执行切片：按全局执行序号编 #N；墙钟取该执行自身 span，

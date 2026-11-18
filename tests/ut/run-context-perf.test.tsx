@@ -143,7 +143,7 @@ const perfTurn = {
   subagentName: null, subagentSessionId: null, member: { taskId: 'ses_mini_a', label: '成员A' },
   contentSummary: '成员A开始', createdAt: '2026-10-13T02:00:40.000Z',
   totalTokens: 120, inputTokens: 60, outputTokens: 50, reasoningTokens: 10,
-  cacheReadTokens: 10, cacheWriteTokens: 5, contextWindowPct: 55, latencyMs: 900,
+  cacheReadTokens: 10, cacheWriteTokens: 5, contextWindowPct: 55, latencyMs: 900, turnMs: 120_000,
   model: 'glm-4.7', toolCalls: [], skillEvents: [],
 };
 // 成员B 轮（工具耗时卡成员轴命名 + 矩阵列）
@@ -162,6 +162,7 @@ const perfSubTurn = {
   contentSummary: '子代理调研', createdAt: '2026-10-13T02:00:50.000Z',
   totalTokens: 80, inputTokens: 50, outputTokens: 20, reasoningTokens: 10,
   cacheReadTokens: 5, cacheWriteTokens: 2, contextWindowPct: 30, latencyMs: 600,
+  turnMs: 45_000,
   model: 'glm-4.7-sub', toolCalls: [], skillEvents: [],
 };
 
@@ -398,6 +399,12 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     expect(perfText).toContain('rop-研究员');
     const subLane = perf!.querySelector('[data-lane-row="rop-sub-1"]');
     expect(subLane?.textContent).toContain('子代理 · 成员A');
+    const memberLaneSummary = perf!.querySelector('[data-lane-row="ses_mini_a"]');
+    expect(memberLaneSummary?.textContent).toContain('4.0min');
+    expect(memberLaneSummary?.textContent).toContain('66.7');
+    expect(memberLaneSummary?.querySelector('[title*="opencode 原生可能包含工具执行"]')).toBeTruthy();
+    expect(subLane?.textContent).toContain('1.5min');
+    expect(subLane?.textContent).toContain('50.0');
     expect(perfText).not.toContain('类型构成');
 
     // 入场只做卡片级阶梯（与 Overview 同款）；图表元素不挂数据级动画
@@ -443,6 +450,8 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     });
     const turnRow = memberLane.querySelector('[data-turn="rop-t-a0"]');
     expect(turnRow).toBeTruthy();
+    expect(turnRow!.textContent).toContain('2.0min');
+    expect(turnRow!.textContent).toContain('50%');
     ensurePushSpy().mockClear();
     await act(async () => {
       turnRow!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
