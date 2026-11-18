@@ -56,7 +56,6 @@ interface Props {
  * 内部 key 用真名/回退名（与 SkillDetail 对账按钮传的 name 一致），路由按 kind=root 忽略 skillName。
  */
 const MAIN_AGENT_WORKFLOW_TARGET: SelEntry = { name: MAIN_AGENT_WORKFLOW_NAME, kind: "root" }
-const LLM_WORKFLOW_TARGET: SelEntry = { name: `${MAIN_AGENT_WORKFLOW_NAME}（LLM）`, kind: "llm-root" }
 
 export function SkillAuditTab({ taskId, framework, skillEvents, hasMainAgentWorkflow, mainAgentWorkflowName, selected, onSelectedChange, onJumpToTurn }: Props) {
   const targets = useMemo(() => deriveAuditableTargets(skillEvents), [skillEvents])
@@ -65,11 +64,12 @@ export function SkillAuditTab({ taskId, framework, skillEvents, hasMainAgentWork
   const entries = useMemo(
     () => {
       const skillEntries = targets.flatMap(t => t.kinds.map(k => ({ name: t.name, kind: k } as SelEntry)))
-      // 主 agent 编排 目标置顶（独立于 skillEvents——主 agent 不 invoke skill）
-      // 确定性提取（root）+ LLM 提取（llm-root）并排，方便对比
+      // 主 agent 编排 目标置顶（独立于 skillEvents——主 agent 不 invoke skill）。
+      // root 即 LLM 选择式提取（候选确定性收集 + claude CLI 选层 + 共享装配）——
+      // 退役前与确定性提取并排对比的 llm-root 双轨已收敛
       const rootEntries = hasMainAgentWorkflow
-        ? [{ ...MAIN_AGENT_WORKFLOW_TARGET, name: workflowName }, LLM_WORKFLOW_TARGET]
-        : [LLM_WORKFLOW_TARGET]
+        ? [{ ...MAIN_AGENT_WORKFLOW_TARGET, name: workflowName }]
+        : []
       return [...rootEntries, ...skillEntries]
     },
     [targets, hasMainAgentWorkflow, workflowName],
@@ -139,7 +139,7 @@ function EntryRow({
           isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/40",
         )}
       >
-        <Badge variant={entry.kind === "skill" ? "blue" : entry.kind === "root" || entry.kind === "llm-root" ? "yellow" : "purple"} className="text-[10px] px-1 py-0 h-4 shrink-0">
+        <Badge variant={entry.kind === "skill" ? "blue" : entry.kind === "root" ? "yellow" : "purple"} className="text-[10px] px-1 py-0 h-4 shrink-0">
           {entry.kind}
         </Badge>
         <span className="truncate flex-1" title={entry.name}>{entry.name}</span>
@@ -274,10 +274,8 @@ function EntryPanel({
           {entry.kind === "skill"
             ? "不 re-run，对账真实执行 vs SKILL.md 声明（正文从 session 恢复）"
             : entry.kind === "root"
-              ? "不 re-run，--kind root 切顶层主 agent 作用域，审主 agent 编排 vs 组合声明（规程层编排纪律 + 计划层任务完成度，确定性提取）"
-              : entry.kind === "llm-root"
-                ? "不 re-run，--kind root + LLM 提取组合声明（泛化路径：候选确定性收集 + claude CLI 选择 + 共享装配，正文取 DB 原文不可篡改），审主 agent 编排 vs LLM 判定的规程+计划"
-                : "不 re-run，对账真实执行 vs agent .md 声明（.md 从本地 AGENTS_SCAN_ROOT 扫描）"}
+              ? "不 re-run，--kind root 切顶层主 agent 作用域，审主 agent 编排 vs LLM 提取的组合声明（候选确定性收集 + claude CLI 选层 + 共享装配，正文取 DB 原文不可篡改；规程层编排纪律 + 计划层任务完成度）"
+              : "不 re-run，对账真实执行 vs agent .md 声明（.md 从本地 AGENTS_SCAN_ROOT 扫描）"}
         </div>
       </div>
       <Button size="sm" onClick={start}>对账</Button>

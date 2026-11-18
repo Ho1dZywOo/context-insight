@@ -14,7 +14,8 @@
 //    `--kind` 切片名（`{stem}-{name}-{ti}-{i}.jsonl`，即 findings.transcript）
 //    按 stem 前缀回映射成员；
 // ③成员子集/未知成员/无会话；④agent 域 system 注入恢复；⑤root 域恒单成员
-//    （组合声明 + _layers）；⑥声明恢复失败 404/503。
+//    （LLM 提取组合声明 + _layers——llm-workflow-extract 单点，桩注入）；⑥声明
+//    恢复失败 404（无候选/选择无效）/ LLM CLI 基础设施失败 502。
 // 声明恢复与 records 序列化的内部逻辑由 sift-audit 既有测试覆盖，此处以桩注入。
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -41,9 +42,9 @@ const fakePrisma = {
 }
 vi.mock("@/lib/db", () => ({ prisma: fakePrisma }))
 
-const { recoverSkillBodyMock, recoverCombinedMock, buildRecordsMock, recoverAgentSystemMock, scanRootMock } = vi.hoisted(() => ({
+const { recoverSkillBodyMock, llmExtractMock, buildRecordsMock, recoverAgentSystemMock, scanRootMock } = vi.hoisted(() => ({
   recoverSkillBodyMock: vi.fn(),
-  recoverCombinedMock: vi.fn(),
+  llmExtractMock: vi.fn(),
   buildRecordsMock: vi.fn(),
   recoverAgentSystemMock: vi.fn(),
   scanRootMock: vi.fn(),
@@ -53,10 +54,10 @@ vi.mock("@/lib/sift-audit", async (importOriginal) => {
   return {
     ...actual,
     recoverSkillBody: recoverSkillBodyMock,
-    recoverCombinedWorkflowDeclaration: recoverCombinedMock,
     buildStructuredRecords: buildRecordsMock,
   }
 })
+vi.mock("@/lib/llm-workflow-extract", () => ({ llmExtractWorkflowDeclaration: llmExtractMock }))
 vi.mock("@/lib/agent-md-session-recover", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/agent-md-session-recover")>()
   return { ...actual, recoverAgentMdFromSystem: recoverAgentSystemMock }
@@ -191,7 +192,7 @@ beforeEach(() => {
   )
   fakePrisma.interactionBridge.findMany.mockReset().mockResolvedValue([])
   recoverSkillBodyMock.mockReset()
-  recoverCombinedMock.mockReset()
+  llmExtractMock.mockReset()
   buildRecordsMock.mockReset().mockImplementation(async (id: string) => [{ type: "user", text: `records-of-${id}`, ts: 0, parent_tool_use_id: null, agent: null }])
   recoverAgentSystemMock.mockReset().mockReturnValue(null)
   scanRootMock.mockReset().mockReturnValue(null)
@@ -403,8 +404,8 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
     expect(body.reason).toBe("no-declaration")
   })
 
-  it("root 域：恒单成员 + 组合声明 + result 事件回传 _layers", async () => {
-    recoverCombinedMock.mockResolvedValue({
+  it("root 域：恒单成员 + LLM 提取组合声明 + result 事件回传 _layers", async () => {
+    llmExtractMock.mockResolvedValue({
       content: "REG + PLAN",
       source: "task-prompts.md",
       layers: [{ kind: "regulation", label: "编排规程", source: "task-prompts.md", content: "REG" }],
@@ -418,6 +419,8 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
     expect(last.stage).toBe("result")
     expect(last._layers).toHaveLength(1)
     expect(last._layers![0].kind).toBe("regulation")
+    // 声明来自 LLM 提取单点（session.id 喂对）
+    expect(llmExtractMock).toHaveBeenCalledWith(expect.any(String), expect.anything())
 
     const [, args] = spawnMock.mock.calls[0]
     expect(args[args.indexOf("--kind") + 1]).toBe("root")
@@ -426,15 +429,22 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
     expect(written.declaration).toContain("REG + PLAN")
   })
 
-  it("root 域：多成员 → 400；声明不可恢复 → 404", async () => {
+  it("root 域：多成员 → 400；LLM 提取无输出 → 404；CLI 基础设施失败 → 502", async () => {
     const res400 = await callRoute({ kind: "root", name: "whatever" })
     expect(res400.status).toBe(400)
 
-    recoverCombinedMock.mockResolvedValue(null)
+    llmExtractMock.mockResolvedValue(null)
     const res404 = await callRoute({ kind: "root", name: "ses_a", members: ["ses_a"] })
     expect(res404.status).toBe(404)
     const body = (await res404.json()) as { reason: string }
     expect(body.reason).toBe("no-declaration")
+
+    llmExtractMock.mockRejectedValue(new Error("claude CLI 退出码 1: Failed to authenticate. API Error: 403"))
+    const res502 = await callRoute({ kind: "root", name: "ses_a", members: ["ses_a"] })
+    expect(res502.status).toBe(502)
+    const errBody = (await res502.json()) as { error: string; reason: string }
+    expect(errBody.error).toContain("403")
+    expect(errBody.reason).toBe("extract-failed")
   })
 
   it("run 不存在 → 404", async () => {
