@@ -14,6 +14,7 @@ import { prisma } from "@/lib/db"
 import { buildStructuredRecords, buildTranscriptArgs } from "@/lib/sift-audit"
 import { resolveScanRoot, scanAgentDirs, resolveAgentMd } from "@/lib/agent-md-scan"
 import { recoverAgentMdFromSystem } from "@/lib/agent-md-session-recover"
+import { recoverAgentMdFromSession } from "@/lib/agent-md-recover"
 import { makeStreamingAuditResponse } from "@/lib/sift-runner"
 import { logError } from "@/lib/logger"
 
@@ -54,15 +55,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: `找不到 taskId=${taskId} 的 session` }, { status: 404 })
   }
 
-  // ── 声明两级恢复（system 注入 > 磁盘扫描）──
-  // ① system 注入：proxy 捕获子代理 jsonl 的运行时 system prompt（正常形态主路径）
+  // ── 声明三级恢复（system 注入 > 会话内读取 > 磁盘扫描）──
+  // ① system 注入：proxy 捕获子代理 jsonl 的运行时 system prompt（proxy 形态主路径）
   const viaSystem = session.sourcePath
     ? recoverAgentMdFromSystem(session.sourcePath, session.taskId, String(agentName))
     : null
 
-  // ② 磁盘扫描兜底（会话内无该 agent 的 system 注入时）
+  // ①.5 会话内读取（codex 原生导入的主路径：子 rollout 无 system 注入字段，
+  //     agent 定义在仓库里、运行时经 cat/sed 读取——shell-restore 归因即
+  //     运行时生效原文）
+  const viaSession = viaSystem
+    ? null
+    : await recoverAgentMdFromSession(prisma, session.id, String(agentName))
+
+  // ② 磁盘扫描兜底（会话内无该 agent 的 system 注入与读取记录时）
   let diskMdPath: string | null = null
-  if (!viaSystem) {
+  if (!viaSystem && !viaSession) {
     const scanRoot = resolveScanRoot()
     if (!scanRoot) {
       return NextResponse.json(
@@ -105,6 +113,9 @@ export async function POST(req: Request) {
     if (viaSystem) {
       skillPath = path.join(tmp, "agent.md")
       fs.writeFileSync(skillPath, `---\nname: ${agentName}\ndescription: recovered from session system injection\n---\n${viaSystem.content}\n`)
+    } else if (viaSession) {
+      skillPath = path.join(tmp, "agent.md")
+      fs.writeFileSync(skillPath, `---\nname: ${agentName}\ndescription: recovered from session reads\n---\n${viaSession.content}\n`)
     } else {
       skillPath = diskMdPath!
     }

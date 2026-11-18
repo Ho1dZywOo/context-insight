@@ -11,7 +11,7 @@
 
 import { extractFilePath, parseWriteLines } from '@/lib/file-restore';
 import { isCompactionMarkerTurn } from '../compaction';
-import { isSubagentReturnText, isTaskNotificationSummaryText } from '@/lib/tool-conventions';
+import { isSubagentReturnText, isTaskNotificationSummaryText, isWriteFamilyTool } from '@/lib/tool-conventions';
 import type { BridgeRow } from './collect';
 import type { ScoreToolCall, ScoreTurn } from './types';
 
@@ -50,10 +50,9 @@ function bridgeLines(bridges: BridgeRow[]): string[] {
 /** 产出材料：写过的文件 + 最终内容摘要（D3 正确性评审的 diff 材料） */
 function changeLines(toolCalls: ScoreToolCall[]): string[] {
   const lastWriteByFile = new Map<string, string>();
-  const writeFamilies = new Set(['write', 'edit', 'edit1', 'multiedit']);
   for (const tc of toolCalls) {
     const n = tc.toolName.toLowerCase();
-    if (!writeFamilies.has(n)) continue;
+    if (!isWriteFamilyTool(n)) continue;
     const file = extractFilePath(tc.argsJson);
     if (!file) continue;
     lastWriteByFile.set(file, n === 'write' ? (tc.argsJson ?? '') : (lastWriteByFile.get(file) ?? tc.argsJson ?? ''));

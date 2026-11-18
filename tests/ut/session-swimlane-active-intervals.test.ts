@@ -123,9 +123,10 @@ describe('GET /api/observe/session — 泳道 per-turn 活跃区间', () => {
     const { root } = await importCapture('swimlane-iv-proxy', true);
 
     // a1：10:00:05 完成、duration_ms 1200 → 在途窗口 [10:00:03.800, 10:00:05]
-    expect(root.activeIntervals).toContainEqual({ start: at(10, 0, 3, 800), end: at(10, 0, 5) });
+    // （inferred=true：latency 回填的展开区，统一 Run 时间口径后区间携带推断标记）
+    expect(root.activeIntervals).toContainEqual({ start: at(10, 0, 3, 800), end: at(10, 0, 5), inferred: true });
     // a2：10:03:05 完成、duration_ms 800 → [10:03:04.200, 10:03:05]
-    expect(root.activeIntervals).toContainEqual({ start: at(10, 3, 4, 200), end: at(10, 3, 5) });
+    expect(root.activeIntervals).toContainEqual({ start: at(10, 3, 4, 200), end: at(10, 3, 5), inferred: true });
     // 修复前这两条都是零宽 [t, t]（被前端 filter 丢掉 → 该 turn 画成休眠）
     expect(root.activeIntervals).not.toContainEqual({ start: at(10, 0, 5), end: at(10, 0, 5) });
     expect(root.activeIntervals.some(iv => iv.end === iv.start)).toBe(false);
@@ -138,8 +139,8 @@ describe('GET /api/observe/session — 泳道 per-turn 活跃区间', () => {
     const { root } = await importCapture('swimlane-iv-native', false);
 
     // native 单行 assistant 的 completedAt == createdAt_ts（适配器口径），
-    // latencyMs 照样是 1200 但不在展开范围内
-    expect(root.activeIntervals).toContainEqual({ start: at(10, 0, 5), end: at(10, 0, 5) });
+    // latencyMs 照样是 1200 但不在展开范围内（inferred=false：非推断区）
+    expect(root.activeIntervals).toContainEqual({ start: at(10, 0, 5), end: at(10, 0, 5), inferred: false });
     expect(root.activeIntervals).not.toContainEqual({ start: at(10, 0, 3, 800), end: at(10, 0, 5) });
   });
 

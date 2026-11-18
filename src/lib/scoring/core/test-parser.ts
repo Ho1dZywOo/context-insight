@@ -11,6 +11,7 @@
 
 import type { ScoreToolCall } from './assembler/types';
 import { extractFilePath } from '@/lib/file-restore';
+import { isShellToolCall, isWriteFamilyTool, shellCommandArgsOf } from '@/lib/tool-conventions';
 
 export interface TestSummary {
   passed: number;
@@ -24,12 +25,16 @@ const num = (s: string | undefined): number => {
   return Number.isFinite(v) ? v : 0;
 };
 
-/** 从 argsJson 解出命令串（{"command":"..."} 或裸串） */
+/** 从 argsJson 解出命令串（{"command":"..."} / codex 数组形态 join / 其他键
+ *  形态（cmd 等）走 shell 词表单点 / 裸串原样） */
 export function commandOf(argsJson: string | null): string {
   if (!argsJson) return '';
   try {
-    const p = JSON.parse(argsJson) as { command?: unknown; output?: unknown };
+    const p = JSON.parse(argsJson) as { command?: unknown };
     if (typeof p.command === 'string') return p.command;
+    if (Array.isArray(p.command)) return p.command.map(String).join(' ');
+    const parts = shellCommandArgsOf(argsJson);
+    if (parts.length > 0) return parts.join(' ');
   } catch { /* 裸串原样返回 */ }
   return argsJson;
 }
@@ -141,7 +146,7 @@ export function findLastVerifiedRun(
 ): { call: ScoreToolCall; summary: TestSummary | null } | null {
   const since = options.sinceSeq ?? -Infinity;
   const candidates = toolCalls
-    .filter(tc => tc.toolName.toLowerCase() === 'bash')
+    .filter(tc => isShellToolCall(tc.toolName))
     .filter(tc => isVerifyCommand(tc.argsJson ?? ''))
     .filter(tc => tc.seq > since);
   if (candidates.length === 0) return null;
@@ -156,7 +161,7 @@ export function findLastVerifiedRun(
 const DOC_FILE_RE = /\.(md|markdown|txt|rst|adoc)$/i;
 const DOC_NAME_RE = /(^|[/\\])(CHANGELOG[^/\\]*|LICENSE[^/\\]*|NOTICE|README)$/i;
 export function isCodeWrite(toolName: string, argsJson: string | null): boolean {
-  if (!['write', 'edit', 'edit1', 'multiedit'].includes(toolName.toLowerCase())) return false;
+  if (!isWriteFamilyTool(toolName)) return false;
   const p = extractFilePath(argsJson);
   return p != null && !DOC_FILE_RE.test(p) && !DOC_NAME_RE.test(p);
 }

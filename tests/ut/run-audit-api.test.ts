@@ -37,6 +37,7 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }))
 const fakePrisma = {
   session: { findFirst: vi.fn() },
   interactionBridge: { findMany: vi.fn() },
+  toolCall: { findMany: vi.fn().mockResolvedValue([]) },
 }
 vi.mock("@/lib/db", () => ({ prisma: fakePrisma }))
 

@@ -234,6 +234,18 @@ export function isShellToolCall(toolName: string): boolean {
   return SHELL_TOOL_EXACT.has(toolName.toLowerCase());
 }
 
+/** 写工具族词表（单一真理源）——claude/opencode 的 Write/Edit 家族 +
+ *  codex 的 apply_patch（argsJson 是裸 patch 文本，路径提取须走
+ *  apply-patch 解析器，见 extractFilePath 的 patch 回退）。 */
+export const WRITE_TOOL_NAMES: readonly string[] = ['write', 'edit', 'edit1', 'multiedit', 'apply_patch'];
+
+const WRITE_TOOL_EXACT = new Set(WRITE_TOOL_NAMES);
+
+/** 写工具族判定（大小写不敏感）——评分/自清理/改代码判定/测试识别等全部消费方统一走这里 */
+export function isWriteFamilyTool(toolName: string): boolean {
+  return WRITE_TOOL_EXACT.has(toolName.toLowerCase());
+}
+
 /**
  * shell 命令的连接文本（供文本扫描）：`command` / Codex 原生 `cmd`
  * 字符串直取；数组形态 join ' '。无命令键（如 exec 的 input 形态）→ null，
@@ -286,6 +298,33 @@ const SKILL_MD_READ_COMMANDS = new Set(['cat', 'sed', 'head', 'tail', 'less', 'm
 export function shellReadCommandOf(argsJson: string | null): string | null {
   const parts = shellCommandArgsOf(argsJson);
   return parts.length > 0 ? parts.join(' ') : null;
+}
+
+/** codex exec 工具的 input 形态内嵌 `exec_command({cmd:"…"})` 的命令文本提取
+ *  （与分析层 extractExecFileReads / 归因层 restoreShellReads 同源正则，单点）。
+ *  无 input / 无匹配 → []。 */
+export function shellExecInputCommandsOf(argsJson: string | null): string[] {
+  if (!argsJson) return [];
+  let input = '';
+  try {
+    const a = JSON.parse(argsJson) as { input?: unknown };
+    if (typeof a.input === 'string') input = a.input;
+  } catch {
+    return [];
+  }
+  const cmds: string[] = [];
+  for (const m of input.matchAll(/exec_command\(\{cmd:"((?:[^"\\]|\\.)*)"/g)) {
+    cmds.push(m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\'));
+  }
+  return cmds;
+}
+
+/** shell 工具调用的命令文本序列（检测面源域）：command/cmd 键（join ' '，保持
+ *  detectSkillMdReads 的数组形态语义）+ codex input 内嵌 exec_command 逐条。
+ *  无任何命令文本 → []。 */
+export function shellCommandTextsOf(argsJson: string | null): string[] {
+  const cmd = shellReadCommandOf(argsJson);
+  return cmd ? [cmd, ...shellExecInputCommandsOf(argsJson)] : shellExecInputCommandsOf(argsJson);
 }
 
 /** SKILL.md 路径 → 技能名（父目录名；无父目录回落空） */
@@ -360,6 +399,22 @@ export function detectSkillMdReads(cmd: string): SkillMdRead[] {
       if (!skillName || seen.has(filePath)) continue;
       seen.add(filePath);
       out.push({ skillName, filePath });
+    }
+  }
+  return out;
+}
+
+/** 一次 shell 工具调用 → SKILL.md 读取信号：command/cmd 键与 codex input 内嵌
+ *  exec_command 两形态同源检测、按路径去重合并——检测面与归因面
+ *  （restoreShellReads 的 commandTextsOf）对齐，input 形态读 SKILL.md 不再漏检。 */
+export function detectSkillMdReadsOfShell(argsJson: string | null): SkillMdRead[] {
+  const out: SkillMdRead[] = [];
+  const seen = new Set<string>();
+  for (const text of shellCommandTextsOf(argsJson)) {
+    for (const read of detectSkillMdReads(text)) {
+      if (seen.has(read.filePath)) continue;
+      seen.add(read.filePath);
+      out.push(read);
     }
   }
   return out;

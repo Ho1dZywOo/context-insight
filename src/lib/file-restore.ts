@@ -7,11 +7,24 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import { parseReadToolArgs } from './tool-conventions';
+import { parseApplyPatch } from './apply-patch';
 
 export interface RestoreOp {
   kind: 'read' | 'write';
   argsJson: string | null;
   resultJson: string | null;
+  ts: Date | null;
+}
+
+/** 已解析行表通道：由专用引擎（shell-restore / apply-patch 解析器）预先
+ *  归因好的行——shell 命令族隐式读（cat/sed/head）与 apply_patch 新建文件
+ *  全文。缺口（采集期截断丢弃段/残行）不出现，由行号空洞表达（与
+ *  Read/Write 通道的 gap 渲染同构）。ts 参与读写时间序合并。 */
+export interface ResolvedRestoreOp {
+  kind: 'resolved';
+  source: 'read' | 'write';
+  filePath: string;
+  lines: Map<number, string>;
   ts: Date | null;
 }
 
@@ -27,9 +40,14 @@ export interface RestoreResult {
   opsUsed: number;
 }
 
-/** read 路径键走词表（opencode `path` / Claude Code `file_path` 等同义键） */
+/** read/write 路径键走词表（opencode `path` / Claude Code `file_path` 等同义键）；
+ *  JSON 解析失败时回退 apply_patch 裸 patch 文本（codex 写通道）——多文件
+ *  patch 取首个文件（逐文件明细走 parseApplyPatch）。 */
 export function extractFilePath(argsJson: string | null): string | null {
-  return parseReadToolArgs(argsJson)?.filePath ?? null;
+  const viaJson = parseReadToolArgs(argsJson)?.filePath ?? null;
+  if (viaJson != null) return viaJson;
+  const patch = parseApplyPatch(argsJson);
+  return patch != null ? patch[0].file : null;
 }
 
 export function extractOffset(argsJson: string | null): number | undefined {
@@ -102,7 +120,7 @@ export function parseWriteLines(argsJson: string | null): Map<number, string> | 
   return out;
 }
 
-export function restoreFile(ops: RestoreOp[]): RestoreResult {
+export function restoreFile(ops: Array<RestoreOp | ResolvedRestoreOp>): RestoreResult {
   const sorted = [...ops].sort((a, b) => {
     const ta = a.ts?.getTime() ?? -Infinity;
     const tb = b.ts?.getTime() ?? -Infinity;
@@ -114,15 +132,20 @@ export function restoreFile(ops: RestoreOp[]): RestoreResult {
 
   for (const op of sorted) {
     let lines: Map<number, string> | null = null;
+    let lineSource: 'read' | 'write' = 'read';
     if (op.kind === 'read') {
       lines = parseReadLines(op.resultJson, extractOffset(op.argsJson));
-    } else {
+    } else if (op.kind === 'write') {
       lines = parseWriteLines(op.argsJson);
+      lineSource = 'write';
+    } else if (op.kind === 'resolved') {
+      lines = op.lines.size > 0 ? op.lines : null;
+      lineSource = op.source;
     }
     if (!lines || lines.size === 0) continue;
     opsUsed++;
     for (const [n, content] of lines) {
-      lineMap.set(n, { content, source: op.kind });
+      lineMap.set(n, { content, source: lineSource });
     }
   }
 

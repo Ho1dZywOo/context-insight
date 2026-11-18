@@ -13,7 +13,9 @@ import type { AuditLayerInfo } from "@/lib/sift-audit-types";
 // 调 ensureWorkflowExtractPluginLoaded 激活），此处只引类型/默认值/holder。
 import { DEFAULT_PLUGIN, getWorkflowExtractPlugin } from "@/lib/workflow-extract-plugin";
 import { buildAgentRoleNameMap } from "@/lib/agent-role-name-map";
-import { unwrapSkillContent } from "@/lib/tool-conventions";
+import { unwrapSkillContent, SHELL_TOOL_NAMES, isShellToolCall } from "@/lib/tool-conventions";
+import { restoreShellReads, renderShellEntryText } from "@/lib/shell-restore";
+import { extractShellFileReads } from "@/lib/file-reads";
 // skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
 // client bundle 安全；Audit 对账与 Skills 面板共用同一恢复词表，通道扩展不再双头漂移。
 import { selectSkillContent } from "@/lib/skill-content";
@@ -423,6 +425,9 @@ function isPlanFilename(filePath: string | null): boolean {
  * 从一个文件工具调用（read/write）提取 content + filePath + basename。
  * Read：resultJson 的 `<content>…</content>`，剥行号（opencode 格式 `1: line\n2: line`）。
  * Write：argsJson.content（JSON parse）。无 content → null。
+ * apply_patch（codex 写通道）不在此提取：它是终态自证写产物，计划/资源声明恢复
+ * 只取读承诺态（见 recoverPlanFileDeclaration 的「早读=承诺态」），且其裸 patch
+ * 文本无法走本文件 JSON-only 的 extractFilePath 取 basename（恒 null，无命中可能）。
  * 确定性提取与 LLM 提取（llm-workflow-extract 候选收集）共用——两路正文字节一致。
  */
 export function extractFileContent(tc: {
@@ -446,6 +451,25 @@ export function extractFileContent(tc: {
   if (!content) return null;
   const fp = extractFilePath(tc.argsJson);
   return { content, basename: fp ? basenameOf(fp) : null };
+}
+
+/**
+ * shell 工具调用 → 逐文件读取候选（声明恢复共用）：restoreShellReads 引擎
+ * 归因后的行表渲染成文本（缺口行跳过——未观测行不可知、不参与对账）。
+ * codex 无 Read 工具，计划/资源文件的声明此前只认 Read 词表 → 全灭。
+ */
+function shellReadCandidates(tc: {
+  argsJson: string | null;
+  resultJson: string | null;
+}): Array<{ filePath: string; content: string; basename: string | null }> {
+  if (!tc.argsJson || !tc.resultJson) return [];
+  const out: Array<{ filePath: string; content: string; basename: string | null }> = [];
+  for (const entry of restoreShellReads(tc.argsJson, tc.resultJson)) {
+    const { content } = renderShellEntryText(entry);
+    if (content.length === 0) continue;
+    out.push({ filePath: entry.filePath, content, basename: basenameOf(entry.filePath) });
+  }
+  return out;
 }
 
 /**
@@ -479,17 +503,33 @@ export async function recoverPlanFileDeclaration(
   sessionId: string,
   prisma: PrismaClient,
 ): Promise<PlanFileDeclaration | null> {
-  const tcs = await prisma.toolCall.findMany({
-    where: {
-      turn: { sessionId },
-      toolName: { in: ["read", "Read"] },
-    },
-    select: { toolName: true, argsJson: true, resultJson: true },
-    orderBy: { createdAt: "asc" },
-    take: PLAN_FILE_SCAN_TAKE,
-  });
-  const namedReads: Array<{ content: string; basename: string }> = [];
-  for (const tc of tcs) {
+  // 双通道：Read 工具（claude/opencode）+ shell 命令族隐式读（codex 无 Read，
+  // cat/sed 读计划文件此前全灭）。shell 走两步（内存瘦身）：先只取 argsJson
+  // 按命令侧路径初筛（extractShellFileReads 与恢复引擎同一路径判定单点），
+  // 命中才回捞 resultJson 做归因——千级 exec 的 codex 会话不整段载入输出。
+  const [readTcs, shellTcs] = await Promise.all([
+    prisma.toolCall.findMany({
+      where: {
+        turn: { sessionId },
+        toolName: { in: ["read", "Read"] },
+      },
+      select: { toolName: true, argsJson: true, resultJson: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: PLAN_FILE_SCAN_TAKE,
+    }),
+    prisma.toolCall.findMany({
+      where: {
+        turn: { sessionId },
+        toolName: { in: [...SHELL_TOOL_NAMES] },
+      },
+      select: { id: true, argsJson: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: PLAN_FILE_SCAN_TAKE,
+    }),
+  ]).then(([a, b]) => [a ?? [], b ?? []] as const);
+
+  const namedReads: Array<{ content: string; basename: string; at: Date }> = [];
+  for (const tc of readTcs) {
     // 计划层只认 Read（查询已过滤；此处自卫防御——Write 产物不作为声明）
     if ((tc.toolName || "").toLowerCase() !== "read") continue;
     // skill 打包目录（resources/templates）下的文件是 skill 声明（规程层素材），
@@ -498,9 +538,33 @@ export async function recoverPlanFileDeclaration(
     if (!ex) continue;
     if (isSkillPackagedFile(extractFilePath(tc.argsJson))) continue;
     if (isPlanFilename(ex.basename)) {
-      namedReads.push({ content: ex.content, basename: ex.basename ?? "unknown" });
+      namedReads.push({ content: ex.content, basename: ex.basename ?? "unknown", at: tc.createdAt });
     }
   }
+
+  const shellHitIds: string[] = [];
+  for (const tc of shellTcs) {
+    const paths = extractShellFileReads(tc.argsJson).map((r) => r.filePath);
+    if (paths.some((p) => isPlanFilename(p) && !isSkillPackagedFile(p))) shellHitIds.push(tc.id);
+  }
+  if (shellHitIds.length > 0) {
+    const hits = await prisma.toolCall.findMany({
+      where: { id: { in: shellHitIds } },
+      select: { argsJson: true, resultJson: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+    });
+    for (const tc of hits) {
+      for (const cand of shellReadCandidates(tc)) {
+        if (isSkillPackagedFile(cand.filePath)) continue;
+        if (isPlanFilename(cand.basename)) {
+          namedReads.push({ content: cand.content, basename: cand.basename ?? "unknown", at: tc.createdAt });
+        }
+      }
+    }
+  }
+  // 双通道合并后统一时间序（pickFirstSubstantial 的「早读 = 承诺态」依赖顺序）
+  const tv = (d: Date | null | undefined) => (d instanceof Date ? d.getTime() : 0);
+  namedReads.sort((a, b) => tv(a.at) - tv(b.at));
   const bestNamedRead = pickFirstSubstantial(namedReads);
   const planBodyMin = getWorkflowExtractPlugin().plan.bodyMinChars;
   if (bestNamedRead && bestNamedRead.content.length >= planBodyMin) {
@@ -532,34 +596,46 @@ export async function resolveWorkflowSkillName(
  * 主 agent Read 的文件里 filePath 含 skillName 的，取最长内容。
  * 泛化：不限文件名（task-prompts.md / prompts.md / ...），按 filePath 含 skill name 匹配。
  * 内容含每阶段 Task 调用参数（subagent_type + prompt + 验收标准）→ 外部声明的编排模板。
+ * 双通道：Read 工具 + shell 隐式读（codex 的 cat/sed 读资源文件此前全灭）。
  */
-async function recoverSkillResourceFile(
+export async function recoverSkillResourceFile(
   sessionId: string,
   skillName: string,
   prisma: PrismaClient,
 ): Promise<PlanFileDeclaration | null> {
-  const tcs = await prisma.toolCall.findMany({
+  // 双通道：Read 工具 + shell 隐式读（codex 的 cat/sed 读资源文件此前全灭）。
+  // argsJson 含 skillName 对 shell 天然过滤（命令里带技能路径才命中）
+  const tcs = (await prisma.toolCall.findMany({
     where: {
       turn: { sessionId },
-      toolName: { in: ["read", "Read"] },
+      toolName: { in: ["read", "Read", ...SHELL_TOOL_NAMES] },
       argsJson: { contains: skillName },
     },
     select: { toolName: true, argsJson: true, resultJson: true },
     take: 200,
-  });
-  let best: { content: string; basename: string } | null = null;
+  })) ?? [];
+  const candidates: Array<{ content: string; basename: string }> = [];
   for (const tc of tcs) {
-    const ex = extractFileContent(tc);
-    if (!ex) continue;
-    const fp = extractFilePath(tc.argsJson);
+    const tn = (tc.toolName || "").toLowerCase();
     // filePath 必须含 skillName 且命中插件 regulation.resourceDirs（默认 resources/，
     // 编排模板所在；templates/ 目录的 STATE.md.templ / DESIGN.md.templ 不命中自然排除）
     const reg = getWorkflowExtractPlugin().regulation;
-    if (!fp || !fp.includes(skillName) || !reg.resourceDirs.some((d) => fp.includes(d))) continue;
-    if (!best || ex.content.length > best.content.length) {
-      best = { content: ex.content, basename: ex.basename ?? "unknown" };
+    if (isShellToolCall(tn)) {
+      for (const cand of shellReadCandidates(tc)) {
+        if (!cand.filePath.includes(skillName) || !reg.resourceDirs.some((d) => cand.filePath.includes(d))) continue;
+        candidates.push({ content: cand.content, basename: cand.basename ?? "unknown" });
+      }
+      continue;
     }
+    const ex = extractFileContent(tc);
+    if (!ex) continue;
+    const fp = extractFilePath(tc.argsJson);
+    if (!fp || !fp.includes(skillName) || !reg.resourceDirs.some((d) => fp.includes(d))) continue;
+    candidates.push({ content: ex.content, basename: ex.basename ?? "unknown" });
   }
+  const best = candidates.length > 0
+    ? candidates.reduce((a, b) => (b.content.length > a.content.length ? b : a))
+    : null;
   if (!best || best.content.length < getWorkflowExtractPlugin().regulation.bodyMinChars) return null;
   return { content: best.content.replace(/\[x\]/g, "[ ]"), source: best.basename };
 }

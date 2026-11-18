@@ -7,17 +7,17 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import { parseReadLines } from './file-restore';
+import { renderShellEntryText, restoreShellReads } from './shell-restore';
 import {
   isSkillToolCall,
   extractSkillName,
   parseReadToolArgs,
   unwrapSkillContent,
   isShellToolCall,
-  shellReadCommandOf,
-  detectSkillMdReads,
+  shellCommandTextsOf,
+  detectSkillMdReadsOfShell,
   shellReadHasRangeLimit,
-  stripExecOutputHeader,
-  stripSkillMdBanner,
+  skillNameOfSkillMdPath,
 } from './tool-conventions';
 
 export interface SkillToolCall {
@@ -92,7 +92,11 @@ const SHELL_TRUNCATED_RE = /Warning: truncated output/i;
  *  摄取侧检测（skill-invocations）与读侧恢复（Skills 面板、Audit 对账、LLM 声明
  *  提取）共用通道词表——通道扩展只改这里。
  *  shell 通道一次命令可读多个 SKILL.md（`cat a/SKILL.md b/SKILL.md`）→ 逐技能
- *  产出；各条 content 均为整段输出（无回显横幅时不拆段，多技能混读是已知精度极限）。
+ *  产出；正文经 shell-restore 引擎归因（引号感知分段 → 段分类 → 行号校准），
+ *  只含该 SKILL.md 自己的行——回显横幅/截断 banner/无关命令输出不再混入
+ *  （此前整段输出当正文，「最长者胜」会把污染版选成声明）。
+ *  归因失败（多文件混 dump、管道过滤段、无锚点截断）→ content 空串：候选骨架
+ *  保留（事件级语义——技能确实被读过），正文级消费方自然跳过（宁缺毋假）。
  *  流式 shell（codex exec_command + write_stdin 轮询块）已由 codex-jsonl 适配器
  *  在摄取时卷回完整输出——本层零流式协议知识。 */
 export interface SkillMdRead {
@@ -101,6 +105,11 @@ export interface SkillMdRead {
   content: string;
   fullRead: boolean;
   maxLine: number | null;
+  /** 行级证据（read/shell 通道）：文件行号 → 内容。跨候选按行号校准拼接、
+   *  缺口诚实评分的素材；skill-tool 注入快照无行号语义 → 不带。 */
+  lineMap?: Map<number, string>;
+  /** 时间序（跨候选合并：ts 后到者覆盖同号行；缺 ts 保序） */
+  ts?: number | null;
 }
 
 export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
@@ -111,7 +120,7 @@ export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
     if (!skillName) return [];
     // v2 `<skill_content>` 协议壳优先剥除；v1 纯文本形态回落前言剥离
     const content = unwrapSkillContent(tc.resultJson) ?? stripSkillPreamble(tc.resultJson);
-    return [{ skillName, source: 'skill-tool', content, fullRead: true, maxLine: null }];
+    return [{ skillName, source: 'skill-tool', content, fullRead: true, maxLine: null, ts: tsOf(tc) }];
   }
   if (lower === 'read' && tc.argsJson && tc.resultJson) {
     // read 参数键走词表（opencode `path` / Claude Code `file_path` 等同义键）
@@ -119,30 +128,96 @@ export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
     const skillName = extractSkillNameFromReadPath(fp);
     if (!skillName) return [];
     const partial = hasReadOffsetOrLimit(tc.argsJson) || hasReadTruncation(tc.resultJson);
+    const lineMap = parseReadLines(tc.resultJson, extractOffsetOf(tc.argsJson));
     return [{
       skillName,
       source: 'read',
       content: joinReadContent(tc.resultJson),
       fullRead: !partial,
       maxLine: readMaxLine(tc.resultJson),
+      lineMap,
+      ts: tsOf(tc),
     }];
   }
   if (isShellToolCall(lower) && tc.argsJson && tc.resultJson) {
     // shell 读类命令（codex 无 read 工具，读 SKILL.md 走 exec_command 的
-    // cat/sed/…——命令解析与摄取侧 detectSkillMdReads 同源）：resultJson 即
-    // 终端输出原文，剥 codex 元数据壳 + 模型自印横幅后即 SKILL.md 原文
-    const cmd = shellReadCommandOf(tc.argsJson);
-    if (!cmd) return [];
-    const output = stripExecOutputHeader(tc.resultJson);
-    return detectSkillMdReads(cmd).map(read => ({
-      skillName: read.skillName,
-      source: 'shell' as const,
-      content: stripSkillMdBanner(output),
-      fullRead: !shellReadHasRangeLimit(cmd) && !SHELL_TRUNCATED_RE.test(output),
-      maxLine: null,
-    }));
+    // cat/sed/…）：候选骨架走命令侧检测（与摄取侧 detectSkillMdReads 同源），
+    // 正文走 shell-restore 引擎按技能名归因取行——两者按 SKILL.md 路径的
+    // 父目录名对上即有正文，对不上（混 dump/管道/无锚点）即空串。
+    // 检测面与归因面同源（shellCommandTextsOf）：command/cmd 键与 codex input
+    // 内嵌 exec_command 两形态都参与，否则 input 形态读 SKILL.md 检测恒空。
+    const cmds = shellCommandTextsOf(tc.argsJson);
+    const detected = detectSkillMdReadsOfShell(tc.argsJson);
+    if (detected.length === 0) return [];
+    const attributed = new Map<string, ReturnType<typeof restoreShellReads>[number]>();
+    for (const entry of restoreShellReads(tc.argsJson, tc.resultJson)) {
+      const name = skillNameOfSkillMdPath(entry.filePath);
+      if (name != null && entry.lines.size > 0) attributed.set(name, entry);
+    }
+    const truncated = SHELL_TRUNCATED_RE.test(tc.resultJson);
+    const rangeLimited = cmds.some((c) => shellReadHasRangeLimit(c));
+    return detected.map(read => {
+      const entry = attributed.get(read.skillName);
+      if (!entry) {
+        return { skillName: read.skillName, source: 'shell' as const, content: '', fullRead: false, maxLine: null, ts: tsOf(tc) };
+      }
+      const { content, maxLine, covered } = renderShellEntryText(entry);
+      return {
+        skillName: read.skillName,
+        source: 'shell' as const,
+        content,
+        fullRead: !rangeLimited && !truncated && covered > 0,
+        maxLine,
+        lineMap: entry.lines,
+        ts: tsOf(tc),
+      };
+    });
   }
   return [];
+}
+
+function tsOf(tc: SkillToolCall): number | null {
+  return tc.startedAt ? tc.startedAt.getTime() : null;
+}
+
+function extractOffsetOf(argsJson: string | null): number | undefined {
+  return parseReadToolArgs(argsJson)?.offset ?? undefined;
+}
+
+/** 行号校准合并（read + shell 候选共享）：按 ts 时间序逐候选合入行表，
+ *  同号行后到者覆盖（文件被改后重读 = 终态视角，与恢复引擎同构）。
+ *  fullRead 的诚实口径：合并表 1..maxLine 连续 **且** 至少一个候选来自
+ *  无界读（cat/无 offset 的 Read——有界读 head/sed 范围无法证明文件结束）。
+ *  source = 贡献行数占多数的通道。 */
+function mergeLineMapped(cands: SkillMdRead[]): Omit<SkillContentResult, 'length'> | null {
+  const sorted = [...cands].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  const lines = new Map<number, string>();
+  const lineSource = new Map<number, 'read' | 'shell'>();
+  let unboundedAttempt = false;
+  for (const c of sorted) {
+    if (!c.lineMap || c.lineMap.size === 0) continue;
+    if (c.fullRead) unboundedAttempt = true;
+    for (const [n, text] of c.lineMap) {
+      lines.set(n, text);
+      lineSource.set(n, c.source as 'read' | 'shell');
+    }
+  }
+  if (lines.size === 0) return null;
+
+  let maxLine = 0;
+  for (const n of lines.keys()) if (n > maxLine) maxLine = n;
+  let contiguous = true;
+  for (let n = 1; n <= maxLine; n++) {
+    if (!lines.has(n)) { contiguous = false; break; }
+  }
+  const readContrib = [...lineSource.values()].filter(s => s === 'read').length;
+  const content = [...lines.keys()].sort((a, b) => a - b).map(n => lines.get(n)!).join('\n');
+  return {
+    content,
+    source: readContrib >= lines.size - readContrib ? 'read' : 'shell',
+    fullRead: contiguous && unboundedAttempt,
+    maxLine,
+  };
 }
 
 export function selectSkillContent(
@@ -152,45 +227,35 @@ export function selectSkillContent(
   const want = (n: string) => n === skillName;
 
   const skillToolCandidates: SkillMdRead[] = [];
-  const readCandidates: SkillMdRead[] = [];
-  const shellCandidates: SkillMdRead[] = [];
+  const lineMapped: SkillMdRead[] = [];
+  const legacy: SkillMdRead[] = [];
 
   for (const tc of toolCalls) {
     for (const r of skillMdReadsOfToolCall(tc)) {
       if (!want(r.skillName)) continue;
-      // 空正文不是恢复（壳行/传输残块）——跳过，让更诚实的高通道或 null 胜出
+      // 空正文不是恢复（壳行/传输残块/归因失败）——跳过，让更诚实的高通道或 null 胜出
       if (r.content.length === 0) continue;
       if (r.source === 'skill-tool') skillToolCandidates.push(r);
-      else if (r.source === 'read') readCandidates.push(r);
-      else shellCandidates.push(r);
+      else if (r.lineMap && r.lineMap.size > 0) lineMapped.push(r);
+      else legacy.push(r);
     }
   }
 
-  const bestOf = (arr: SkillMdRead[]) =>
-    arr.reduce((a, b) => (b.content.length > a.content.length ? b : a));
-
+  // ① skill-tool 注入快照（权威全文）> ② read+shell 行号校准合并 > ③ 兜底单候选
   if (skillToolCandidates.length > 0) {
-    const best = bestOf(skillToolCandidates);
+    const best = skillToolCandidates.reduce((a, b) => (b.content.length > a.content.length ? b : a));
     return { content: best.content, source: 'skill-tool', length: best.content.length, fullRead: true, maxLine: null };
   }
-  if (readCandidates.length > 0) {
-    const best = bestOf(readCandidates);
+  const merged = mergeLineMapped(lineMapped);
+  if (merged) return { ...merged, length: merged.content.length };
+  if (legacy.length > 0) {
+    const best = legacy.reduce((a, b) => (b.content.length > a.content.length ? b : a));
     return {
       content: best.content,
-      source: 'read',
+      source: best.source,
       length: best.content.length,
       fullRead: best.fullRead,
       maxLine: best.maxLine,
-    };
-  }
-  if (shellCandidates.length > 0) {
-    const best = bestOf(shellCandidates);
-    return {
-      content: best.content,
-      source: 'shell',
-      length: best.content.length,
-      fullRead: best.fullRead,
-      maxLine: null,
     };
   }
 

@@ -22,9 +22,8 @@
 import type { ToolCallInfo } from '../shared/types';
 import {
   parseReadToolArgs,
-  detectSkillMdReads,
+  detectSkillMdReadsOfShell,
   isShellToolCall,
-  shellReadCommandOf,
   skillNameOfSkillMdPath,
 } from '../tool-conventions';
 
@@ -54,9 +53,7 @@ export function detectSkillInvocations(toolCalls: ToolCallInfo[]): SkillInvocati
         out.push({ skillName, filePath, sourceToolCallId: tc.toolCallId });
       }
     } else if (isShellToolCall(lower)) {
-      const cmd = shellReadCommandOf(tc.argsJson);
-      if (!cmd) continue;
-      for (const read of detectSkillMdReads(cmd)) {
+      for (const read of detectSkillMdReadsOfShell(tc.argsJson)) {
         out.push({ skillName: read.skillName, filePath: read.filePath, sourceToolCallId: tc.toolCallId });
       }
     }

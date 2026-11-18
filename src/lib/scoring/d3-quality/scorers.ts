@@ -12,8 +12,9 @@ import { Scorer, okResult, notApplicable, ev, round2, type ScorerContext } from 
 import type { SubItemResult } from '../core/types';
 import { BandJudgeScorer } from '../core/judge';
 import { BenchReportScorer } from '../core/bench-report/scorer';
-import { findLastVerifiedRun, lastWriteSeq, isCodeWrite } from '../core/test-parser';
+import { findLastVerifiedRun, lastWriteSeq, isCodeWrite, commandOf } from '../core/test-parser';
 import { extractFilePath } from '@/lib/file-restore';
+import { isShellToolCall, isWriteFamilyTool } from '@/lib/tool-conventions';
 
 import { d3Focus } from './definition';
 
@@ -56,7 +57,6 @@ class NakedWriteScorer extends Scorer {
 
   async run(ctx: ScorerContext): Promise<SubItemResult> {
     const toolCalls = ctx.input.toolCalls;
-    const isWriteFamily = (name: string) => ['write', 'edit', 'edit1', 'multiedit'].includes(name.toLowerCase());
     // 一次线性预扫建索引（此前每个写全量重扫 toolCalls——重编辑会话 O(n·m) 上千万次正则解析）：
     // readSeqsByFile / writeSeqsByFile 按 seq 升序（toolCalls 本身按序遍历），bashVerifySeqs 同
     const readSeqsByFile = new Map<string, number[]>();
@@ -66,11 +66,11 @@ class NakedWriteScorer extends Scorer {
     for (const tc of toolCalls) {
       const name = tc.toolName.toLowerCase();
       // 核验命令不看成败（跑了就算核验过）；失败的调用不算触达也不进批次窗口（原口径）
-      if (name === 'bash') {
-        if (VERIFY_CMD_RE.test(tc.argsJson ?? '')) bashVerifySeqs.push(tc.seq);
+      if (isShellToolCall(name)) {
+        if (VERIFY_CMD_RE.test(commandOf(tc.argsJson))) bashVerifySeqs.push(tc.seq);
         continue;
       }
-      if (tc.state === 'error' || (name !== 'read' && !isWriteFamily(name))) continue;
+      if (tc.state === 'error' || (name !== 'read' && !isWriteFamilyTool(name))) continue;
       const p = extractFilePath(tc.argsJson);
       if (p == null) continue;
       if (name === 'read') {
@@ -83,7 +83,7 @@ class NakedWriteScorer extends Scorer {
       }
     }
     // 写失败的调用没有发生写入，不计（索引里保留其 seq 只用于窗口定位）
-    const writes = toolCalls.filter(tc => isWriteFamily(tc.toolName) && extractFilePath(tc.argsJson) !== null && tc.state !== 'error');
+    const writes = toolCalls.filter(tc => isWriteFamilyTool(tc.toolName) && extractFilePath(tc.argsJson) !== null && tc.state !== 'error');
     if (writes.length === 0) return notApplicable(ctx.def, '缺少文件写操作，无法评判');
 
     const seqIn = (sorted: number[], lo: number, hi: number): boolean => {

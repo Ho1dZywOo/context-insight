@@ -1,0 +1,45 @@
+{
+  "session": { "taskId": "codex-write-channel-it", "framework": "codex", "label": "codex apply_patch 写通道复卷" },
+  "files": {
+    "hello.py": ["print('v1-a')", "print('v1-b')", "print('v1-c')"],
+    "new.py": ["import os", "print(os.getcwd())"],
+    "notes.md": ["# notes", "body line"]
+  },
+  "calls": [
+    {
+      "id": "wc-a",
+      "tool": "exec_command",
+      "cmd": "cat hello.py",
+      "result": "print('v1-a')\nprint('v1-b')\nprint('v1-c')\n"
+    },
+    {
+      "id": "wc-b",
+      "tool": "apply_patch",
+      "args": "*** Begin Patch\n*** Update File: hello.py\n@@\n-print('v1-b')\n+print('v2-b')\n*** End Patch\n",
+      "result": "Exit code: 0\nWall time: 0.1 seconds\nOutput:\nSuccess. Updated the following files:\nM hello.py"
+    },
+    {
+      "id": "wc-c",
+      "tool": "exec_command",
+      "cmd": "sed -n '1,3p' hello.py",
+      "result": "print('v1-a')\nprint('v2-b')\nprint('v1-c')\n"
+    },
+    {
+      "id": "wc-d",
+      "tool": "apply_patch",
+      "args": "*** Begin Patch\n*** Add File: new.py\n+import os\n+print(os.getcwd())\n*** Update File: hello.py\n@@\n-print('v1-a')\n+print('v2-a')\n*** Delete File: /repo/gone.tmp\n*** End Patch\n",
+      "result": "Exit code: 0\nWall time: 0.1 seconds\nOutput:\nSuccess. Updated the following files:\nM hello.py\nA new.py\nD /repo/gone.tmp"
+    },
+    {
+      "id": "wc-e",
+      "tool": "apply_patch",
+      "args": "*** Begin Patch\n*** Add File: notes.md\n+# notes\n+body line\n*** End Patch\n",
+      "result": "Exit code: 0\nWall time: 0.1 seconds\nOutput:\nSuccess. Updated the following files:\nA notes.md"
+    }
+  ],
+  "expect": {
+    "hello.py": { "lines": ["print('v1-a')", "print('v2-b')", "print('v1-c')"], "opsUsed": 2, "source": "read" },
+    "new.py": { "lines": ["import os", "print(os.getcwd())"], "opsUsed": 1, "source": "write" },
+    "notes.md": { "lines": ["# notes", "body line"], "opsUsed": 1, "source": "write" }
+  }
+}

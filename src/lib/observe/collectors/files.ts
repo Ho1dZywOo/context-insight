@@ -14,7 +14,9 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { isDirectoryRead, computeRange, analyzeReads, extractShellFileReads, extractExecFileReads, type ReadRange, type ReadEntry } from '@/lib/file-reads';
-import { extractFilePath, restoreFile, renderRestoredText, type RestoreOp } from '@/lib/file-restore';
+import { extractFilePath, restoreFile, renderRestoredText, type RestoreOp, type ResolvedRestoreOp } from '@/lib/file-restore';
+import { parseApplyPatch } from '@/lib/apply-patch';
+import { restoreShellReads } from '@/lib/shell-restore';
 import { buildZip } from '@/lib/zip-store';
 import { SHELL_TOOL_NAMES, isShellToolCall, parseReadToolArgs } from '@/lib/tool-conventions';
 
@@ -166,25 +168,59 @@ export async function analyzeFileReadsForRows(
   return { files, summary };
 }
 
-/** 读写工具调用提取（file-restore / dir-restore 共用取数；带回文件路径） */
-async function loadRestoreOps(prisma: PrismaClient, rowIds: string[]) {
-  const toolCalls = await prisma.toolCall.findMany({
-    where: {
-      toolName: { in: ['read', 'Read', 'write', 'Write'] },
-      turn: { sessionId: { in: rowIds } },
-    },
-    select: {
-      toolName: true,
-      argsJson: true,
-      resultJson: true,
-      startedAt: true,
-      completedAt: true,
-      createdAt: true,
-    },
-  });
+/** 读写工具调用提取（file-restore / dir-restore 共用取数；带回文件路径）。
+ *  三条来源：① Read/Write 工具（args/result 或 args 即内容）；② shell 命令族
+ *  （bash/shell/exec/exec_command——与文件分析层同一词表，codex 的 cat/sed/
+ *  head 隐式读此前只进分析不进恢复，Files 页「列表有文件、复卷零素材」）；
+ *  ③ codex apply_patch（argsJson 是裸 patch 文本）——Add File 的全文可知，
+ *  作为写素材进入行级合并；Update/Delete 无行号语义（宁缺毋假），不产出行。
+ *  shell 行逐行即时解析（restoreShellReads）后即弃 resultJson 原文引用，
+ *  不在闭包里累积大字符串。 */
+async function loadRestoreOps(prisma: PrismaClient, rowIds: string[]): Promise<Array<{ filePath: string; op: RestoreOp | ResolvedRestoreOp }>> {
+  const [rwCalls, shellCalls, patchCalls] = await Promise.all([
+    prisma.toolCall.findMany({
+      where: {
+        toolName: { in: ['read', 'Read', 'write', 'Write'] },
+        turn: { sessionId: { in: rowIds } },
+      },
+      select: {
+        toolName: true,
+        argsJson: true,
+        resultJson: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+      },
+    }),
+    prisma.toolCall.findMany({
+      where: {
+        toolName: { in: [...SHELL_TOOL_NAMES] },
+        turn: { sessionId: { in: rowIds } },
+      },
+      select: {
+        argsJson: true,
+        resultJson: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+      },
+    }),
+    prisma.toolCall.findMany({
+      where: {
+        toolName: 'apply_patch',
+        turn: { sessionId: { in: rowIds } },
+      },
+      select: {
+        argsJson: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+      },
+    }),
+  ]);
 
-  const ops: Array<{ filePath: string; op: RestoreOp }> = [];
-  for (const tc of toolCalls) {
+  const ops: Array<{ filePath: string; op: RestoreOp | ResolvedRestoreOp }> = [];
+  for (const tc of rwCalls) {
     const fp = extractFilePath(tc.argsJson);
     if (!fp) continue;
 
@@ -201,6 +237,24 @@ async function loadRestoreOps(prisma: PrismaClient, rowIds: string[]) {
         ts,
       },
     });
+  }
+  for (const tc of shellCalls) {
+    const ts = tc.startedAt ?? tc.completedAt ?? tc.createdAt ?? null;
+    for (const entry of restoreShellReads(tc.argsJson, tc.resultJson)) {
+      if (entry.lines.size === 0) continue;
+      ops.push({ filePath: entry.filePath, op: { kind: 'resolved', source: 'read', filePath: entry.filePath, lines: entry.lines, ts } });
+    }
+  }
+  for (const tc of patchCalls) {
+    const ts = tc.startedAt ?? tc.completedAt ?? tc.createdAt ?? null;
+    const patchOps = parseApplyPatch(tc.argsJson);
+    if (patchOps == null) continue;
+    for (const p of patchOps) {
+      if (p.action !== 'add' || !p.addLines || p.addLines.length === 0) continue;
+      const lines = new Map<number, string>();
+      p.addLines.forEach((line, i) => lines.set(i + 1, line));
+      ops.push({ filePath: p.file, op: { kind: 'resolved', source: 'write', filePath: p.file, lines, ts } });
+    }
   }
   return ops;
 }
@@ -219,7 +273,7 @@ export async function restoreFileForRows(
 
 /** 目录重编汇册（session dir-restore 路由核心原位抽取；产出 zip Buffer + 统计） */
 export async function buildDirRestoreForRows(prisma: PrismaClient, rowIds: string[]) {
-  const byPath = new Map<string, RestoreOp[]>();
+  const byPath = new Map<string, Array<RestoreOp | ResolvedRestoreOp>>();
   for (const { filePath, op } of await loadRestoreOps(prisma, rowIds)) {
     const list = byPath.get(filePath);
     if (list) list.push(op);

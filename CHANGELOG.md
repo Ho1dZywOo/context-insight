@@ -2,9 +2,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [1.0.5] - 2026-11-17
 
 ### Fixed
+- 【codex 会话写操作全家失明】codex 没有独立的 Write/Edit 工具——文件创建与修改全走 `apply_patch`，此前复卷写素材、评分卡「写入」统计、改代码判定、验证窗口、自清理登记对 codex 会话全部失明（清自己建的目录还被误判高危删除）。现 `apply_patch` 全量进恢复与评分：新建文件全文进复卷，改代码 / 验证运行 / 自清理按 codex 形态正确判定，六维评分卡对 codex 会话恢复有效。
+- 【SKILL.md 声明恢复被终端噪声污染】shell 读 SKILL.md 时整段终端输出（pwd/ls 噪声、echo 横幅、截断 banner）此前被当成技能正文，对账时污染版反而胜出（现场：46 条指令里 34 条是噪声）。现只取归因到该 SKILL.md 自己的行，跨次分段读按行号校准拼接，混读多文件 / 管道过滤不可归因时如实空缺。
+- 【codex 会话声明恢复全链 404】计划文件（STATE.md）与技能资源文件（task-prompts.md）的声明恢复此前只认 Read 工具，而 codex 全靠 `exec_command` 的 cat/sed 读文件——对账拿不到任何声明。现 shell 读取同进声明恢复；子代理 `.md` 定义也补了「会话内读取」降级层（system 注入 > 会话内读取 > 磁盘扫描），codex 原生会话（无 system 注入数据）不再直接掉到磁盘猜文件。
+- 【codex/bash 会话 Files 循迹复卷零素材】文件读取内嵌在 shell 命令里（codex exec_command / bash 的 cat、sed、head）的会话，此前 Files 页「列表有文件、点复卷却一片空白」——恢复层只认 Read/Write 工具。现 shell 命令族隐式读同进复卷：多命令链逐段归因、printf 标记锚定对齐、采集期截断（~5KB 中段丢弃）按行号校准——头尾段真实恢复、永久丢失段如实标 gap 不伪造；`.gitignore` 等点开头文件也补进了文件列表。
 - 【数据仓克隆被机器配置改道 ssh】lake git 调用缺省不读全局层 gitconfig（`GIT_CONFIG_GLOBAL` 缺省指空；显式设置该变量可穿透，系统层 /etc/gitconfig 保留）。此前客户机 `~/.gitconfig` 的 `url.*.insteadOf` 会把 UI 显式配置的 https 数据仓静默改道 ssh——22 端口不通即超时、classifyLakeError 只能 unknown，用户配置的地址与实际协议脱钩。现 URL/协议按显式合同执行，机器个人配置不参与服务端网络面；代理请显式走 `https_proxy` 等标准环境变量（git 原生认）。
 - 【导入浏览卡死在超大目录】导入向导的目录浏览此前对无界目录毫无防御——逐条目重复 stat 且同步阻塞（实测 12.6 万条目的 /tmp：5.2 秒才出响应，前端渲染 12 万行直接卡死）。现条目全量返回一条不裁，服务端 IO 分批并发、前端表格窗口化虚拟滚动——同目录不到 1 秒打开，滚动/搜索全程流畅；超大目录中 bundle 目录的高亮探测设有目录数边界（普通工作目录不受影响）。
 - 【子代理类型被昵称冒充】子代理的 Execution/派发桥 `subagentType` 此前拿不到真值时把昵称小写冒充类型（真机 01a1c5d6：designer/developer 两个角色存成了 'averroes'/'euclid'）——泳道、关系图、甘特图按类型分组的语义被拆成一人一组。根治类型通道断链：codex 子 rollout 的 `agent_role` 与 spawn 参数 `agent_type` 双源取值（子侧线程事实优先）、opencode 标题 `@name` 即类型双通道同填、spawn 派发桥补 `agent_type` 参数键；下游不再从昵称兜底造假，无真值即如实为空走通用回退。存量会话重导源文件即得真值。
