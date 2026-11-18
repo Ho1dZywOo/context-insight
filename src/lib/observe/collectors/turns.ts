@@ -25,7 +25,7 @@ import { isProxyVersion } from '@/lib/shared/session-format';
 import { turnWallMs } from '@/lib/observe/turn-duration';
 import { wireToolDurations } from '@/lib/tool-timing';
 import { fetchContentHeads } from '@/lib/observe/collectors/content-heads';
-import { summarizeToolCallErrors, toolCallErrorMessage, type TurnErrorDigest } from '@/lib/tool-call-errors';
+import { summarizeToolCallErrors, toolCallErrorMessage, TOOL_CALL_ERROR_QUERY_OR, type TurnErrorDigest } from '@/lib/tool-call-errors';
 
 export interface MergedToolCallItem {
   toolCallId: string;
@@ -238,14 +238,9 @@ export async function collectScopeTurns(
         const errorCalls = await prisma.toolCall.findMany({
           where: {
             turn: { sessionId: { in: memberRowIds } },
-            OR: [
-              { state: { in: ['error', 'failed'] } },
-              { errorType: { not: null } },
-              { resultJson: { contains: '<tool_use_error>' } },
-              { resultJson: { contains: 'Exit code' } },
-            ],
+            OR: TOOL_CALL_ERROR_QUERY_OR,
           },
-          select: { turnId: true, toolCallId: true, toolName: true, state: true, errorType: true, resultJson: true },
+          select: { turnId: true, toolCallId: true, toolName: true, state: true, errorType: true, errorMessage: true, resultJson: true },
         });
         const errByToolCallId = new Map(errorCalls.map(c => [c.toolCallId, c]));
         const byTurn = new Map<string, typeof errorCalls>();
@@ -263,7 +258,7 @@ export async function collectScopeTurns(
           const patched = t.toolCalls.map(tc => {
             const err = errByToolCallId.get(tc.toolCallId);
             return err != null
-              ? { toolName: tc.toolName, state: tc.state, errorType: err.errorType, resultJson: err.resultJson }
+              ? { toolName: tc.toolName, state: tc.state, errorType: err.errorType, errorMessage: err.errorMessage, resultJson: err.resultJson }
               : tc;
           });
           const summary = summarizeToolCallErrors(patched, t.skillEvents, t.finishReason);

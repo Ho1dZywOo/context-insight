@@ -18,6 +18,7 @@ import { CopyButton } from "./CopyButton"
 import { ExpandableText } from "./ExpandableText"
 import { BLOCK, BLOCK_ROW, BLOCK_SUB, BLOCK_TRI } from "./detail-blocks"
 import { highlightKeyword, type TurnHighlight } from "@/lib/shared/highlight"
+import { toolCallErrorKind } from "@/lib/tool-call-errors"
 
 interface ToolCallItem {
   id: string
@@ -37,15 +38,16 @@ interface ToolCallListProps {
   highlight?: TurnHighlight | null
 }
 
-function hasResultError(resultJson: string | null): boolean {
-  if (!resultJson) return false
-  return resultJson.includes('<tool_use_error>') || resultJson.includes('Exit code')
-}
-
+// 工具行错误判定走 tool-call-errors 单点（cancelled / failed / null）——展示层
+// 不再持框架词表副本（此前内联 claude 词表，codex 派生拒绝/参数畸形形态漏判）
 function toolCallDisplayState(state: string, errorType: string | null, resultJson: string | null): { label: string; variant: "green" | "red" | "gray" | "orange" } {
-  if ((state === "ok" || state === "completed") && (errorType || hasResultError(resultJson))) return { label: "error", variant: "red" }
-  if (state === "ok" || state === "completed") return { label: state, variant: "green" }
   if (state === "error" || state === "failed") return { label: state, variant: "red" }
+  if (state === "ok" || state === "completed") {
+    const kind = toolCallErrorKind({ toolName: "", state, errorType, resultJson })
+    return kind != null
+      ? { label: "error", variant: "red" }
+      : { label: state, variant: "green" }
+  }
   return { label: state, variant: "orange" }
 }
 

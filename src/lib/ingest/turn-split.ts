@@ -103,6 +103,7 @@ function truncateTo200(text: string | null): string | null {
 
 import { stripThinkingAndReminder } from '../shared/text-strip';
 import { isSkillToolCall, skillEventTypeOf, extractSkillName, extractSkillVersion, isSkillInjectionText } from '../tool-conventions';
+import { classifyToolCallError, extractErrorEvidence } from '../tool-call-errors';
 
 /** 斜杠命令技能调用（claude-code `/skill` 展开形态）：用户轮内嵌
  * <command-name>/<skill> 标签、紧随 skill 注入 system 轮（"Base directory
@@ -131,25 +132,6 @@ function slashSkillInvocation(
 /** 派发事件名（agent 域 Audit 目标）与派发判定统一走 dispatch-tools 注册表
  *  （单源）——历史缺陷：此处的内联白名单缺 spawn_agent，codex 三次派发零
  *  事件、Audit agent 域恒空。 */
-
-export function extractErrorMessage(resultJson: string | null): string | null {
-  if (!resultJson) return null;
-  if (resultJson.includes('<tool_use_error>')) return truncateTo200(resultJson);
-  if (resultJson.includes('Exit code')) return truncateTo200('Command failed: ' + resultJson);
-  return null;
-}
-
-function classifyError(state: string, errorMessage: string | null): string | null {
-  if (state === 'ok' || state === 'completed') {
-    return errorMessage ? 'tool_error' : null;
-  }
-  if (!errorMessage) return 'unknown';
-  const msg = errorMessage.toLowerCase();
-  if (msg.includes('timeout') || msg.includes('timed out')) return 'timeout';
-  if (msg.includes('permission') || msg.includes('denied') || msg.includes('forbidden')) return 'permission';
-  if (msg.includes('format') || msg.includes('invalid') || msg.includes('parse')) return 'format';
-  return 'server_error';
-}
 
 export function splitIntoTurns(
   interactions: RawInteraction[],
@@ -358,7 +340,11 @@ export function splitIntoTurns(
         const dispatchEvent = dispatch ? dispatchEventOf(dispatch) : null;
         const bForm = bFormByTool.get(tc.toolCallId) ?? [];
         const isSkillRelated = isSkillToolCall(tc.toolName) || dispatchEvent !== null || bForm.length > 0;
-        const errMsg = extractErrorMessage(tc.resultJson);
+        // 错误语义 passthrough-first：adapter 在证据尚存处（codex 传输壳剥壳前 /
+        // 声明信封）解析的 errorType/errorMessage 直采；缺失时从 resultJson
+        // 原文提证据、走分类学单点兜底。核心管线零框架词表。
+        const errMsg = tc.errorMessage ?? extractErrorEvidence(tc.resultJson);
+        const errorType = tc.errorType ?? classifyToolCallError(tc.state, errMsg);
 
         // 工具起止：源携带真实时间戳（ToolCallInfo.startedAt/completedAt，claude-jsonl、
         // opencode v1 part 表与 v2 tool 项 time 字段填充）→ 落真实值 + durationMs；
@@ -377,7 +363,7 @@ export function splitIntoTurns(
           argsJson: tc.argsJson,
           resultJson: tc.resultJson,
           state: tc.state,
-          errorType: classifyError(tc.state, errMsg),
+          errorType,
           errorMessage: errMsg,
           startedAt: tcStartIso,
           completedAt: tcEndIso,
@@ -388,7 +374,7 @@ export function splitIntoTurns(
 
         toolCalls.push(toolCallRow);
 
-        const success = (tc.state === 'ok' || tc.state === 'completed') && !errMsg;
+        const success = (tc.state === 'ok' || tc.state === 'completed') && errorType == null;
         const pushEvent = (skillName: string, eventType: 'load' | 'invoke' | 'use' | 'dispatch', skillVersion: number | null, argsJson: string | null): void => {
           skillEvents.push({
             id: generateId(),

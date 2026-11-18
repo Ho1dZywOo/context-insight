@@ -68,7 +68,10 @@ beforeAll(async () => {
   const tClean = await mk(9, '2026-10-13T02:01:40Z'); // 干净轮 → 无 digest
 
   await prisma.toolCall.create({ data: { turnId: tState.id, toolCallId: 'rtp-tc-state', toolName: 'Bash', state: 'error' } });
-  await prisma.toolCall.create({ data: { turnId: tExit.id, toolCallId: 'rtp-tc-exit', toolName: 'Read', state: 'ok', resultJson: 'rtp-输出\nExit code 1\nrtp-尾部' } });
+  // ②错误摘要锚点轮（state / Exit code / cancelled / skill 失败 / 截断）。
+  //   Exit code 轮用真失败形态（结果头部非零退出码——claude Bash 失败回显的
+  //   实际位置；mid-text 字样是正文引用，属误伤形态不再作锚点）
+  await prisma.toolCall.create({ data: { turnId: tExit.id, toolCallId: 'rtp-tc-exit', toolName: 'Read', state: 'ok', resultJson: 'Exit code 1\nrtp-尾部' } });
   await prisma.toolCall.create({ data: { turnId: tCancel.id, toolCallId: 'rtp-tc-cancel', toolName: 'Grep', state: 'ok', resultJson: '<tool_use_error>rtp-操作被 Cancelled</tool_use_error>' } });
   await prisma.toolCall.create({ data: { turnId: tSkill.id, toolCallId: 'rtp-tc-skill-ok', toolName: 'Read', state: 'ok', resultJson: 'rtp-正常结果' } });
   await prisma.skillEvent.create({ data: { turnId: tSkill.id, skillName: 'rtp-skill', eventType: 'invoke', success: false, errorMessage: 'rtp-技能失败原因' } });

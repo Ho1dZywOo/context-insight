@@ -917,6 +917,14 @@ export function buildAssistantInteraction(
         allToolCalls.push({
           ...tc,
           resultJson: v == null ? null : (typeof v === 'string' ? v : JSON.stringify(v)),
+          // 声明信封的错误语义透传（导出件往返保真）：cc-db-turn toolCalls
+          // 声明携带洞见侧已解析的 state/errorType/errorMessage，此前被丢弃
+          // 只取时间戳——codex 会话重导入会把 exec_failed/sandbox_rejected
+          // 降解回 unknown。声明优先（与时间戳同原则），缺失时保持原生提取
+          // 的 state、语义交由核心管线兜底分类。
+          state: typeof dec?.state === 'string' && dec.state !== '' ? dec.state : tc.state,
+          errorType: dec?.errorType ?? null,
+          errorMessage: dec?.errorMessage ?? null,
           startedAt,
           completedAt,
         });

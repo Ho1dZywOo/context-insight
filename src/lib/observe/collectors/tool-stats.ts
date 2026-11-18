@@ -25,7 +25,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { ObserveScope } from '@/lib/observe/scope';
 import { memberByRowId } from '@/lib/observe/scope';
 import { wireToolDurations } from '@/lib/tool-timing';
-import { toolCallErrorKind } from '@/lib/tool-call-errors';
+import { toolCallErrorKind, TOOL_CALL_ERROR_QUERY_OR } from '@/lib/tool-call-errors';
 
 const DISPATCH_NAME_RE = /^(task|agent)$/i;
 
@@ -143,18 +143,12 @@ export async function collectScopeToolStats(prisma: PrismaClient, scope: Observe
   });
   if (rows.length === 0) return emptyStats();
 
-  // 错误行 superset（turns collector 错误摘要同款 OR 条件）——错误行才带
-  // resultJson 原文（18MB 级载荷不整列进内存），错误判别走 toolCallErrorKind
-  // 单一源（cancelled / failed / null）
+  // 错误行 superset（turns collector 错误摘要同款单点 OR）——错误判别走
+  // toolCallErrorKind 单一源（cancelled / failed / null）
   const errorCalls = await prisma.toolCall.findMany({
     where: {
       turn: { sessionId: { in: rowIds } },
-      OR: [
-        { state: { in: ['error', 'failed'] } },
-        { errorType: { not: null } },
-        { resultJson: { contains: '<tool_use_error>' } },
-        { resultJson: { contains: 'Exit code' } },
-      ],
+      OR: TOOL_CALL_ERROR_QUERY_OR,
     },
     select: { toolCallId: true, state: true, errorType: true, resultJson: true },
   });

@@ -15,6 +15,7 @@ import { joinSubagentIdentities, type TurnIdentity } from '@/lib/observe/turn-id
 import { selectInputContextTurns } from '@/lib/ingest/input-reconstruct';
 import { isContinuationTurn } from '@/lib/shared/command-parser';
 import { wireToolDurations } from '@/lib/tool-timing';
+import { toolCallErrorKind } from '@/lib/tool-call-errors';
 import { turnWallMs } from '@/lib/observe/turn-duration';
 
 type ToolCallDetail = {
@@ -329,7 +330,10 @@ export async function GET(request: NextRequest) {
           const detail: SkillEventDetail = se
           const matchedTc: ToolCallDetail | undefined = skillToolCalls[idx]
           const matchedResult = matchedTc?.resultJson
-          const resultError = matchedResult && (matchedResult.includes('<tool_use_error>') || matchedResult.includes('Exit code'))
+          // 错误判别走 tool-call-errors 单点（此前内联 claude 词表副本，codex
+          // 形态恒漏判——派生拒绝/参数畸形的技能调用误标成功）
+          const resultError = matchedResult != null
+            && toolCallErrorKind({ toolName: '', state: matchedTc?.state ?? 'completed', errorType: matchedTc?.errorType, resultJson: matchedResult }) != null
           return {
             id: se.id,
             skillName: se.skillName,
