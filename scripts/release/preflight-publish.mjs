@@ -16,7 +16,7 @@ const registry = 'https://registry.npmjs.org/'
 const packageNames = ['context-insight', 'cannbot-insight']
 
 function usage() {
-  console.error('Usage: node scripts/release/preflight-publish.mjs --tag vX.Y.Z --confirm X.Y.Z --dist-tag next|dev [--mode dry-run|publish] [--promote-latest true|false]')
+  console.error('Usage: node scripts/release/preflight-publish.mjs --dist-tag next|dev [--tag vX.Y.Z --confirm X.Y.Z] [--mode dry-run|publish] [--promote-latest true|false]')
 }
 
 function readArg(name) {
@@ -34,7 +34,11 @@ const confirmVersion = readArg('--confirm')
 const distTag = readArg('--dist-tag') ?? 'next'
 const mode = readArg('--mode') ?? 'dry-run'
 const promoteLatest = readArg('--promote-latest') === 'true'
-if (!tag || !confirmVersion || !['next', 'dev'].includes(distTag) || !['dry-run', 'publish'].includes(mode)) {
+if (!['next', 'dev'].includes(distTag) || !['dry-run', 'publish'].includes(mode)) {
+  usage()
+  process.exit(2)
+}
+if (distTag === 'next' && (!tag || !confirmVersion)) {
   usage()
   process.exit(2)
 }
@@ -116,17 +120,23 @@ const version = sourcePackage.version
 const parsedVersion = parseSemver(version)
 if (!parsedVersion) fail(`package.json version is not semver: ${version}`)
 if (displayVersion !== version) fail(`version mismatch: package.json=${version} version.ts=${displayVersion ?? 'missing'}`)
-if (tag !== `v${version}`) fail(`tag ${tag} does not match package version v${version}`)
-if (confirmVersion !== version) fail(`confirm version ${confirmVersion} does not match package version ${version}`)
-if (distTag === 'dev' && parsedVersion.prerelease.length === 0) {
-  fail(`dev releases require a prerelease version such as 1.0.5-dev.20261116.1, got ${version}`)
+if (distTag === 'next') {
+  if (tag !== `v${version}`) fail(`tag ${tag} does not match package version v${version}`)
+  if (confirmVersion !== version) fail(`confirm version ${confirmVersion} does not match package version ${version}`)
+} else if (parsedVersion.prerelease.length === 0) {
+  fail(`dev releases require a prerelease version such as 1.0.6-dev.20261118.1, got ${version}`)
 }
 
 const head = run('git', ['rev-parse', 'HEAD'])
-const tagCommit = run('git', ['rev-parse', `refs/tags/${tag}^{commit}`])
-if (tagCommit !== head) fail(`tag ${tag} resolves to ${tagCommit}, but checked out HEAD is ${head}`)
-const ancestor = tryRun('git', ['merge-base', '--is-ancestor', 'HEAD', 'origin/main'])
-if (ancestor.status !== 0) fail(`tag ${tag} commit is not contained in origin/main`)
+if (distTag === 'next') {
+  const tagCommit = run('git', ['rev-parse', `refs/tags/${tag}^{commit}`])
+  if (tagCommit !== head) fail(`tag ${tag} resolves to ${tagCommit}, but checked out HEAD is ${head}`)
+  const ancestor = tryRun('git', ['merge-base', '--is-ancestor', 'HEAD', 'origin/main'])
+  if (ancestor.status !== 0) fail(`tag ${tag} commit is not contained in origin/main`)
+} else {
+  const mainHead = run('git', ['rev-parse', 'origin/main'])
+  if (head !== mainHead) fail(`dev release must build exact origin/main: HEAD=${head} origin/main=${mainHead}`)
+}
 
 const errors = []
 const states = {}
@@ -166,4 +176,4 @@ if (mode === 'dry-run') {
   for (const error of errors) console.error(`[release-preflight] ${error}`)
   process.exit(1)
 }
-console.log(`[release-preflight] ${mode}: ${tag} / ${version} / ${distTag} OK`)
+console.log(`[release-preflight] ${mode}: ${tag ?? '(auto)'} / ${version} / ${distTag} OK`)
