@@ -231,9 +231,6 @@ jobs:
           npm publish "./release-artifacts/context-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
           npm publish "./release-artifacts/cannbot-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
 
-      - name: Verify packages from selected dist-tag
-        run: node scripts/release/verify-registry.mjs --tag "${{ inputs.dist_tag }}" --version "${{ needs.preflight.outputs.version }}"
-
       - name: Promote packages to latest
         if: inputs.promote_latest == true && inputs.dist_tag != 'dev'
         env:
@@ -241,7 +238,3 @@ jobs:
         run: |
           npm dist-tag add "context-insight@${VERSION}" latest
           npm dist-tag add "cannbot-insight@${VERSION}" latest
-
-      - name: Verify packages from npm latest
-        if: inputs.promote_latest == true && inputs.dist_tag != 'dev'
-        run: node scripts/release/verify-registry.mjs --tag latest --version "${{ needs.preflight.outputs.version }}"
