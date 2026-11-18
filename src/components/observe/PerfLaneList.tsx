@@ -21,7 +21,7 @@ import { ChevronRightIcon, LocateIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   PerfSegmented, computeTurnSegments, fmtMs, fmtTok, fmtOffset,
-  LANE_COLORS, PERF_COLORS, perfEntrance, PERF_CARD_SM,
+  LANE_COLORS, PERF_COLORS, perfEntrance, PERF_CARD_SM, turnElapsedMs,
   type PerfLaneStat, type LaneExec,
 } from "./perf-shared"
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -57,7 +57,7 @@ export function PerfLaneList({ lanes, laneExecs, t0, onOpenTurn }: {
     const turns = lane.turns
     if (sortKey === "order") return [...turns].sort((a, b) => a.turnIndex - b.turnIndex)
     const val = (t: (typeof turns)[number]): number =>
-      sortKey === "tokens" ? t.totalTokens : t.latencyMs
+      sortKey === "tokens" ? t.totalTokens : turnElapsedMs(t)
     return [...turns].sort((a, b) => val(b) - val(a))
   }
 
@@ -146,7 +146,7 @@ export function PerfLaneList({ lanes, laneExecs, t0, onOpenTurn }: {
                   </div>
                   <div className="flex shrink-0 items-center gap-4">
                     <div className="flex flex-col items-end leading-tight">
-                      <span className="text-[10px] text-muted-foreground">耗时</span>
+                      <span className="text-[10px] text-muted-foreground" title="轮耗时合计：LLM 生成 + 工具执行等待，不含轮间空闲">耗时</span>
                       <span className="text-xs font-semibold tabular-nums">{fmtMs(lane.totalMs)}</span>
                     </div>
                     <div className="flex flex-col items-end leading-tight">
@@ -154,7 +154,7 @@ export function PerfLaneList({ lanes, laneExecs, t0, onOpenTurn }: {
                       <span className="text-xs font-semibold tabular-nums">{fmtTok(lane.totalTokens)}</span>
                     </div>
                     <div className="hidden flex-col items-end leading-tight sm:flex">
-                      <span className="text-[10px] text-muted-foreground">TPS</span>
+                      <span className="text-[10px] text-muted-foreground" title="TPS 按 latencyMs 计算：Claude/Codex 通常为 LLM 响应耗时，opencode 原生可能包含工具执行">TPS</span>
                       <span className="text-xs font-semibold tabular-nums">{lane.tps.toFixed(1)}</span>
                     </div>
                   </div>
@@ -200,9 +200,9 @@ export function PerfLaneList({ lanes, laneExecs, t0, onOpenTurn }: {
                                 <div className="flex items-center gap-3">
                                   <span className="w-8 shrink-0 text-center font-mono text-muted-foreground">#{t.turnIndex}</span>
                                   <span className="w-[88px] shrink-0 text-center font-semibold text-indigo-600 dark:text-indigo-400">
-                                    {fmtMs(t.latencyMs)}
+                                    {fmtMs(turnElapsedMs(t))}
                                     <span className="ml-0.5 text-[10px] font-normal text-muted-foreground">
-                                      ({lane.totalMs > 0 ? `${(t.latencyMs / lane.totalMs * 100).toFixed(0)}%` : "—"})
+                                      ({lane.totalMs > 0 ? `${(turnElapsedMs(t) / lane.totalMs * 100).toFixed(0)}%` : "—"})
                                     </span>
                                   </span>
                                   <span className="w-14 shrink-0 text-center">{fmtTok(t.totalTokens)}</span>

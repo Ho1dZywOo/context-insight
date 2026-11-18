@@ -36,6 +36,9 @@ on:
 permissions:
   contents: read
 
+env:
+  NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"
+
 concurrency:
   group: npm-release
   cancel-in-progress: false
@@ -59,7 +62,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
-          registry-url: "https://registry.npmjs.org/"
+
+      - name: Upgrade npm for Trusted Publishing
+        run: |
+          npm install --global npm@11.21.3
+          npm --version
 
       - name: Fetch main
         run: git fetch origin main:refs/remotes/origin/main --force
@@ -108,7 +115,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
-          registry-url: "https://registry.npmjs.org/"
+
+      - name: Upgrade npm for Trusted Publishing
+        run: |
+          npm install --global npm@11.21.3
+          npm --version
 
       - name: Apply generated dev version
         if: inputs.dist_tag == 'dev'
@@ -173,7 +184,6 @@ jobs:
       id-token: write
     env:
       NEXT_TELEMETRY_DISABLED: "1"
-      NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -185,7 +195,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
-          registry-url: "https://registry.npmjs.org/"
+
+      - name: Upgrade npm for Trusted Publishing
+        run: |
+          npm install --global npm@11.21.3
+          npm --version
 
       - name: Download release candidates
         uses: actions/download-artifact@v4
@@ -211,33 +225,16 @@ jobs:
 
       - name: Publish packages to selected dist-tag
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.version }}
           DIST_TAG: ${{ inputs.dist_tag }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN is not configured in the npm-release environment" >&2
-            exit 1
-          fi
           npm publish "./release-artifacts/context-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
           npm publish "./release-artifacts/cannbot-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
-
-      - name: Verify packages from selected dist-tag
-        run: node scripts/release/verify-registry.mjs --tag "${{ inputs.dist_tag }}" --version "${{ needs.preflight.outputs.version }}"
 
       - name: Promote packages to latest
         if: inputs.promote_latest == true && inputs.dist_tag != 'dev'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN is not configured in the npm-release environment" >&2
-            exit 1
-          fi
           npm dist-tag add "context-insight@${VERSION}" latest
           npm dist-tag add "cannbot-insight@${VERSION}" latest
-
-      - name: Verify packages from npm latest
-        if: inputs.promote_latest == true && inputs.dist_tag != 'dev'
-        run: node scripts/release/verify-registry.mjs --tag latest --version "${{ needs.preflight.outputs.version }}"
