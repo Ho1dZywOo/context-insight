@@ -13,7 +13,7 @@ import type { AuditLayerInfo } from "@/lib/sift-audit-types";
 // 调 ensureWorkflowExtractPluginLoaded 激活），此处只引类型/默认值/holder。
 import { DEFAULT_PLUGIN, getWorkflowExtractPlugin } from "@/lib/workflow-extract-plugin";
 import { buildAgentRoleNameMap } from "@/lib/agent-role-name-map";
-import { unwrapSkillContent, SHELL_TOOL_NAMES, isShellToolCall } from "@/lib/tool-conventions";
+import { unwrapSkillContent, SHELL_TOOL_NAMES, isShellToolCall, isSkillToolCall } from "@/lib/tool-conventions";
 import { restoreShellReads, renderShellEntryText } from "@/lib/shell-restore";
 import { extractShellFileReads } from "@/lib/file-reads";
 // skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
@@ -282,6 +282,26 @@ export async function buildStructuredRecords(
     anchorsByToolCallId.set(a.source_tool_call_id, arr);
   }
 
+  // C 形（斜杠命令注入，claude-code v1：/skill 展开全文进 system 轮、无任何工具调用）
+  // 的 invoke 事件锚在 user 命令轮——同一条合成规则的第三种形态：锚点直接落事件轮
+  // （命令轮的 args 文本即技能入参，段含命令轮 = 审判面拿到任务参数）。A 形守卫：
+  // 事件轮已有原生 skill 工具调用则不双锚（slice/digest 对锚点 role 不敏感，user 轮
+  // 挂 tool_use 与 cc 判定层兼容——slice.py _skill_calls_of 逐 record 无 role 过滤）。
+  const cFormEvents = await prisma.skillEvent.findMany({
+    where: { eventType: "invoke", turn: { sessionId } },
+    select: { turnId: true, skillName: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const anchorsByTurnId = new Map<string, Set<string>>();
+  for (const se of cFormEvents) {
+    if (!se.skillName) continue;
+    const tcsOfTurn = byTurn.get(se.turnId) ?? [];
+    if (tcsOfTurn.some(tc => isSkillToolCall(tc.toolName))) continue;
+    const set = anchorsByTurnId.get(se.turnId) ?? new Set<string>();
+    set.add(se.skillName);
+    anchorsByTurnId.set(se.turnId, set);
+  }
+
   const records = turns.map((t) => {
     const rec: Record<string, unknown> = {
       role: t.role,
@@ -298,6 +318,11 @@ export async function buildStructuredRecords(
     const agent = roleName ?? t.agentName;
     if (agent) rec.agent = agent;
     const tcs = byTurn.get(t.id) ?? [];
+    const calls: Array<Record<string, unknown>> = [];
+    // C 形锚点（斜杠命令轮）先行：命令轮通常无任何工具调用，锚点即该轮唯一 tool_call
+    for (const skill of anchorsByTurnId.get(t.id) ?? []) {
+      calls.push({ name: "skill", input: { skill } });
+    }
     if (tcs.length > 0) {
       // **不带 result**(`tc.resultJson`):audit 判定只读 user_turns(scene)+ tool 输入
       // (input → tool_trace)+ assistant 文本(transcript_text),**工具结果对 verdict 零贡献**
@@ -312,7 +337,6 @@ export async function buildStructuredRecords(
       // 推进/修复),sift 层3 用它构建"派发-回报对"喂 step 判官(缺席式误判的洗冤证据 +
       // "传递≠达成"的验收结论依据)。sift reader 原生支持 tool_calls[].result。
       // 派发判定走注册表（task/agent/subagent/spawn_agent 及未来形态单点纳入）。
-      const calls: Array<Record<string, unknown>> = [];
       for (const tc of tcs) {
         for (const anchor of anchorsByToolCallId.get(tc.toolCallId) ?? []) {
           calls.push({ name: "skill", input: { skill: anchor.skill } });
@@ -326,8 +350,8 @@ export async function buildStructuredRecords(
         }
         calls.push(call);
       }
-      rec.tool_calls = calls;
     }
+    if (calls.length > 0) rec.tool_calls = calls;
     return rec;
   });
   return { format: "sift-records", records };

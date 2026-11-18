@@ -20,7 +20,7 @@ import { NextRequest } from 'next/server';
 import { readSession } from '../../src/lib/ingest/adapters/claude-jsonl.ts';
 import { splitIntoTurns, resetIdCounter } from '../../src/lib/ingest/turn-split.ts';
 import { importSession } from '../../src/lib/ingest/data-service.ts';
-import { recoverSkillBody } from '../../src/lib/sift-audit.ts';
+import { recoverSkillBody, buildStructuredRecords } from '../../src/lib/sift-audit.ts';
 import { GET as getSkillContent } from '@/lib/observe/session-handlers/skill-content';
 import { GET as getSkillContentAudit } from '@/lib/observe/session-handlers/skill-content-audit';
 import { prisma } from '../setup';
@@ -169,6 +169,29 @@ describe('slash-command skill invocation', () => {
       const json = await res.json() as { content: string | null; source: string | null };
       expect(json.content).toBeNull();
       expect(json.source).toBeNull();
+    });
+  });
+
+  // ── audit 导出链：C 形（斜杠命令）Skill 锚点 ──
+  // 现场缺陷：day0-inference 以斜杠命令加载（无任何工具调用），transcript 导出
+  // 只为 B 形（use + source_tool_call_id）合成 sift --kind skill 切段锚点 →
+  // C 形会话切不出段 → sift audit exit 2。
+
+  describe('audit export: slash-command skill anchor', () => {
+    it('buildStructuredRecords 为命令轮补合成 skill 锚点（day0-inference audit exit 2 回归锁）', async () => {
+      const session = await prisma.session.findFirst({ where: { taskId: IMPORT_SID } });
+      const out = await buildStructuredRecords(session!.id, prisma);
+      const cmdTurn = out.records.find(r =>
+        (r as Record<string, unknown>).role === 'user' &&
+        String((r as Record<string, unknown>).text ?? '').includes('<command-name>/day0-inference</command-name>')
+      ) as Record<string, unknown> | undefined;
+      expect(cmdTurn).toBeDefined();
+      expect(cmdTurn!.tool_calls).toEqual([{ name: 'skill', input: { skill: 'day0-inference' } }]);
+      // 会话里再无其他 skill 锚点（夹具无 B 形读取、无 A 形工具）
+      const allAnchors = out.records.flatMap(r =>
+        ((r as Record<string, unknown>).tool_calls as Array<Record<string, unknown>> | undefined ?? [])
+          .filter(tc => tc.name === 'skill'));
+      expect(allAnchors).toHaveLength(1);
     });
   });
 });
