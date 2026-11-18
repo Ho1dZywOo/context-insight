@@ -7,16 +7,17 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { selectSkillContent, type SkillToolCall } from '@/lib/skill-content';
+import { selectSkillContent } from '@/lib/skill-content';
+import { collectSkillContentCandidates } from '@/lib/observe/collectors/skill-content';
 import { withRouteLog } from '@/lib/api-route';
 
 export interface SkillContentAuditItem {
   skillName: string;
   hasContent: boolean;
-  source: 'skill-tool' | 'read' | 'shell' | null;
+  source: 'skill-tool' | 'command' | 'read' | 'shell' | null;
   length: number;
   lines: number;
-  /** 是否判定为读取了完整 SKILL.md（skill-tool 注入恒 true；read 需无 offset/limit 且无截断标记）。 */
+  /** 是否判定为读取了完整 SKILL.md（注入通道恒 true；read 需无 offset/limit 且无截断标记）。 */
   fullRead: boolean;
   /** read 来源时实际读到的最大行号；skill-tool 为 null。 */
   maxLine: number | null;
@@ -56,32 +57,10 @@ export const GET = withRouteLog('observe/session/skill-content-audit', async (re
       .map(se => se.skillName)
   ));
 
-  const toolCalls = await prisma.toolCall.findMany({
-    where: {
-      turn: { sessionId: session.id },
-      OR: [
-        { isSkillRelated: true },
-        { AND: [{ toolName: 'Read' }, { argsJson: { contains: 'SKILL.md' } }] },
-        { AND: [{ toolName: 'read' }, { argsJson: { contains: 'SKILL.md' } }] },
-      ],
-    },
-    select: {
-      toolName: true,
-      argsJson: true,
-      resultJson: true,
-      startedAt: true,
-    },
-  });
-
-  const ops: SkillToolCall[] = toolCalls.map(tc => ({
-    toolName: tc.toolName,
-    argsJson: tc.argsJson,
-    resultJson: tc.resultJson,
-    startedAt: tc.startedAt ?? null,
-  }));
+  const { toolCalls, turns } = await collectSkillContentCandidates(prisma, session.id);
 
   const items: SkillContentAuditItem[] = names.map(name => {
-    const r = selectSkillContent(ops, name);
+    const r = selectSkillContent(toolCalls, name, turns);
     const content = r?.content ?? '';
     return {
       skillName: name,

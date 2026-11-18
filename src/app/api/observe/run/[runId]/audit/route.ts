@@ -26,7 +26,9 @@
 //   正文版本一致是常态；漂移在 UI 层以成员归因呈现）。
 // - agent：system 注入（proxy 捕获的运行时 .md）> 磁盘扫描兜底
 //   （AGENTS_SCAN_ROOT，多插件按涉事会话派发集合消歧）。
-// - root：主 agent 编排组合声明（规程层 + 计划层）——编排声明是成员私有
+// - root：主 agent 编排组合声明（规程层 + 计划层）——LLM 选择式提取
+//   （llm-workflow-extract 单点；确定性插件路 recoverCombinedWorkflowDeclaration
+//   已退役休眠）。编排声明是成员私有
 //   （各成员各有一份），恒单成员对账。
 
 import { NextResponse } from 'next/server';
@@ -39,9 +41,9 @@ import { resolveRunScope } from '@/lib/run/observe/scope';
 import { resolveRunBundleDir } from '@/lib/run/bundle-source';
 import {
   recoverSkillBody,
-  recoverCombinedWorkflowDeclaration,
   buildStructuredRecords,
 } from '@/lib/sift-audit';
+import { llmExtractWorkflowDeclaration } from '@/lib/llm-workflow-extract';
 import { recoverAgentMdFromSystem } from '@/lib/agent-md-session-recover';
 import { recoverAgentMdFromSession } from '@/lib/agent-md-recover';
 import { resolveScanRoot, scanAgentDirs, resolveAgentMd } from '@/lib/agent-md-scan';
@@ -205,12 +207,23 @@ export const POST = withRouteLog(
           }
         }
       } else {
-        // root：单成员的组合声明
+        // root：单成员的组合声明（LLM 选择式提取——候选确定性收集 + claude CLI 选层
+        // + 共享装配；确定性插件路 recoverCombinedWorkflowDeclaration 已退役休眠）
         const m = withSession[0]!;
-        const combined = await recoverCombinedWorkflowDeclaration(sessions.get(m.taskId)!.id, prisma);
+        let combined: Awaited<ReturnType<typeof llmExtractWorkflowDeclaration>>;
+        try {
+          combined = await llmExtractWorkflowDeclaration(sessions.get(m.taskId)!.id, prisma);
+        } catch (e) {
+          // CLI 基础设施失败（认证 403 / 非 0 退出 / 超时）→ 带具体原因返回
+          logError('route:run-audit', 'root 声明 LLM 提取失败', { runId, member: m.taskId, error: e instanceof Error ? e.message : String(e) });
+          return NextResponse.json(
+            { error: `LLM 提取失败：${e instanceof Error ? e.message : String(e)}`, reason: 'extract-failed' },
+            { status: 502 },
+          );
+        }
         if (!combined) {
           return NextResponse.json(
-            { error: '此成员会话无可对账的 workflow 声明（规程层：无主 agent Skill invoke / 无 skill resources / 无 SKILL.md body / 无 turn0 注入；计划层：无 STATE.md 等计划文件的 Read）', reason: 'no-declaration' },
+            { error: '此成员会话无可对账的 workflow 声明（LLM 提取无输出：无候选 / 选择无效）', reason: 'no-declaration' },
             { status: 404 },
           );
         }

@@ -16,7 +16,10 @@
 
 import type { AuditLayerInfo, AuditMemberMap, AuditReport, SkillAuditStoredResult } from "@/lib/sift-audit-types"
 
-export type AuditKind = "skill" | "agent" | "root" | "llm-root"
+export type AuditKind = "skill" | "agent" | "root"
+// 注：workflow 声明提取已整体切换 LLM 选择式路（llm-workflow-extract 单点），
+// root 即 LLM 提取口径——退役前的 "llm-root" 双轨 kind 已收敛（服务端对旧值
+// 仍作 root 别名兼容）。
 
 /**
  * store 侧的 result：AuditReport + 可选 _html（"在新页打开原始 HTML"逃生口）。
@@ -283,9 +286,9 @@ async function runSkillAudit(
   framework?: string,
 ): Promise<void> {
   const key = skillAuditKey(taskId, kind, name)
-  // skill / root 都走 audit-skillsift（root 的声明同 skill——从 session 恢复 SKILL.md，
-  // 只是 --kind root 切主 agent 作用域）；agent 走 audit-agentsift。skill 路由按 body.kind 选 --kind。
-  const useSkillRoute = kind === "skill" || kind === "root" || kind === "llm-root"
+  // skill / root 都走 audit-skillsift（root 的声明由 LLM 选择式提取产出、--kind root
+  // 切主 agent 作用域）；agent 走 audit-agentsift。skill 路由按 body.kind 选 --kind。
+  const useSkillRoute = kind === "skill" || kind === "root"
   try {
     const res = await fetch(useSkillRoute ? "/api/ai/audit-skillsift" : "/api/ai/audit-agentsift", {
       method: "POST",

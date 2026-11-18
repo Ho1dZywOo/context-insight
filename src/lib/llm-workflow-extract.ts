@@ -19,12 +19,16 @@ import {
 } from "./sift-audit";
 // SKILL.md 正文候选走 skill-content 三通道单点（skill-tool / Read / shell）——
 // codex 无 read 工具，cat 读 SKILL.md 同样入规程候选，词表与摄取/恢复侧共用。
-import { skillMdReadsOfToolCall } from "./skill-content";
+import { skillMdReadsOfToolCall, skillMdReadsOfTurn } from "./skill-content";
 import { isShellToolCall } from "./tool-conventions";
 import { logError } from "@/lib/logger";
 
 /**
- * LLM 提取主 agent 组合声明（泛化路径，不依赖 workflow-extract-plugins 的领域启发式）。
+ * LLM 提取主 agent 组合声明——**workflow 审计的声明提取唯一使用路**。
+ *
+ * 确定性提取链（sift-audit.ts 的 recoverCombinedWorkflowDeclaration 族 + 插件体系）
+ * 已从审计链退役：代码保留休眠（不再被任何路由/探测使用），作为领域插件路的历史
+ * 实现与回退素材。当前 root 对账、探测、预览全部走本模块。
  *
  * **选择式契约（不可篡改 by construction）**：LLM 不抄写正文——只从确定性收集的候选列表里
  * 选出「规程层用哪份、计划层用哪份」（输出候选 ID 的 JSON）；正文一律取 DB 原文，
@@ -32,13 +36,9 @@ import { logError } from "@/lib/logger";
  * 最终与确定性提取（recoverCombinedWorkflowDeclaration）**共享同一个装配函数**
  * assembleCombinedDeclaration——两条路产出字节级同构（"提取拼接可以，篡改不可以"）。
  *
- * 两层分工（与确定性提取一致）：
+ * 两层分工：
  * - 规程层（编排纪律，"怎么干"）：skill 注入的编排规程 / 编排模板文件 / turn0 注入
  * - 计划层（任务承诺，"干什么"）：任务清单文件（STATE/TODO/PLAN 类）的读写快照
- *
- * 与确定性提取的关系：确定性 = 领域插件（workflow-ops 启发式，快而准但限领域）；
- * LLM = 泛化兜底（识别交给模型理解，任何领域可用，慢但通用）。识别正确的常见场景下
- * 两者选同一批候选 → 产出一致；确定性取不到的场景（非 ops 命名/结构）LLM 仍能工作。
  */
 
 const MAX_TURNS = 10;
@@ -79,6 +79,22 @@ export interface WorkflowExtractCandidates {
   plan: WorkflowExtractCandidate[];
   /** dispatch 前引导区的 turn 骨架（prompt 语境用，非候选）。 */
   contextLines?: string[];
+}
+
+/**
+ * 廉价探测：该 session 是否有可供 LLM 选择的声明候选（规程或计划任一非空）。
+ *
+ * RunAuditTab 挂载期探测（main-agent-workflow 端点的 available 徽标）用——
+ * 确定性、零 LLM 调用（就是候选收集本身），毫秒级。
+ * 注意：有候选 ≠ LLM 必然选出可用两层（选择可为 null、部分读取等由选择阶段
+ * 判断）——探测只回答「能否发起 root 对账」，失败在对账流里诚实暴露。
+ */
+export async function hasWorkflowExtractCandidates(
+  sessionId: string,
+  prisma: PrismaClient,
+): Promise<boolean> {
+  const candidates = await collectWorkflowExtractCandidates(sessionId, prisma);
+  return candidates.regulation.length > 0 || candidates.plan.length > 0;
 }
 
 /**
@@ -261,9 +277,34 @@ export async function collectWorkflowExtractCandidates(
       // 引导区语境（供 LLM 理解，非候选）
       contextLines.push(`- Turn ${t.turnIndex} (${t.role}${t.agentName ? `, agent=${t.agentName}` : ""}): ${firstLine(t.content)}`);
 
-      // S1（role=user 注入）与 S3（opencode ≥1.17 注入体带 Base directory 标记，
-      // 被 adapter 重分类为 system）都从 turn0 收；正文剥运行时尾部（与确定性路一致）
-      if ((t.role === "user" || t.role === "system") && t.turnIndex === 0 && (t.content ?? "").length >= USER_CANDIDATE_MIN_CHARS) {
+      // C 形（斜杠命令注入，claude-code v1：/skill 展开全文进 system 轮、无工具调用行）
+      // 与 S3（opencode ≥1.17 注入体带 Base directory 标记）的注入正文都在轮级——
+      // skillMdReadsOfTurn 是 skill-content 四通道单点的轮级面（skill-tool / Read / shell
+      // 三通道由下方 tc 级覆盖，此处补注入通道）。正文再过 stripSkillRuntimeTail（幂等）：
+      // S3 的中部标记块 / <skill_files> 清单同样要剥。
+      // 现场缺口：day0-inference 会话 19823 字注入体落在 turnIndex=1 的 system 轮，
+      // 此前收集只认 turnIndex===0 → 规程候选仅剩 373 字命令壳，正文缺席。
+      const injReads = skillMdReadsOfTurn(t);
+      for (const read of injReads) {
+        const content = stripSkillRuntimeTail(read.content);
+        if (content.length >= CANDIDATE_MIN_CHARS) {
+          regCandidates.push({
+            id: "",
+            layer: "regulation",
+            source: `${read.skillName} (SKILL.md)`,
+            content,
+            partialRead: false,
+          });
+        }
+      }
+      // S1（role=user 注入，无标记老形态）与泛化大文本的 turn0 兜底——注入轮已被
+      // 上面通道以真名收录（同一正文不重复收两份）
+      if (
+        injReads.length === 0 &&
+        (t.role === "user" || t.role === "system") &&
+        t.turnIndex === 0 &&
+        (t.content ?? "").length >= USER_CANDIDATE_MIN_CHARS
+      ) {
         regCandidates.push({
           id: "", // 编号在收集完成后统一定
           layer: "regulation",
@@ -526,10 +567,12 @@ function extractJsonObject(output: string): string | null {
  * claude CLI（-p 非交互）。失败时把 CLI 的真实输出（如 "Failed to authenticate. API
  * Error: 403 invalid api-key"）作为 error 带回——此前非 0 退出直接丢 stdout，认证类
  * 失败被吞成"提取中"死循环。
+ * 路径：默认走 PATH 解析（"claude"）——服务进程的 PATH 与 sift 自带 LLM 同环境；
+ * CLAUDE_CLI_PATH 显式覆写（非标准安装位/多版本切换）。
  */
 function runClaudeCli(prompt: string): Promise<LlmRunnerResult> {
   return new Promise((resolve) => {
-    const claudeBin = process.env.CLAUDE_CLI_PATH || "/usr/local/bin/claude";
+    const claudeBin = process.env.CLAUDE_CLI_PATH || "claude";
     const proc = spawn(claudeBin, ["-p", "--output-format", "text"], {
       stdio: ["pipe", "pipe", "pipe"],
     });

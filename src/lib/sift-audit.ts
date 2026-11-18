@@ -13,15 +13,18 @@ import type { AuditLayerInfo } from "@/lib/sift-audit-types";
 // 调 ensureWorkflowExtractPluginLoaded 激活），此处只引类型/默认值/holder。
 import { DEFAULT_PLUGIN, getWorkflowExtractPlugin } from "@/lib/workflow-extract-plugin";
 import { buildAgentRoleNameMap } from "@/lib/agent-role-name-map";
-import { unwrapSkillContent, SHELL_TOOL_NAMES, isShellToolCall } from "@/lib/tool-conventions";
+import { unwrapSkillContent, SHELL_TOOL_NAMES, isShellToolCall, isSkillToolCall } from "@/lib/tool-conventions";
 import { restoreShellReads, renderShellEntryText } from "@/lib/shell-restore";
 import { extractShellFileReads } from "@/lib/file-reads";
 // skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
 // client bundle 安全；Audit 对账与 Skills 面板共用同一恢复词表，通道扩展不再双头漂移。
-import { selectSkillContent } from "@/lib/skill-content";
+import { selectSkillContent, stripSkillRuntimeTail } from "@/lib/skill-content";
+import { collectSkillContentCandidates } from "@/lib/observe/collectors/skill-content";
 // dispatch-tools 是纯模块（唯一导入为 type-only，无 fs/db）——client bundle 安全；
 // 派发工具判定单点：task/agent/subagent/spawn_agent 及注册表未来形态自动纳入。
 import { dispatchSpecOf } from "@/lib/ingest/dispatch-tools";
+
+export { stripSkillRuntimeTail };
 
 /**
  * sift 对账桥接：从 insight 的 session 里恢复某 skill 的 SKILL.md 正文，
@@ -43,28 +46,6 @@ const SKILL_INVOKE_TOOLS = new Set(["skill", "skill/invoke", "skill/use"]);
 export function stripSkillContent(resultJson: string | null | undefined): string | null {
   const inner = unwrapSkillContent(resultJson);
   return inner !== null ? stripSkillRuntimeTail(inner) : null;
-}
-
-/**
- * 剥 skill 运行时注入尾部（S2 SKILL.md body 与 S3 turn0 注入共用）：
- * skill 加载器在正文后追加的说明块——`Base directory for this skill:` 行、
- * `Relative paths…` 引导行、`Note: file list is sampled.` 行、`<skill_files>` 文件
- * 清单块（~900 字路径列表）。这些是框架注入的元数据不是 SKILL.md 指令，进对账
- * 声明会产出垃圾 findings。
- *
- * 行级过滤保留其余内容：S3 turn0 尾部的用户请求（算子任务描述）与老形态
- * （opencode ≤1.4.7，规程 + 用户请求同消息、无标记）语义对齐。
- */
-export function stripSkillRuntimeTail(content: string): string {
-  const withoutFileList = content.replace(/<skill_files>[\s\S]*?<\/skill_files>\s*/g, "");
-  const lines = withoutFileList.split("\n").filter(
-    (l) =>
-      !l.startsWith("Base directory for this skill:") &&
-      !l.startsWith("Relative paths in this skill") &&
-      !l.startsWith("Note: file list is sampled."),
-  );
-  // 删行遗留的 3+ 连续换行收敛为段间空行（正常 markdown 无三连空行，无标记原文不变）
-  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
 }
 
 /**
@@ -281,6 +262,26 @@ export async function buildStructuredRecords(
     anchorsByToolCallId.set(a.source_tool_call_id, arr);
   }
 
+  // C 形（斜杠命令注入，claude-code v1：/skill 展开全文进 system 轮、无任何工具调用）
+  // 的 invoke 事件锚在 user 命令轮——同一条合成规则的第三种形态：锚点直接落事件轮
+  // （命令轮的 args 文本即技能入参，段含命令轮 = 审判面拿到任务参数）。A 形守卫：
+  // 事件轮已有原生 skill 工具调用则不双锚（slice/digest 对锚点 role 不敏感，user 轮
+  // 挂 tool_use 与 cc 判定层兼容——slice.py _skill_calls_of 逐 record 无 role 过滤）。
+  const cFormEvents = await prisma.skillEvent.findMany({
+    where: { eventType: "invoke", turn: { sessionId } },
+    select: { turnId: true, skillName: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const anchorsByTurnId = new Map<string, Set<string>>();
+  for (const se of cFormEvents) {
+    if (!se.skillName) continue;
+    const tcsOfTurn = byTurn.get(se.turnId) ?? [];
+    if (tcsOfTurn.some(tc => isSkillToolCall(tc.toolName))) continue;
+    const set = anchorsByTurnId.get(se.turnId) ?? new Set<string>();
+    set.add(se.skillName);
+    anchorsByTurnId.set(se.turnId, set);
+  }
+
   const records = turns.map((t) => {
     const rec: Record<string, unknown> = {
       role: t.role,
@@ -297,6 +298,11 @@ export async function buildStructuredRecords(
     const agent = roleName ?? t.agentName;
     if (agent) rec.agent = agent;
     const tcs = byTurn.get(t.id) ?? [];
+    const calls: Array<Record<string, unknown>> = [];
+    // C 形锚点（斜杠命令轮）先行：命令轮通常无任何工具调用，锚点即该轮唯一 tool_call
+    for (const skill of anchorsByTurnId.get(t.id) ?? []) {
+      calls.push({ name: "skill", input: { skill } });
+    }
     if (tcs.length > 0) {
       // **不带 result**(`tc.resultJson`):audit 判定只读 user_turns(scene)+ tool 输入
       // (input → tool_trace)+ assistant 文本(transcript_text),**工具结果对 verdict 零贡献**
@@ -311,7 +317,6 @@ export async function buildStructuredRecords(
       // 推进/修复),sift 层3 用它构建"派发-回报对"喂 step 判官(缺席式误判的洗冤证据 +
       // "传递≠达成"的验收结论依据)。sift reader 原生支持 tool_calls[].result。
       // 派发判定走注册表（task/agent/subagent/spawn_agent 及未来形态单点纳入）。
-      const calls: Array<Record<string, unknown>> = [];
       for (const tc of tcs) {
         for (const anchor of anchorsByToolCallId.get(tc.toolCallId) ?? []) {
           calls.push({ name: "skill", input: { skill: anchor.skill } });
@@ -325,8 +330,8 @@ export async function buildStructuredRecords(
         }
         calls.push(call);
       }
-      rec.tool_calls = calls;
     }
+    if (calls.length > 0) rec.tool_calls = calls;
     return rec;
   });
   return { format: "sift-records", records };
@@ -694,6 +699,11 @@ export async function recoverWorkflowDeclaration(
 /**
  * root 对账的组合声明：**编排规程层 + 任务计划层** 拼接（分层标注）。
  *
+ * **状态：已从审计链退役（休眠保留）**——workflow 审计的声明提取已整体切换
+ * LLM 选择式路（llm-workflow-extract 单点），本函数不再被任何路由/探测调用；
+ * 代码与配套插件体系保留作为领域启发路的历史实现与回退/对照素材（UT 保持绿，
+ * llm-workflow-extract.test 的字节级同构用例仍以本函数为对照基准）。
+ *
  * 单层各有结构性盲区：规程层（agent.md-like，"怎么干"）对"本单任务做没做完"无话可说；
  * 计划层（STATE.md-like，"干什么"）是运行时生成的自我承诺，计划写漏时审不出（自评循环）。
  * 拼接后一次 root 对账同时审两个正交问题：编排纪律遵循度 + 任务完成度。
@@ -774,11 +784,12 @@ export function assembleCombinedDeclaration(layers: AuditLayerInfo[]): {
 
 /**
  * 按 session + skillName 恢复该 skill 的纯 SKILL.md 正文，委托 selectSkillContent
- * 三通道单点（skill-tool `<skill_content>` / Read `<content>` / shell 读类命令
- * 终端输出）——与 Skills 面板「SKILL.md 原文」同一恢复路径。
+ * 四通道单点（skill-tool `<skill_content>` / 斜杠命令 system 注入 / Read
+ * `<content>` / shell 读类命令终端输出）——与 Skills 面板「SKILL.md 原文」
+ * 同一恢复路径。
  *
- * 候选工具调用面与 skill-content-audit handler 同宽：isSkillRelated（B 形
- * Read/shell 读取摄取时已标记）+ 兜底 Read+SKILL.md 命中。
+ * 候选面经 collectSkillContentCandidates 单点（工具调用 OR 词表 + system
+ * 注入轮），三处消费方（本函数 + 两个 handler）同宽。
  * 历史缺陷（codex 客户现场）：本函数此前自带一套 invoke 事件 + skill 工具族的
  * 平行词表，B 形会话（无 read 工具、cat 读 SKILL.md、eventType=use）全链 404。
  * 找不到 / 无正文 → null。
@@ -788,18 +799,8 @@ export async function recoverSkillBody(
   skillName: string,
   prisma: PrismaClient,
 ): Promise<string | null> {
-  const toolCalls = await prisma.toolCall.findMany({
-    where: {
-      turn: { sessionId },
-      OR: [
-        { isSkillRelated: true },
-        { toolName: { in: ["Read", "read"] }, argsJson: { contains: "SKILL.md" } },
-      ],
-    },
-    select: { toolName: true, argsJson: true, resultJson: true, startedAt: true },
-    orderBy: { createdAt: "asc" },
-  });
-  return selectSkillContent(toolCalls, skillName)?.content ?? null;
+  const { toolCalls, turns } = await collectSkillContentCandidates(prisma, sessionId);
+  return selectSkillContent(toolCalls, skillName, turns)?.content ?? null;
 }
 
 /**

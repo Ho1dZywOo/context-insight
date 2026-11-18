@@ -189,6 +189,11 @@ describe('lake mirror init race', () => {
       env: {
         ...process.env,
         LAKE_CACHE_DIR: 'rel-cache',
+        // 测试隔离：同 worker 其他 lake 测试的 seedLakeConfig 会改写
+        // CONTEXT_PROXY_DIR——子进程默认远端解析会读到别人的 lake-config
+        // （clone 错远端 → 退出码 1，仅全量并发跑时复现）。显式钉回本文件
+        // 的 proxy 目录（seedLakeConfig 已把 lake-config.json 写入其中）。
+        CONTEXT_PROXY_DIR: path.join(TMP, 'proxy'),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

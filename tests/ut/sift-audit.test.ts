@@ -29,10 +29,12 @@ import {
   extractFileContent,
 } from "@/lib/sift-audit";
 
-/** 造一个最小 mock prisma：只实现 recoverSkillBody 用到的两个方法。 */
+/** 造一个最小 mock prisma：只实现 recoverSkillBody 用到的两个方法
+ *  （候选面 collector：toolCall 三通道 + turn 注入轮）。 */
 function makePrisma(opts: {
   skillEvent?: { turnId: string } | null
   toolCalls?: Array<{ toolName: string; argsJson: string | null; resultJson: string | null }>
+  turns?: Array<{ role: string; content: string | null }>
 }) {
   return {
     skillEvent: {
@@ -40,6 +42,9 @@ function makePrisma(opts: {
     },
     toolCall: {
       findMany: async () => opts.toolCalls ?? [],
+    },
+    turn: {
+      findMany: async () => opts.turns ?? [],
     },
   } as unknown as Parameters<typeof recoverSkillBody>[2];
 }
@@ -704,6 +709,8 @@ describe("resolveWorkflowSkillName + recoverWorkflowDeclaration", () => {
     },
     turn: {
       findFirst: vi.fn().mockResolvedValue(opts.turn0 ?? null),
+      // collectSkillContentCandidates 的注入轮查询（斜杠命令 system 注入）
+      findMany: vi.fn().mockResolvedValue([]),
     },
   }) as unknown as PrismaClient;
 
@@ -1048,12 +1055,17 @@ describe("buildStructuredRecords", () => {
     toolCalls: Array<{ turnId: string; toolCallId?: string; toolName: string; argsJson: string | null; resultJson: string | null }>;
     bridges?: Array<{ subagentSessionId: string | null; subagentType: string | null; dispatchTurnId: string | null }>;
     dispatchEvents?: Array<{ turnId: string; skillName?: string; argsJson?: string | null }>;
+    invokeEvents?: Array<{ turnId: string; skillName: string }>;
   }) {
     return {
       turn: { findMany: async () => opts.turns },
       toolCall: { findMany: async () => opts.toolCalls },
       interactionBridge: { findMany: async () => opts.bridges ?? [] },
-      skillEvent: { findMany: async () => opts.dispatchEvents ?? [] },
+      skillEvent: {
+        // 按 where.eventType 分发（use=B 形源读取 / invoke=C 形斜杠命令）
+        findMany: async (args: { where?: { eventType?: string } }) =>
+          args?.where?.eventType === "invoke" ? (opts.invokeEvents ?? []) : (opts.dispatchEvents ?? []),
+      },
     } as unknown as PrismaClient;
   }
 
@@ -1114,11 +1126,30 @@ describe("buildStructuredRecords", () => {
         // A 形事件 argsJson 是工具原参（无 source_tool_call_id）
         { turnId: "t1", argsJson: '{"name":"acme-crash-debug"}' },
       ],
+      // A 形 invoke 事件（真实查询里 eventType=invoke）也落同一轮——原生调用在则不双锚
+      invokeEvents: [{ turnId: "t1", skillName: "acme-crash-debug" }],
     });
     const out = await buildStructuredRecords("ses_1", prisma);
     const tcs = (out.records[0] as Record<string, unknown>).tool_calls as Array<Record<string, unknown>>;
     expect(tcs).toHaveLength(1);
     expect(tcs[0]).toEqual({ name: "skill", input: { name: "acme-crash-debug" } });
+  });
+
+  it("C 形（斜杠命令 invoke 事件、user 命令轮、无任何工具调用）→ transcript 合成 skill 锚点（day0-inference audit exit 2 回归锁）", async () => {
+    const prisma = makeStructuredPrisma({
+      turns: [
+        { id: "t0", turnIndex: 0, role: "user", content: "<command-name>/day0-inference</command-name>模型路径…", agentName: null },
+        { id: "t1", turnIndex: 1, role: "assistant", content: "开始 Stage 1", agentName: null },
+      ],
+      toolCalls: [],
+      invokeEvents: [{ turnId: "t0", skillName: "day0-inference" }],
+    });
+    const out = await buildStructuredRecords("ses_1", prisma);
+    // 命令轮此前 records 无 tool_calls 字段（无工具调用）——锚点即该轮唯一 tool_call
+    const cmd = out.records[0] as Record<string, unknown>;
+    expect(cmd.tool_calls).toEqual([{ name: "skill", input: { skill: "day0-inference" } }]);
+    const asst = out.records[1] as Record<string, unknown>;
+    expect(asst.tool_calls).toBeUndefined();
   });
 
   it("子代理 turn 的 agent 用角色名（bridge.subagentType），不用任务标题（agentName）——sift --kind agent 切片匹配前提", async () => {

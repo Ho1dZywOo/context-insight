@@ -12,6 +12,7 @@ import {
   stripSkillPreamble,
   selectSkillContent,
   skillMdReadsOfToolCall,
+  skillMdReadsOfTurn,
   type SkillToolCall,
 } from '../../src/lib/skill-content.ts';
 
@@ -229,6 +230,31 @@ describe('codex exec input 形态 shell 读（检测面与归因面同源）', (
     expect(r!.source).toBe('shell');
     expect(r!.fullRead).toBe(true);
     expect(r!.content).toBe('# 数据分析技能\n\n按步骤执行。');
+  });
+});
+
+describe('skillMdReadsOfTurn（斜杠命令注入轮）', () => {
+  it('C 形行首 marker：剥前言，正文纯净', () => {
+    const turn = { role: 'system', content: 'Base directory for this skill: /x/day0-inference\n\n# Day0\n\nbody' };
+    const reads = skillMdReadsOfTurn(turn);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({ skillName: 'day0-inference', source: 'command', fullRead: true, maxLine: null });
+    expect(reads[0].content).toBe('# Day0\n\nbody');
+  });
+
+  it('S3 形中部 marker：剥标记块与运行时尾部，与 collect 路径同口径', () => {
+    const body = '# 基于 ACLNN 的算子开发工作流\n\n你是纯编排者';
+    const turn = {
+      role: 'system',
+      content: `${body}\n\nBase directory for this skill: /home/hwd/x/.opencode/skills/ops-registry-invoke-glacier\nRelative paths in this skill (e.g., scripts/) are relative to this base directory.\n\nsoftplus_v2_grad`,
+    };
+    const reads = skillMdReadsOfTurn(turn);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({ skillName: 'ops-registry-invoke-glacier', source: 'command', fullRead: true, maxLine: null });
+    expect(reads[0].content).toContain(body);
+    expect(reads[0].content).toContain('softplus_v2_grad');
+    expect(reads[0].content).not.toContain('Base directory for this skill');
+    expect(reads[0].content).not.toContain('Relative paths in this skill');
   });
 });
 

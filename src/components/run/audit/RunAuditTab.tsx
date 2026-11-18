@@ -58,7 +58,7 @@ const SPRING = "duration-300 [animation-timing-function:cubic-bezier(0.32,0.72,0
 const DOMAINS: Array<{ key: AuditDomain; label: string; icon: typeof SparklesIcon; desc: string }> = [
   { key: "skill", label: "Skill", icon: SparklesIcon, desc: "skill 声明 × 会话实际轨迹对账" },
   { key: "agent", label: "SubAgent", icon: BotIcon, desc: "Subagent 定义声明 × 会话实际轨迹对账" },
-  { key: "workflow", label: "Workflow", icon: WorkflowIcon, desc: "RootAgent 编排声明 × 该成员会话轨迹对账" },
+  { key: "workflow", label: "Workflow", icon: WorkflowIcon, desc: "RootAgent 编排声明（LLM 从会话候选中选层提取）× 该成员会话轨迹对账" },
 ]
 
 // ── 目标行状态徽标（各域共用：job 快照 → 文案/颜色） ────────────────────────
@@ -158,7 +158,7 @@ const WorkflowRow = memo(function WorkflowRow({
   const job = useSyncExternalStore(subscribeSkillAudit, () => getSkillAuditSnapshot(key), getSkillAuditServerSnapshot)
 
   const badge = (() => {
-    if (!available) return { text: "无可恢复声明", cls: "text-muted-foreground/60" }
+    if (!available) return { text: "无可审候选", cls: "text-muted-foreground/60" }
     return jobBadge(job)
   })()
 
@@ -361,8 +361,8 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, loaded])
 
-  // 编排声明可恢复性探测：挂载即探（workflow 域目标行的可对账徽标依赖），
-  // 每成员一次即缓存，进 workflow 域无需等待
+  // 编排声明候选探测（main-agent-workflow → hasWorkflowExtractCandidates，零 LLM、毫秒级）：
+  // 挂载即探（workflow 域目标行的可对账徽标依赖），每成员一次即缓存，进 workflow 域无需等待
   useEffect(() => {
     let cancelled = false
     for (const m of members) {
@@ -444,7 +444,7 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
     }
     if (selected.kind === "root") {
       const m = members.find(x => x.taskId === selected.name)
-      return m ? `${m.displayName} · 规程层 + 计划层组合声明` : ""
+      return m ? `${m.displayName} · LLM 提取组合声明（规程层 + 计划层）` : ""
     }
     return ""
   }, [selected, skillTargets, agentTargets, members])

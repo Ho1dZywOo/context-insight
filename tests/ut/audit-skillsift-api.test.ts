@@ -156,13 +156,13 @@ describe("audit-skillsift route", () => {
     expect(lastWrittenSkillMd).toContain("BODY")
   })
 
-  it("kind=root → skill resources 文件（task-prompts.md）恢复 → --kind root", async () => {
-    const resourceContent = "# Task 调用参数\n\n## 1.1 开发准备\n\n- [ ] 开发日志已创建\n- [ ] 问题目录已创建\n- [ ] 环境检查已执行\n" + "x".repeat(120)
+  it("kind=root → LLM 提取单层规程 → --kind root + 物化 main-agent-workflow（无分层标题）", async () => {
     fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.db", framework: "opencode" })
-    fakePrisma.skillEvent.findFirst.mockResolvedValue({ skillName: "ops-registry-invoke-workflow" })
-    fakePrisma.toolCall.findMany.mockResolvedValue([
-      { toolName: "read", argsJson: '{"filePath":"/x/ops-registry-invoke-workflow/resources/task-prompts.md"}', resultJson: `<content>${resourceContent}</content>` },
-    ])
+    llmExtractMock.mockResolvedValue({
+      content: "# Task 调用参数\n\n## 1.1 开发准备\n\n- [ ] 开发日志已创建\n- [ ] 问题目录已创建\n- [ ] 环境检查已执行\n" + "x".repeat(120),
+      source: "task-prompts.md",
+      layers: [{ kind: "regulation", label: "编排规程", source: "task-prompts.md", content: "REG" }],
+    })
     spawnMock.mockImplementation(happySpawn())
 
     const res = await POST(makeRequest({ taskId: "ses_1", skillName: "主 agent 编排", kind: "root" }))
@@ -173,48 +173,24 @@ describe("audit-skillsift route", () => {
     expect(args[args.indexOf("--kind") + 1]).toBe("root")
     expect(lastWrittenSkillMd).toContain("开发准备")
     expect(lastWrittenSkillMd).toContain("name: main-agent-workflow")
-    // resources 文件被计划层排除（skill 打包目录）→ 无计划层 → 单层直出，无分层标题
+    // 单层直出，无分层标题（装配单点 assembleCombinedDeclaration 的既有语义）
     expect(lastWrittenSkillMd).not.toContain("## 二、任务计划")
+    // 声明来自 LLM 提取单点（root 恒 LLM，不走确定性插件路）
+    expect(llmExtractMock).toHaveBeenCalledWith("ses_cuid_1", expect.anything())
   })
 
-  it("kind=root → 无 resources 文件 → 退 SKILL.md body（编排规程）", async () => {
-    const skillBody = "# Skill: ops-registry-invoke-workflow\n\n## 核心原则\n\n- 测试驱动\n- 阶段递进\n- 阶段门控\n" + "x".repeat(120)
+  it("kind=root → LLM 提取双层 → 分层拼接 + result 事件回传 _layers", async () => {
     fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.db", framework: "opencode" })
-    // resolveWorkflowSkillName → skillName; recoverSkillBody → turnId
-    fakePrisma.skillEvent.findFirst
-      .mockResolvedValueOnce({ skillName: "ops-registry-invoke-workflow" })
-      .mockResolvedValueOnce({ turnId: "t1" })
-    // findMany #1: resource file (empty); #2: skill invoke ToolCall; #3: plan 文件（无）
-    fakePrisma.toolCall.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { toolName: "skill", argsJson: '{"name":"ops-registry-invoke-workflow"}', resultJson: `<skill_content name="ops-registry-invoke-workflow">${skillBody}</skill_content>` },
-      ])
-      .mockResolvedValueOnce([])
-    spawnMock.mockImplementation(happySpawn())
-
-    const res = await POST(makeRequest({ taskId: "ses_1", skillName: "主 agent 编排", kind: "root" }))
-    await readNdjson(res)
-    expect(res.status).toBe(200)
-    expect(lastWrittenSkillMd).toContain("核心原则")
-    expect(lastWrittenSkillMd).toContain("name: main-agent-workflow")
-    expect(lastWrittenSkillMd).not.toContain("## 二、任务计划")
-  })
-
-  it("kind=root → 规程层 + 计划层都有 → 分层拼接 + result 事件回传 _layers", async () => {
     const resourceContent = "# Task 调用参数\n\n## 1.1 开发准备\n\n- [ ] 开发日志已创建\n- [ ] 问题目录已创建\n- [ ] 环境检查已执行\n" + "x".repeat(120)
     const stateContent = "# STATE\n\n## Tasks\n\n- [ ] 1. 派发 developer\n- [ ] 2. 验收 st-verifier\n- [ ] 3. 收尾归档\n" + "y".repeat(120)
-    fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.db", framework: "opencode" })
-    // resolveWorkflowSkillName → skillName（resources 命中 → 不再走 recoverSkillBody）
-    fakePrisma.skillEvent.findFirst.mockResolvedValueOnce({ skillName: "ops-registry-invoke-workflow" })
-    // findMany #1: resource 文件；#2: 计划文件（STATE.md，非 skill 打包目录 → 进计划层）
-    fakePrisma.toolCall.findMany
-      .mockResolvedValueOnce([
-        { toolName: "read", argsJson: '{"filePath":"/x/ops-registry-invoke-workflow/resources/task-prompts.md"}', resultJson: `<content>${resourceContent}</content>` },
-      ])
-      .mockResolvedValueOnce([
-        { toolName: "read", argsJson: '{"filePath":"/repo/STATE.md"}', resultJson: `<content>${stateContent}</content>` },
-      ])
+    llmExtractMock.mockResolvedValue({
+      content: `# Workflow 声明（主 agent）\n\n## 一、编排规程\n\n${resourceContent}\n\n## 二、任务计划\n\n${stateContent}\n`,
+      source: "规程: task-prompts.md + 计划: STATE.md",
+      layers: [
+        { kind: "regulation", label: "编排规程", source: "task-prompts.md", content: resourceContent },
+        { kind: "plan", label: "任务计划", source: "STATE.md", content: stateContent },
+      ],
+    })
     spawnMock.mockImplementation(happySpawn())
 
     const res = await POST(makeRequest({ taskId: "ses_1", skillName: "主 agent 编排", kind: "root" }))
@@ -236,23 +212,26 @@ describe("audit-skillsift route", () => {
     expect(last._layers![1].source).toBe("STATE.md")
   })
 
-  it("kind=root → 无主 agent Skill invoke → 404", async () => {
+  it("kind=root → LLM 提取无输出（无候选/选择无效）→ 404", async () => {
     fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.db", framework: "opencode" })
-    fakePrisma.skillEvent.findFirst.mockResolvedValue(null)
-    fakePrisma.toolCall.findMany.mockResolvedValue([])
-    fakePrisma.turn.findFirst.mockResolvedValue(null)
+    llmExtractMock.mockResolvedValue(null)
     const res = await POST(makeRequest({ taskId: "ses_1", kind: "root" }))
     expect(res.status).toBe(404)
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 
-  it("kind=llm-root → claude CLI 失败（认证 403）→ 502 + 具体原因（不吞成笼统 404）", async () => {
+  it("kind=root → claude CLI 失败（认证 403）→ 502 + 具体原因（不吞成笼统 404）；llm-root 别名同语义", async () => {
     fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.db", framework: "opencode" })
     llmExtractMock.mockRejectedValue(new Error("claude CLI 退出码 1：Failed to authenticate. API Error: 403 invalid api-key"))
-    const res = await POST(makeRequest({ taskId: "ses_1", kind: "llm-root" }))
+    const res = await POST(makeRequest({ taskId: "ses_1", kind: "root" }))
     expect(res.status).toBe(502)
     const d = await res.json()
     expect(d.error).toContain("403 invalid api-key")
     expect(spawnMock).not.toHaveBeenCalled()
+
+    // 退役前别名 llm-root 收敛到 root 同语义（不 400、不双轨）
+    const resAlias = await POST(makeRequest({ taskId: "ses_1", kind: "llm-root" }))
+    expect(resAlias.status).toBe(502)
   })
 
   it("缺 taskId → 400", async () => {

@@ -27,7 +27,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { CopyButton } from "@/components/observe/CopyButton"
 import type { AgentItem, BridgeItem } from "@/components/observe/AgentCallGraph"
-import { isProxyVersion } from "@/lib/shared/session-format"
+import { frameworkDisplayName, isProxyVersion } from "@/lib/shared/session-format"
 import { buildSubagentNumbers } from "@/lib/subagent-numbering"
 import { summarizeToolCallErrors, toolCallErrorMessage, type TurnErrorDigest } from "@/lib/tool-call-errors"
 import { dispatchOnlySkillNames } from "@/lib/sift-audit"
@@ -242,13 +242,6 @@ function formatWindow(start: string | null, end: string | null): string {
   }
 }
 
-function frameworkDisplayName(framework: string | null): string {
-  if (framework === "opencode") return "OpenCode"
-  if (framework === "claude-code") return "Claude Code"
-  if (framework === "codex") return "Codex"
-  return framework ?? "N/A"
-}
-
 /** 技能行首彩点：名字哈希到稳定色相（行首色标） */
 function dotColor(name: string): string {
   let h = 0
@@ -417,7 +410,7 @@ export function OverviewPanels({ identity, metrics, turns, skills, pending = fal
               </>
             ) : (
               <span className="inline-flex items-baseline gap-2 text-[26px] font-bold leading-9 tracking-tight">
-                {frameworkDisplayName(identity.framework)}
+                {frameworkDisplayName(identity.framework) ?? "N/A"}
                 {frameworkVer ? <span className="text-sm font-normal text-muted-foreground">v{frameworkVer}</span> : null}
                 {isProxy ? <Badge variant="yellow" className="mb-1">proxy</Badge> : null}
               </span>
@@ -432,7 +425,7 @@ export function OverviewPanels({ identity, metrics, turns, skills, pending = fal
                 title={identity.framework ?? undefined}
                 value={
                   <>
-                    {frameworkDisplayName(identity.framework)}
+                    {frameworkDisplayName(identity.framework) ?? "N/A"}
                     {frameworkVer ? <span className="ml-1 font-normal text-muted-foreground">v{frameworkVer}</span> : null}
                     {isProxy ? <Badge variant="yellow" className="ml-1 px-1.5 py-0 text-[10px]">proxy</Badge> : null}
                   </>

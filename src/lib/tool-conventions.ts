@@ -99,6 +99,20 @@ export function isSkillInjectionText(text: string): boolean {
     text.startsWith('Launching skill ');
 }
 
+/** skill 注入文本 → 技能名（斜杠命令注入轮恢复通道的名字提取）：
+ *  「Base directory for this skill: <dir>」取 /skills/ 段（与 turn-split
+ *  slashSkillInvocation 同口径）；其余注入形态（<skill-format> /
+ *  Launching skill）无现场数据、前言不可剥——不产出正文（宁缺毋假），
+ *  待现场样本补齐再扩。 */
+export function skillNameOfInjectionText(text: string): string | null {
+  const m = text.match(/Base directory for this skill:\s*(\S+)/);
+  if (!m) return null;
+  const bySkills = m[1].match(/\/skills\/([^/\s<]+)/);
+  if (bySkills) return bySkills[1];
+  const segs = m[1].replace(/\/+$/, '').split('/').filter(Boolean);
+  return segs.length > 0 ? segs[segs.length - 1] : null;
+}
+
 /** opencode 子代理回传 / claude 后台任务完成通知指纹（读侧单源）：异步派发
  *  完成时两家都以 user 行推回主会话——opencode 是 `<subagent sessionID="…"
  *  state="…">` 壳；claude code 是 `<task-notification>` 壳（Agent 工具的

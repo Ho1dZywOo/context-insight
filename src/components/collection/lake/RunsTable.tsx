@@ -10,7 +10,7 @@
 
 import { useMemo, useState } from 'react';
 import { formatDateTime, formatDuration, formatScore, formatTokens, formatDelta } from '@/lib/collection/lake-view/format';
-import { agentFrameworkOf, isProxyVersion } from '@/lib/shared/session-format';
+import { agentFrameworkOf, FRAMEWORK_LABELS, isProxyVersion } from '@/lib/shared/session-format';
 import { NotesDialog } from './NotesDialog';
 import { toast } from 'sonner';
 
@@ -200,10 +200,13 @@ export function RunsTable({
                   const fw = r.framework ?? '';
                   const agent = agentFrameworkOf(fw) ?? fw;
                   const proxy = r.recording === 'capture' || fw.endsWith('-proxy') || isProxyVersion(r.ccVersion);
+                  // 显示名走 session-format 词表单点（此前裸显 claude-code 原始
+                  // 串）；配色保留本表 lake 视图自有色板（键 = agent 词表）
+                  const label = agent ? (FRAMEWORK_LABELS[agent] ?? agent) : '';
                   return (
                     <span className="inline-flex items-center gap-1">
                       <span className={`inline-block rounded px-1.5 py-0.5 text-xs ${agent ? (FRAMEWORK_BADGE[agent] ?? 'bg-neutral-100 text-neutral-700') : 'bg-neutral-100 text-neutral-400'}`}>
-                        {agent || '未知'}
+                        {label || '未知'}
                       </span>
                       {proxy && <span className="inline-block rounded px-1.5 py-0.5 text-xs bg-amber-100 text-amber-800">proxy</span>}
                       {r.ccVersion && <span className="ml-1 text-xs text-neutral-500">{r.ccVersion}</span>}

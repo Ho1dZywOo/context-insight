@@ -78,7 +78,7 @@ interface SkillDetailProps {
   }
   onNavigateToTurn?: (turnIndex: number) => void
   /** 跳转到 Audit 板块的 Skill 子 tab 并预选该 {name, kind} 进行对账。按行 eventType+isSubagent 路由 kind。 */
-  onAuditSkill?: (skillName: string, kind: "skill" | "agent" | "root" | "llm-root") => void
+  onAuditSkill?: (skillName: string, kind: "skill" | "agent" | "root") => void
   framework?: string
   /** run 工作台挂载时的成员视图端点覆盖（缺省 session 端点）。 */
   urlFor?: ViewUrlFor
@@ -178,7 +178,8 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
     return () => { active = false; if (timer) clearTimeout(timer) }
   }
   // 主 agent 编排 显示名：真名（扫盘）→ 回退合成名。对账按钮传此 name（与 SkillAuditTab target 一致）。
-  // 全文 fetch 仍用 MAIN_AGENT_WORKFLOW_NAME sentinel（skill-content 路由按 sentinel 识别走 STATE.md 恢复）。
+  // 声明预览走下方 LLM 提取行（llm-workflow-extract job 轮询）——skill-content 的
+  // MAIN_AGENT_WORKFLOW_NAME sentinel 已退役（返回空），确定性同步预览不再使用。
   const workflowName = mainAgentWorkflowName || MAIN_AGENT_WORKFLOW_NAME
 
   function toggleExpanded(skillName: string) {
@@ -350,24 +351,10 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                   <TableCell className="text-xs tabular-nums font-medium">{formatTokens(mainAgentWorkflowStats?.totalTokens ?? 0)}</TableCell>
                   <TableCell className="text-right w-20">
                     <span
-                      role="button"
-                      title="查看主 agent 编排 组合声明全文（规程层编排规程 + 计划层任务计划）"
-                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-semibold border transition-colors ${
-                        sc.content.has(MAIN_AGENT_WORKFLOW_NAME) || sc.error.has(MAIN_AGENT_WORKFLOW_NAME)
-                          ? "border-amber-500 bg-amber-500/25 text-amber-700 dark:text-amber-200"
-                          : "border-amber-500/50 bg-amber-500/15 text-amber-600 dark:text-amber-300 hover:bg-amber-500/25 hover:border-amber-500"
-                      }`}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (sc.content.has(MAIN_AGENT_WORKFLOW_NAME) || sc.error.has(MAIN_AGENT_WORKFLOW_NAME)) {
-                          sc.clear(MAIN_AGENT_WORKFLOW_NAME)
-                        } else if (!sc.loading.has(MAIN_AGENT_WORKFLOW_NAME)) {
-                          sc.fetchOne(MAIN_AGENT_WORKFLOW_NAME)
-                        }
-                      }}
+                      className="text-[10px] text-muted-foreground/80"
+                      title="声明全文预览在下方 workflow（LLM提取）行——root 对账的声明由 LLM 选择式提取产出"
                     >
-                      <BookOpenIcon className="size-3" />
-                      {sc.loading.has(MAIN_AGENT_WORKFLOW_NAME) ? "加载中…" : (sc.content.has(MAIN_AGENT_WORKFLOW_NAME) || sc.error.has(MAIN_AGENT_WORKFLOW_NAME)) ? "收起" : "全文"}
+                      声明预览 ↘
                     </span>
                   </TableCell>
                   <TableCell className="text-xs">
@@ -375,63 +362,13 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                       size="sm"
                       variant="ghost"
                       className="text-xs h-6 px-2"
-                      title="跳转到 Audit · Skill 子 tab 用 --kind root 对账主 agent 编排（组合声明 = 规程层 + 计划层）"
+                      title="跳转到 Audit · Skill 子 tab 用 --kind root 对账主 agent 编排（组合声明 = LLM 提取的规程层 + 计划层）"
                       onClick={(e) => { e.stopPropagation(); onAuditSkill(workflowName, "root") }}
                     >
                       root ↗
                     </Button>
                   </TableCell>
                 </TableRow>,
-                (sc.content.has(MAIN_AGENT_WORKFLOW_NAME) || sc.error.has(MAIN_AGENT_WORKFLOW_NAME)) && (
-                  <TableRow key="__main_agent_workflow__-content">
-                    <TableCell colSpan={14} className="p-3 bg-amber-500/5 border-x border-amber-400/30">
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
-                            <BookOpenIcon className="size-3.5" />
-                            workflow 声明
-                            {sc.content.get(MAIN_AGENT_WORKFLOW_NAME)?.source && (
-                              <span className="text-muted-foreground">
-                                （来源：{sc.content.get(MAIN_AGENT_WORKFLOW_NAME)?.source}，{sc.content.get(MAIN_AGENT_WORKFLOW_NAME)?.length} 字符）
-                              </span>
-                            )}
-                          </span>
-                          <span className="flex items-center gap-3">
-                            {sc.content.get(MAIN_AGENT_WORKFLOW_NAME)?.content && (
-                              <span
-                                role="button"
-                                className="text-xs font-medium text-blue-500 cursor-pointer hover:underline"
-                                onClick={(e) => { e.stopPropagation(); sc.download(MAIN_AGENT_WORKFLOW_NAME) }}
-                              >
-                                Download
-                              </span>
-                            )}
-                            <span
-                              role="button"
-                              title="收起"
-                              className="text-muted-foreground cursor-pointer hover:text-foreground text-sm leading-none px-1"
-                              onClick={(e) => { e.stopPropagation(); sc.clear(MAIN_AGENT_WORKFLOW_NAME) }}
-                            >
-                              ×
-                            </span>
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-muted-foreground leading-snug">
-                          主 agent 的 workflow 组合声明：规程层（skill resources / SKILL.md body / turn0 注入）+ 计划层（STATE.md 等计划文件的 Read）分层拼接。即 --kind root 对账所用的声明（同时审编排纪律遵循度 + 任务完成度）。
-                        </div>
-                        {sc.error.get(MAIN_AGENT_WORKFLOW_NAME) ? (
-                          <div className="text-xs text-destructive">Error: {sc.error.get(MAIN_AGENT_WORKFLOW_NAME)}</div>
-                        ) : sc.content.get(MAIN_AGENT_WORKFLOW_NAME)?.content ? (
-                          <pre className="max-h-[28rem] overflow-auto rounded border bg-background p-2 text-xs font-mono whitespace-pre-wrap break-words">
-                            {sc.content.get(MAIN_AGENT_WORKFLOW_NAME)?.content}
-                          </pre>
-                        ) : (
-                          <div className="text-xs text-muted-foreground">此 session 无可恢复的 workflow 声明（规程层与计划层皆无，跳过 root 目标）。</div>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ),
               ]}
               {onAuditSkill && [
                 <TableRow key="__llm_workflow__" className="bg-amber-500/5">
@@ -477,7 +414,7 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                     ) : (
                       <span
                         role="button"
-                        title={llmError ? (llmError + "（点击重试）") : "点击用 LLM（claude CLI）从 session 选择提取组合声明（规程层 + 计划层，泛化路径，不依赖领域插件）"}
+                        title={llmError ? (llmError + "（点击重试）") : "点击用 LLM（claude CLI）从 session 候选中选择提取组合声明（规程层 + 计划层）——root 对账即用此声明（正文取 DB 原文不可篡改）"}
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-semibold border border-amber-500/50 bg-amber-500/15 text-amber-600 dark:text-amber-300 hover:bg-amber-500/25 hover:border-amber-500 cursor-pointer"
                         onClick={(e) => { e.stopPropagation(); fetchLlmWorkflow(!!llmError) }}
                       >
@@ -490,10 +427,10 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                       size="sm"
                       variant="ghost"
                       className="text-xs h-6 px-2"
-                      title="跳转到 Audit · Skill 子 tab 用 --kind root + LLM 提取组合声明（泛化路径：LLM 从候选中选择，与确定性/插件提取对比）"
-                      onClick={(e) => { e.stopPropagation(); onAuditSkill(`${workflowName}（LLM）`, "llm-root") }}
+                      title="跳转到 Audit · Skill 子 tab 用 --kind root 对账主 agent 编排（root 即 LLM 提取的组合声明：规程层 + 计划层）"
+                      onClick={(e) => { e.stopPropagation(); onAuditSkill(workflowName, "root") }}
                     >
-                      llm-root ↗
+                      root ↗
                     </Button>
                   </TableCell>
                 </TableRow>,
@@ -694,7 +631,7 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                               {sa.skillName} · SKILL.md
                               {skillContentData?.source && (
                                 <span className="text-muted-foreground">
-                                  （来源：{skillContentData.source === "skill-tool" ? "Skill 工具注入" : skillContentData.source === "shell" ? "Shell 读取" : "Read 读取"}，{skillContentData.length} 字符
+                                  （来源：{skillContentData.source === "skill-tool" ? "Skill 工具注入" : skillContentData.source === "command" ? "命令注入" : skillContentData.source === "shell" ? "Shell 读取" : "Read 读取"}，{skillContentData.length} 字符
                                   {skillContentData.source === "read"
                                     ? skillContentData.fullRead
                                       ? "，判定全文·无 offset/limit"

@@ -8,15 +8,12 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { selectSkillContent, type SkillToolCall } from '@/lib/skill-content';
-import { recoverCombinedWorkflowDeclaration, MAIN_AGENT_WORKFLOW_NAME } from '@/lib/sift-audit';
-import { ensureWorkflowExtractPluginLoaded } from '@/lib/workflow-extract-config';
+import { selectSkillContent } from '@/lib/skill-content';
+import { MAIN_AGENT_WORKFLOW_NAME } from '@/lib/sift-audit';
 import { withRouteLog } from '@/lib/api-route';
-import { SHELL_TOOL_NAMES } from '@/lib/tool-conventions';
+import { collectSkillContentCandidates } from '@/lib/observe/collectors/skill-content';
 
 export const GET = withRouteLog('observe/session/skill-content', async (request: NextRequest) => {
-  // 激活部署根的 workflow-extract-plugins.json（server-only fs 加载；幂等）
-  ensureWorkflowExtractPluginLoaded();
   const { searchParams } = request.nextUrl;
   const taskId = searchParams.get('taskId');
   const framework = searchParams.get('framework');
@@ -46,52 +43,19 @@ export const GET = withRouteLog('observe/session/skill-content', async (request:
     );
   }
 
-  // 主 agent 编排：root 对账的组合声明（规程层 skill resources/SKILL.md body/turn0 +
-  // 计划层 STATE.md 等计划文件 Read 分层拼接），从 sentinel 定位 → recoverCombinedWorkflowDeclaration 恢复。
+  // 主 agent 编排 sentinel（MAIN_AGENT_WORKFLOW_NAME）：声明本体在对账时由 LLM
+  // 选择式提取产出（llm-workflow-extract），此处不再同步恢复确定性预览（已退役）。
+  // 诚实返回空——前端（SkillDetail 的 LLM 提取行）走 llm-workflow-extract job 端点预览。
   if (skillName === MAIN_AGENT_WORKFLOW_NAME) {
-    const decl = await recoverCombinedWorkflowDeclaration(session.id, prisma);
-    if (!decl) {
-      return NextResponse.json(
-        { skillName, content: null, source: null, length: 0 },
-        { status: 200 },
-      );
-    }
-    return NextResponse.json({
-      skillName,
-      content: decl.content,
-      source: decl.source,
-      length: decl.content.length,
-    });
+    return NextResponse.json(
+      { skillName, content: null, source: null, length: 0 },
+      { status: 200 },
+    );
   }
 
-  const toolCalls = await prisma.toolCall.findMany({
-    where: {
-      turn: { sessionId: session.id },
-      OR: [
-        { isSkillRelated: true },
-        { AND: [{ toolName: 'Read' }, { argsJson: { contains: 'SKILL.md' } }] },
-        { AND: [{ toolName: 'read' }, { argsJson: { contains: 'SKILL.md' } }] },
-        // shell 读类命令（exec_command cat …/SKILL.md——codex 主通道）；
-        // 摄取侧已给源工具行打 isSkillRelated，此分支兜旧数据与大小写变体
-        { AND: [{ toolName: { in: [...SHELL_TOOL_NAMES, 'Bash', 'Shell', 'Exec'] } }, { argsJson: { contains: 'SKILL.md' } }] },
-      ],
-    },
-    select: {
-      toolName: true,
-      argsJson: true,
-      resultJson: true,
-      startedAt: true,
-    },
-  });
+  const { toolCalls, turns } = await collectSkillContentCandidates(prisma, session.id);
 
-  const ops: SkillToolCall[] = toolCalls.map(tc => ({
-    toolName: tc.toolName,
-    argsJson: tc.argsJson,
-    resultJson: tc.resultJson,
-    startedAt: tc.startedAt ?? null,
-  }));
-
-  const result = selectSkillContent(ops, skillName);
+  const result = selectSkillContent(toolCalls, skillName, turns);
 
   if (!result) {
     return NextResponse.json(

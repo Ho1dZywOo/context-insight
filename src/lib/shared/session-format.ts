@@ -6,6 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
+import { BRAND_NAME, isBrandSourceType } from '../branding';
+
 /** DB 侧 proxy 判定的唯一形式：Session.version 带 -proxy 后缀（统一分类器
  * proxy-classify.ts 导入时写入）。UI 徽标 / API 门禁一律用本谓词，不再各写
  * endsWith 字符串比较。 */
@@ -34,4 +36,37 @@ export function isClaudeFormatSession(
 export function agentFrameworkOf(framework: string | null | undefined): string | null {
   if (framework == null) return null;
   return framework.endsWith('-proxy') ? framework.slice(0, -'-proxy'.length) : framework;
+}
+
+/** framework 显示名词表单点：所有「framework → 给用户看的名字」一律经
+ *  frameworkDisplayName——组件内联裸等值是两度现场缺陷源（codex 曾漏分支、
+ *  -proxy 变体全分支失配致导入列表 type 列恒「—」）。此前 AssetList /
+ *  OverviewPanels / LakeSessionTable 各持一份副本且已漂移（label 不一致、
+ *  OverviewPanels 缺 cannbot/dsh 分支）。新框架接入 = 词表加一行。 */
+export const FRAMEWORK_LABELS: Readonly<Record<string, string>> = {
+  opencode: 'OpenCode',
+  'claude-code': 'Claude Code',
+  cannbot: 'CANNBot',
+  dsh: 'DSH',
+  codex: 'Codex',
+};
+
+/** type 徽标配色（LakeSessionTable 徽标场景；variant 值域同 Badge 组件词表） */
+export const FRAMEWORK_BADGE_VARIANTS: Readonly<Record<string, 'blue' | 'green' | 'orange' | 'purple' | 'slate'>> = {
+  opencode: 'blue',
+  cannbot: 'green',
+  'claude-code': 'orange',
+  codex: 'purple',
+  dsh: 'slate',
+};
+
+/** framework → 显示名：agent 归属经 agentFrameworkOf 剥 -proxy 后缀；品牌
+ *  sourceType 值显示品牌名；未知框架诚实回落剥后缀原始串（不吞不编）；
+ *  null → null（占位符由消费方决定）。 */
+export function frameworkDisplayName(framework: string | null | undefined): string | null {
+  if (framework == null) return null;
+  if (isBrandSourceType(framework)) return BRAND_NAME;
+  const agent = agentFrameworkOf(framework);
+  if (agent == null) return null;
+  return FRAMEWORK_LABELS[agent] ?? agent;
 }

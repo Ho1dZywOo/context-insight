@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import {
   collectWorkflowExtractCandidates,
+  hasWorkflowExtractCandidates,
   buildCandidatePrompt,
   parseCandidateSelection,
   llmExtractWorkflowDeclaration,
@@ -175,7 +176,7 @@ describe("collectWorkflowExtractCandidates（确定性收集，零领域启发�
     expect(statePlan.partialRead).toBe(false); // 取的是完整那份（首次实质读取）
   });
 
-  it("S3：system turn0（opencode ≥1.17 注入，带 Base directory 尾部）→ 规程候选 + 剥尾部", async () => {
+  it("S3：system turn0（opencode ≥1.17 注入，带 Base directory 中部标记）→ 注入通道真名收录 + 剥标记", async () => {
     const s3Turn0 = TURN0_BODY + "\n\nBase directory for this skill: /home/hwd/x/.opencode/skills/ops-registry-invoke-glacier\nRelative paths in this skill (e.g., scripts/) are relative to this base directory.\n\nsoftplus_v2_grad";
     const prisma = {
       skillEvent: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -189,9 +190,10 @@ describe("collectWorkflowExtractCandidates（确定性收集，零领域启发�
       toolCall: { findMany: vi.fn().mockResolvedValue([]) },
     } as unknown as PrismaClient;
     const c = await collectWorkflowExtractCandidates("ses_1", prisma);
+    // 注入通道（skillMdReadsOfTurn 真名收录）优先；turn0 泛化兜底不重复收
     expect(c.regulation).toHaveLength(1);
-    expect(c.regulation[0].source).toBe("turn0 (注入编排规程)");
-    expect(c.regulation[0].content).toBe(TURN0_BODY + "\n\nsoftplus_v2_grad"); // 尾部剥、用户请求留
+    expect(c.regulation[0].source).toBe("ops-registry-invoke-glacier (SKILL.md)");
+    expect(c.regulation[0].content).toBe(TURN0_BODY + "\n\nsoftplus_v2_grad"); // 标记剥、用户请求留
     expect(c.regulation[0].content).not.toContain("Base directory for this skill");
   });
 
@@ -204,6 +206,46 @@ describe("collectWorkflowExtractCandidates（确定性收集，零领域启发�
     const c = await collectWorkflowExtractCandidates("ses_1", prisma);
     expect(c.regulation).toHaveLength(0);
     expect(c.plan).toHaveLength(0);
+  });
+
+  it("C 形：斜杠命令 system 注入轮（turnIndex 1）→ 规程候选带 SKILL.md 正文（前言剥除）", async () => {
+    // 真实形态（day0-inference 会话）：turn0 = 命令壳（user），turn1 = 注入全文（system）
+    const commandText = "<command-message>day0-inference</command-message>\n<command-name>/day0-inference</command-name>\n" + "day0 推理适配验证：".repeat(15);
+    const body = "# Day0 Inference\n\n## 编排规程\n\n- [ ] 建日志\n- [ ] 派发\n- [ ] 验收\n" + "z".repeat(150);
+    const turns = [
+      { id: "t0", turnIndex: 0, role: "user", content: commandText, agentName: null },
+      { id: "t1", turnIndex: 1, role: "system", content: `Base directory for this skill: /data1/cls/ds/vllm-ascend/.claude/skills/day0-inference\n\n${body}`, agentName: null },
+    ];
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue(null) },
+      turn: { findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue(turns) },
+      toolCall: { findMany: vi.fn().mockResolvedValue([]) },
+    } as unknown as PrismaClient;
+    const c = await collectWorkflowExtractCandidates("ses_c", prisma);
+    const sources = c.regulation.map((r) => r.source);
+    // 注入正文进候选（此前只认 turnIndex===0 → 正文缺席，仅剩命令壳）
+    expect(sources).toContain("day0-inference (SKILL.md)");
+    const bodyCand = c.regulation.find((r) => r.source === "day0-inference (SKILL.md)")!;
+    expect(bodyCand.content).not.toContain("Base directory for this skill");
+    expect(bodyCand.content).toContain("# Day0 Inference");
+    expect(bodyCand.partialRead).toBe(false);
+    // 命令壳作为 turn0 引导候选保留（语境）
+    expect(sources).toContain("turn0 (注入编排规程)");
+  });
+});
+
+describe("hasWorkflowExtractCandidates（root 可对账探测：候选非空，零 LLM 调用）", () => {
+  it("S1（turn0 规程 + STATE.md 计划）→ true", async () => {
+    await expect(hasWorkflowExtractCandidates("ses_1", makeS1Prisma())).resolves.toBe(true);
+  });
+
+  it("无任何候选 → false", async () => {
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue(null) },
+      turn: { findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]) },
+      toolCall: { findMany: vi.fn().mockResolvedValue([]) },
+    } as unknown as PrismaClient;
+    await expect(hasWorkflowExtractCandidates("ses_1", prisma)).resolves.toBe(false);
   });
 });
 
