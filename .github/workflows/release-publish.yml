@@ -63,6 +63,11 @@ jobs:
         with:
           node-version: "22.14.0"
 
+      - name: Upgrade npm for Trusted Publishing
+        run: |
+          npm install --global npm@11.21.3
+          npm --version
+
       - name: Fetch main
         run: git fetch origin main:refs/remotes/origin/main --force
 
@@ -110,6 +115,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
+
+      - name: Upgrade npm for Trusted Publishing
+        run: |
+          npm install --global npm@11.21.3
+          npm --version
 
       - name: Apply generated dev version
         if: inputs.dist_tag == 'dev'
@@ -185,6 +195,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
+
+      - name: Upgrade npm for Trusted Publishing
+        run: |
+          npm install --global npm@11.21.3
+          npm --version
 
       - name: Download release candidates
         uses: actions/download-artifact@v4
