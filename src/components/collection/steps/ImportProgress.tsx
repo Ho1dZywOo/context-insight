@@ -14,7 +14,7 @@
 // 展示项由向导编排层装饰好（label/框架徽标字段），本组件纯渲染。
 
 import { Badge } from "@/components/ui/badge";
-import { agentFrameworkOf, isProxyVersion } from "@/lib/shared/session-format";
+import { agentFrameworkOf, FRAMEWORK_LABELS, FRAMEWORK_BADGE_VARIANTS, isProxyVersion } from "@/lib/shared/session-format";
 import { LoaderIcon } from "lucide-react";
 
 /** 本地 bundle 导入 job 状态（POST 返回 jobId 后 1s 轮询） */
@@ -118,16 +118,16 @@ export function ImportProgress({ items, job }: ImportProgressProps) {
               <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
                 {s.kind === "session" && (
                   <>
-                    {/* 捕获行 framework 带 -proxy 后缀——剥后缀归一进白名单
-                        （同 ImportHistory），proxy 徽标仍走 version */}
+                    {/* 框架显示名/配色走 session-format 词表单点（-proxy 经谓词
+                        剥后缀），本文件不再持词表副本（此前与 LakeSessionTable
+                        已漂移：label 与 codex/dsh 配色不一致） */}
                     {(() => {
-                      const agentFw = agentFrameworkOf(s.framework ?? null);
-                      if (agentFw === "cannbot") return <Badge variant="green">CANNBot</Badge>;
-                      if (agentFw === "opencode") return <Badge variant="blue">OpenCode</Badge>;
-                      if (agentFw === "claude-code") return <Badge variant="orange">Claude</Badge>;
-                      if (agentFw === "dsh") return <Badge variant="purple">DSH</Badge>;
-                      if (agentFw === "codex") return <Badge variant="slate">Codex</Badge>;
-                      return null;
+                      const agent = agentFrameworkOf(s.framework ?? null);
+                      const label = agent != null ? FRAMEWORK_LABELS[agent] : undefined;
+                      const variant = agent != null ? FRAMEWORK_BADGE_VARIANTS[agent] : undefined;
+                      return label != null && variant != null ? (
+                        <Badge variant={variant}>{label}</Badge>
+                      ) : null;
                     })()}
                     {isProxyVersion(s.version ?? null) && <Badge variant="yellow">proxy</Badge>}
                   </>
