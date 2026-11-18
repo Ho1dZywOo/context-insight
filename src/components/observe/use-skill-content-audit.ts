@@ -11,7 +11,7 @@ import { sessionViewUrlFor, type ViewUrlFor } from "@/lib/observe/member-url"
 export interface SkillContentAuditItem {
   skillName: string
   hasContent: boolean
-  source: "skill-tool" | "read" | "shell" | null
+  source: "skill-tool" | "command" | "read" | "shell" | null
   length: number
   lines: number
   fullRead: boolean

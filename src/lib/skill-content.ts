@@ -58,6 +58,28 @@ export function stripSkillPreamble(content: string): string {
   return content;
 }
 
+/**
+ * 剥 skill 运行时注入尾部（S2 SKILL.md body 与 S3 turn0 注入共用）：
+ * skill 加载器在正文后追加的说明块——`Base directory for this skill:` 行、
+ * `Relative paths…` 引导行、`Note: file list is sampled.` 行、`<skill_files>` 文件
+ * 清单块（~900 字路径列表）。这些是框架注入的元数据不是 SKILL.md 指令，进对账
+ * 声明会产出垃圾 findings。
+ *
+ * 行级过滤保留其余内容：S3 turn0 尾部的用户请求（算子任务描述）与老形态
+ * （opencode ≤1.4.7，规程 + 用户请求同消息、无标记）语义对齐。
+ */
+export function stripSkillRuntimeTail(content: string): string {
+  const withoutFileList = content.replace(/<skill_files>[\s\S]*?<\/skill_files>\s*/g, "");
+  const lines = withoutFileList.split("\n").filter(
+    (l) =>
+      !l.startsWith("Base directory for this skill:") &&
+      !l.startsWith("Relative paths in this skill") &&
+      !l.startsWith("Note: file list is sampled."),
+  );
+  // 删行遗留的 3+ 连续换行收敛为段间空行（正常 markdown 无三连空行，无标记原文不变）
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
 function joinReadContent(resultJson: string): string {
   const m = parseReadLines(resultJson);
   const keys = [...m.keys()].sort((a, b) => a - b);
@@ -181,10 +203,11 @@ export function skillMdReadsOfToolCall(tc: SkillToolCall): SkillMdRead[] {
 
 /** 斜杠命令注入轮（claude-code v1 形态）：/skill 展开的全文快照由 adapter 从
  *  wire 的 user 行重分类为 system 轮入库（现场实证：5295af91 全文 19823 字符
- *  完好在库）。判定复用 isSkillInjectionText 指纹单点；正文经
- *  stripSkillPreamble 剥前言（技能名提取要求 Base directory 行，其余注入
- *  形态前言不可剥 → 不产出，宁缺毋假）。注入即调用时刻的权威全文，与
- *  skill-tool 信封同族。 */
+ *  完好在库）。判定复用 isSkillInjectionText 指纹单点；正文剥前言与运行时尾部：
+ *  stripSkillPreamble 剥行首 marker（C 形），stripSkillRuntimeTail 剥中部 marker 块
+ *  与 <skill_files> 尾部（S3 形，opencode ≥1.17 marker 在正文后）——与 collect 路
+ *  径同口径。技能名提取要求 Base directory 行，其余注入形态前言不可剥 →
+ *  不产出，宁缺毋假。注入即调用时刻的权威全文，与 skill-tool 信封同族。 */
 export interface SkillInjectionTurn {
   role: string;
   content: string | null;
@@ -196,7 +219,7 @@ export function skillMdReadsOfTurn(turn: SkillInjectionTurn): SkillMdRead[] {
   if (!isSkillInjectionText(turn.content)) return [];
   const skillName = skillNameOfInjectionText(turn.content);
   if (!skillName) return [];
-  const content = stripSkillPreamble(turn.content);
+  const content = stripSkillRuntimeTail(stripSkillPreamble(turn.content));
   if (content.length === 0) return [];
   return [{
     skillName,

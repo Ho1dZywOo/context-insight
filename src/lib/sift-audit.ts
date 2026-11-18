@@ -18,11 +18,13 @@ import { restoreShellReads, renderShellEntryText } from "@/lib/shell-restore";
 import { extractShellFileReads } from "@/lib/file-reads";
 // skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
 // client bundle 安全；Audit 对账与 Skills 面板共用同一恢复词表，通道扩展不再双头漂移。
-import { selectSkillContent } from "@/lib/skill-content";
+import { selectSkillContent, stripSkillRuntimeTail } from "@/lib/skill-content";
 import { collectSkillContentCandidates } from "@/lib/observe/collectors/skill-content";
 // dispatch-tools 是纯模块（唯一导入为 type-only，无 fs/db）——client bundle 安全；
 // 派发工具判定单点：task/agent/subagent/spawn_agent 及注册表未来形态自动纳入。
 import { dispatchSpecOf } from "@/lib/ingest/dispatch-tools";
+
+export { stripSkillRuntimeTail };
 
 /**
  * sift 对账桥接：从 insight 的 session 里恢复某 skill 的 SKILL.md 正文，
@@ -44,28 +46,6 @@ const SKILL_INVOKE_TOOLS = new Set(["skill", "skill/invoke", "skill/use"]);
 export function stripSkillContent(resultJson: string | null | undefined): string | null {
   const inner = unwrapSkillContent(resultJson);
   return inner !== null ? stripSkillRuntimeTail(inner) : null;
-}
-
-/**
- * 剥 skill 运行时注入尾部（S2 SKILL.md body 与 S3 turn0 注入共用）：
- * skill 加载器在正文后追加的说明块——`Base directory for this skill:` 行、
- * `Relative paths…` 引导行、`Note: file list is sampled.` 行、`<skill_files>` 文件
- * 清单块（~900 字路径列表）。这些是框架注入的元数据不是 SKILL.md 指令，进对账
- * 声明会产出垃圾 findings。
- *
- * 行级过滤保留其余内容：S3 turn0 尾部的用户请求（算子任务描述）与老形态
- * （opencode ≤1.4.7，规程 + 用户请求同消息、无标记）语义对齐。
- */
-export function stripSkillRuntimeTail(content: string): string {
-  const withoutFileList = content.replace(/<skill_files>[\s\S]*?<\/skill_files>\s*/g, "");
-  const lines = withoutFileList.split("\n").filter(
-    (l) =>
-      !l.startsWith("Base directory for this skill:") &&
-      !l.startsWith("Relative paths in this skill") &&
-      !l.startsWith("Note: file list is sampled."),
-  );
-  // 删行遗留的 3+ 连续换行收敛为段间空行（正常 markdown 无三连空行，无标记原文不变）
-  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
 }
 
 /**
