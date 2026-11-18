@@ -90,7 +90,7 @@ export interface PerfLaneStat {
   turns: TurnPerf[]
   /** 轮耗时合计：top-down 的“耗时”列口径，不再只算 LLM 响应时长。 */
   totalMs: number
-  /** LLM 响应时长合计：仅用于 TPS，不参与耗时排序/占比。 */
+  /** 逐轮 latencyMs 合计：仅用于 TPS。Claude/Codex 通常为 LLM 响应时长；opencode 原生消息墙钟可能含工具执行。 */
   llmMs: number
   totalTokens: number
   totalGenTokens: number

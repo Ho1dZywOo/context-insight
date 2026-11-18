@@ -402,6 +402,7 @@ describe('Run 详情 Context/Perf tab（ContextTracker run 泛化）', () => {
     const memberLaneSummary = perf!.querySelector('[data-lane-row="ses_mini_a"]');
     expect(memberLaneSummary?.textContent).toContain('4.0min');
     expect(memberLaneSummary?.textContent).toContain('66.7');
+    expect(memberLaneSummary?.querySelector('[title*="opencode 原生可能包含工具执行"]')).toBeTruthy();
     expect(subLane?.textContent).toContain('1.5min');
     expect(subLane?.textContent).toContain('50.0');
     expect(perfText).not.toContain('类型构成');

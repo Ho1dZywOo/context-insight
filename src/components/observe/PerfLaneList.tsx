@@ -154,7 +154,7 @@ export function PerfLaneList({ lanes, laneExecs, t0, onOpenTurn }: {
                       <span className="text-xs font-semibold tabular-nums">{fmtTok(lane.totalTokens)}</span>
                     </div>
                     <div className="hidden flex-col items-end leading-tight sm:flex">
-                      <span className="text-[10px] text-muted-foreground" title="生成 token ÷ LLM 响应耗时，不含工具等待">TPS</span>
+                      <span className="text-[10px] text-muted-foreground" title="TPS 按 latencyMs 计算：Claude/Codex 通常为 LLM 响应耗时，opencode 原生可能包含工具执行">TPS</span>
                       <span className="text-xs font-semibold tabular-nums">{lane.tps.toFixed(1)}</span>
                     </div>
                   </div>
