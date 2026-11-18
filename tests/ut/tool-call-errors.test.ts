@@ -117,6 +117,26 @@ describe('terminalErrorReasonOf: 终端错误原因行提取（尾部扫描 + �
     expect(terminalErrorReasonOf('sh: 1: foo: command not found')).toBe('sh: 1: foo: command not found');
   });
 
+  it('现场审计漏网形态：行中 FAIL / shell 经典错误行 / 探针 status JSON / 中断 / 中文错误行', () => {
+    expect(terminalErrorReasonOf('合规 8 项\n合计 8 项：PASS 7 / FAIL 1 / UNKNOWN 0')).toBe('合计 8 项：PASS 7 / FAIL 1 / UNKNOWN 0');
+    expect(terminalErrorReasonOf('cat tracker.md\ngrep: /path/x.md: No such file or directory')).toBe('grep: /path/x.md: No such file or directory');
+    expect(terminalErrorReasonOf('/bin/bash: line 1: run.py: Permission denied')).toBe('/bin/bash: line 1: run.py: Permission denied');
+    expect(terminalErrorReasonOf('{"status": "UNKNOWN", "reason": "NO_FREE_DEVICES", "detail": "available=0 required=1"}')).toBe('{"status": "UNKNOWN", "reason": "NO_FREE_DEVICES", "detail": "available=0 required=1"}');
+    expect(terminalErrorReasonOf('运行 16.0s\naborted by user after 16.0s')).toBe('aborted by user after 16.0s');
+    expect(terminalErrorReasonOf('检查完成\n校验失败：契约字段缺失')).toBe('校验失败：契约字段缺失');
+    // could not / cannot（无 error 关键词的 MCP 加载失败）
+    expect(terminalErrorReasonOf('启动中\ncodebase-memory-mcp: could not load saved runtime settings')).toBe('codebase-memory-mcp: could not load saved runtime settings');
+    // 中文 usage 错误（argparse 风格 exit 2）
+    expect(terminalErrorReasonOf('写入模式必须给 --step / --set-env / --append-ledger 之一（只读稽核用 --check）')).toBe('写入模式必须给 --step / --set-env / --append-ledger 之一（只读稽核用 --check）');
+    // AVAILABLE/RELEASED 状态不误伤（成功探针回显）
+    expect(terminalErrorReasonOf('{"status": "RELEASED", "checks": {"leader": "GONE"}}\nRELEASED')).toBeNull();
+    // 中文否定行排除
+    expect(terminalErrorReasonOf('检查通过：无错误')).toBeNull();
+    // 计数清零总结行不是原因（FAIL 0 = 通过态，现场曾误提取）
+    expect(terminalErrorReasonOf('探针跑完\n图谱健康探针：OK（8 项检查，FAIL 0 / UNKNOWN 0 / WARN 0）')).toBeNull();
+    expect(terminalErrorReasonOf('pytest summary\n0 failed, 10 passed')).toBeNull();
+  });
+
   it('干净输出 / 否定行 → null（宁缺毋假，不编造）', () => {
     expect(terminalErrorReasonOf('README.md\nsrc\n')).toBeNull();
     expect(terminalErrorReasonOf('all checks passed: no errors found')).toBeNull();

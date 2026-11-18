@@ -105,11 +105,19 @@ function truncateEvidence(text: string, max: number = EVIDENCE_MAX): string {
  *  强前缀 + 错误关键词行才算（`no error` 类否定行排除），无特征行 → null
  *  （不编造，证据退回纯退出码）。终端语义框架中立：codex 卷回与 claude
  *  兜底证据、digest 速览共用本单点。 */
-const REASON_NEGATIVE_RE = /no (errors?|issues?|problems?|failures?|exceptions?)/i;
+// 否定守卫：no errors / 无错误；计数清零总结行不是原因（「FAIL 0 / UNKNOWN 0」
+// 是通过态——\bfail\b 命中 FAIL 0 的计数，现场曾把「健康探针 OK（FAIL 0）」
+// 成功总结行当原因提取）
+const REASON_NEGATIVE_RE = /no (errors?|issues?|problems?|failures?|exceptions?)|(?:无|没有)(?:错误|失败|异常)|\bFAIL(?:ED|S)?\s*[：:]?\s*0\b|\b0\s*(?:failed|failures?|errors?)\b|失败\s*[：:]?\s*0|错误\s*[：:]?\s*0/i;
 const REASON_STRONG_RE = /^(?:make: \*\*\*|npm ERR!|Traceback |fatal:|panic:|Assertion |Segmentation fault|core dumped|Killed|✕|✗|FAIL(?:ED)?\b|\d+ (?:failed|error)s?\b)/i;
-// CamelCase 异常类（ValueError:/TypeError:…）词内无边界，\b 挡不住——单列模式；
-// command not found 恒带 sh:/bash: 前缀，用包含式而非行首锚定
-const REASON_KEYWORD_RE = /\b(?:error|fatal|failed|failure|exception|panic|assertion|segfault|segmentation fault|command not found)\b|[A-Za-z]{0,24}(?:Error|Exception)\s*:/i;
+// 现场全量审计（01a1e584，77 条纯退出码行）后的保守增量：
+// - FAIL 在行中而非行首（探针总结行「PASS 7 / FAIL 1」）→ \bfail\b
+// - shell 经典错误行不含 error 关键词：No such file or directory / Permission denied
+// - 探针 status JSON：非 OK 状态即原因（reason 字段），AVAILABLE/RELEASED 不误伤
+// - aborted / invalid（无效参数、用户中断）
+// - 中文错误行（现场中文重度）：失败|错误|异常
+// CamelCase 异常类（ValueError:/TypeError:…）词内无边界，\b 挡不住——单列模式
+const REASON_KEYWORD_RE = /\b(?:error|fatal|fail|failed|failure|exception|panic|assertion|segfault|segmentation fault|command not found|no such file or directory|permission denied|invalid|aborted|could not|cannot|can't|unable to)\b|"status":\s*"(?:UNKNOWN|ERROR|FAILED|BUSY)"|[A-Za-z]{0,24}(?:Error|Exception)\s*:|失败|错误|异常|必须(?:给|提供|指定|设置|包含)|缺少(?:参数|字段)|参数(?:错误|缺失|不合法)/i;
 
 export function terminalErrorReasonOf(output: string | null | undefined): string | null {
   if (!output) return null;
