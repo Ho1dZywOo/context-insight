@@ -219,8 +219,8 @@ jobs:
             echo "NPM_TOKEN is not configured in the npm-release environment" >&2
             exit 1
           fi
-          npm publish "release-artifacts/context-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
-          npm publish "release-artifacts/cannbot-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
+          npm publish "./release-artifacts/context-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
+          npm publish "./release-artifacts/cannbot-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
 
       - name: Verify packages from selected dist-tag
         run: node scripts/release/verify-registry.mjs --tag "${{ inputs.dist_tag }}" --version "${{ needs.preflight.outputs.version }}"
