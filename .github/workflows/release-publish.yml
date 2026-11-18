@@ -36,6 +36,9 @@ on:
 permissions:
   contents: read
 
+env:
+  NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"
+
 concurrency:
   group: npm-release
   cancel-in-progress: false
@@ -59,7 +62,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
-          registry-url: "https://registry.npmjs.org/"
 
       - name: Fetch main
         run: git fetch origin main:refs/remotes/origin/main --force
@@ -108,7 +110,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
-          registry-url: "https://registry.npmjs.org/"
 
       - name: Apply generated dev version
         if: inputs.dist_tag == 'dev'
@@ -173,7 +174,6 @@ jobs:
       id-token: write
     env:
       NEXT_TELEMETRY_DISABLED: "1"
-      NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -185,7 +185,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
-          registry-url: "https://registry.npmjs.org/"
 
       - name: Download release candidates
         uses: actions/download-artifact@v4
