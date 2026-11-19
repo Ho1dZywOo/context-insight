@@ -325,7 +325,7 @@ export function PerfLaneList({ lanes, laneExecs, t0, onOpenTurn }: {
                                 <span className="w-[72px] shrink-0 text-center text-amber-600 dark:text-amber-500">{fmtMs(inactiveMs)}</span>
                                 <span className="min-w-0 flex-1 truncate text-right text-muted-foreground">
                                   {fmtTok(exec.tokens)} tok · LLM {exec.llmCallCount} · 工具 {exec.toolCallCount}
-                                  {exec.toolCallErrorCount > 0 ? ` · 错 ${exec.toolCallErrorCount}` : ""}
+                                  {exec.toolCallErrorCount > 0 ? ` · 执行出错 ${exec.toolCallErrorCount} 次` : ""}
                                 </span>
                               </div>
                             </div>

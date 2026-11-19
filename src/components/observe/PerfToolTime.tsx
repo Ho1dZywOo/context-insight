@@ -180,7 +180,7 @@ export function PerfToolTime({
                 const errRate = t.calls > 0 ? t.errors / t.calls : 0;
                 const nameTitle = [
                   `${t.toolName}${t.isDispatch ? "（派发——窗口为子代理整段执行，另计不入 Σ 工具执行）" : t.isSkillRelated ? "（技能加载/调用——提示词注入类元调用，耗时不代表工具执行）" : ""}`,
-                  `${t.calls} 次 · 错误 ${t.errors}${t.errors > 0 ? `（${Math.round(errRate * 100)}%）` : ""}`,
+                  `共执行 ${t.calls} 次 · 执行出错 ${t.errors} 次${t.errors > 0 ? `（${Math.round(errRate * 100)}%）` : ""}`,
                   `Σ ${fmtMs(t.totalMs)} · 均值 ${fmtMs(t.avgMs)} · p50 ${fmtMs(t.p50Ms)} · p95 ${fmtMs(t.p95Ms)} · 最慢 ${fmtMs(t.maxMs)}`,
                   ...(t.timedCalls > 0 ? [] : ["无计时（源缺时间且无 wire）"]),
                   ...(t.errorTypes.length > 0 ? [`错误类型：${t.errorTypes.map(e => `${e.type}×${e.count}`).join(" · ")}`] : []),
@@ -222,8 +222,8 @@ export function PerfToolTime({
                             </span>
                           )}
                           {t.errors > 0 && (
-                            <span className="shrink-0 rounded-full bg-red-500/10 px-1.5 py-px text-[10px] font-medium leading-4 text-red-600" title={`错误 ${t.errors}（${Math.round(errRate * 100)}%）`}>
-                              错 {t.errors}
+                            <span className="shrink-0 rounded-full bg-red-500/10 px-1.5 py-px text-[10px] font-medium leading-4 text-red-600" title={`执行出错 ${t.errors} 次（占 ${Math.round(errRate * 100)}%）`}>
+                              执行出错 {t.errors} 次
                             </span>
                           )}
                           <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
@@ -323,7 +323,7 @@ export function PerfToolTime({
                       )}
                       {selectedTool.errors > 0 && (
                         <span className="shrink-0 rounded-full bg-red-500/10 px-1.5 py-px text-[10px] font-medium leading-4 text-red-600">
-                          错 {selectedTool.errors}
+                          执行出错 {selectedTool.errors} 次
                         </span>
                       )}
                     </div>
@@ -364,8 +364,8 @@ export function PerfToolTime({
                               <span className="w-[128px] shrink-0 truncate font-medium" title={c.taskId}>
                                 {c.label}
                               </span>
-                              <span className={cn("w-[80px] shrink-0", c.errors > 0 ? "text-red-600" : "text-muted-foreground")}>
-                                {`${c.calls} 次${c.errors > 0 ? ` · 错 ${c.errors}` : ""}`}
+                              <span className={cn("w-[168px] shrink-0", c.errors > 0 ? "text-red-600" : "text-muted-foreground")}>
+                                {`${c.calls} 次${c.errors > 0 ? ` · 执行出错 ${c.errors} 次` : ""}`}
                               </span>
                               <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
                                 <div
@@ -424,7 +424,7 @@ export function PerfToolTime({
                                       )}
                                       <span className="w-[96px] shrink-0">{fmtTurnTs(e.ts)}</span>
                                       {e.calls > 1 && <span className="shrink-0">×{e.calls}</span>}
-                                      {e.errors > 0 && <span className="shrink-0 text-red-600">错 {e.errors}</span>}
+                                      {e.errors > 0 && <span className="shrink-0 text-red-600">执行出错 {e.errors} 次</span>}
                                       <span className="ml-auto shrink-0 font-semibold text-foreground/80">
                                         {e.totalMs > 0 ? fmtMs(e.totalMs) : "无计时"}
                                       </span>
