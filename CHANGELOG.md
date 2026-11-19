@@ -2,7 +2,7 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [1.0.6] - 2026-11-19
 
 ### Changed
 - 【workflow 审计声明提取整体切换 LLM 选择式路】root 对账（run 级 Audit Workflow 域 + 单会话 audit-skillsift）的编排组合声明此前由确定性插件路恢复（recoverCombinedWorkflowDeclaration + workflow-extract-plugins 领域启发），非 ops 命名/结构的会话取不到声明即 404。现声明提取唯一使用路切为 LLM 选择式（llm-workflow-extract 单点）：候选从会话确定性收集（规程层：skill 注入/工具读取/turn0 引导；计划层：.md/.txt 计划文件首次实质读取）→ claude CLI 从候选中选定两层（LLM 只选不抄——正文一律 DB 原文，机械归一化 + 与确定性路共享同一装配函数 assembleCombinedDeclaration，「提取拼接可以、篡改不可以」by construction）；CLI 基础设施失败 502 带具体原因、无候选/选择无效 404。确定性提取链（recover 族 + 插件体系）代码保留休眠不删（库内可回退/对照，既有测试保持绿）。配套：探测端点 main-agent-workflow 的 available 改为「候选收集非空」（零 LLM 廉价探测，毫秒级；source 在 LLM 选择前不可知、置 null）；skill-content 的 sentinel 确定性同步预览退役（声明预览统一走 LLM 提取行）；AuditKind 收敛为 skill|agent|root——root 即 LLM 提取，退役前别名 llm-root 服务端兼容收敛不再双轨。候选收集补 C 形缺口：斜杠命令注入正文（system 轮、无任何工具调用行）经 skillMdReadsOfTurn 轮级通道进规程候选（现场 day0-inference：19823 字注入体此前只收进 373 字命令壳、正文缺席，现真名收录并剥运行时标记；S3 形态注入体由该通道优先收录，turn0 泛化兜底仅对非注入轮生效不再双份）；claude CLI 缺省路径改 PATH 解析（CLAUDE_CLI_PATH 显式覆写——现场 /usr/local/bin/claude 不存在恒 ENOENT，PATH 解析与 sift 自带 LLM 同环境）。评分子系统（scoring D1.goalCoverage 的 workflowScope）为非审计链消费面，仍用确定性恢复、口径不变。
