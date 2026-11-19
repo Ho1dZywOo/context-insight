@@ -232,6 +232,192 @@ describe("collectWorkflowExtractCandidates（确定性收集，零领域启发�
     // 命令壳作为 turn0 引导候选保留（语境）
     expect(sources).toContain("turn0 (注入编排规程)");
   });
+
+  it("proxy 裸 `N\\t` 行号 Read（claude-code-proxy）→ 计划候选恢复正文（剥行号）", async () => {
+    // 真实 day0 会话形态：extractFileContent 此前只认 <content> 信封 → proxy 会话
+    // Read 型候选全灭，tracker.md（读 18 次）零快照、LLM 只能从 Write 产物里选
+    const TRACKER_BODY = "# Day0 流程跟踪单\n\n## Stage 1 Golden 基线\n\n| 步骤 | 状态 |\n|---|---|\n| S1.0 立项 | 已完成 |\n| S1.2 设计 | 进行中 |\n" + "t".repeat(200);
+    const bareTc = {
+      id: "tc-tracker",
+      turnId: "t1",
+      toolName: "Read",
+      argsJson: '{"file_path":"/data1/cls/.day0/run1/tracker.md"}',
+      resultJson: TRACKER_BODY.split("\n").map((l, i) => `${i + 1}\t${l}`).join("\n"),
+    };
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue(null) },
+      turn: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([
+          { id: "t0", turnIndex: 0, role: "user", content: "短任务", agentName: null },
+          { id: "t1", turnIndex: 1, role: "assistant", content: "读跟踪单", agentName: "build" },
+        ]),
+      },
+      toolCall: {
+        findMany: vi.fn().mockImplementation(async (args: { where?: { turnId?: unknown; turn?: unknown; id?: { in?: string[] } } }) => {
+          const w = args?.where ?? {};
+          if (w.id) return [bareTc].filter((r) => w.id!.in?.includes(r.id)).map((r) => ({ id: r.id, resultJson: r.resultJson }));
+          if (w.turnId) return [bareTc];
+          if (w.turn) return [bareTc];
+          return [];
+        }),
+      },
+    } as unknown as PrismaClient;
+    const c = await collectWorkflowExtractCandidates("ses_proxy", prisma);
+    expect(c.plan.map((p) => p.source)).toContain("tracker.md");
+    const tracker = c.plan.find((p) => p.source === "tracker.md")!;
+    expect(tracker.content).toBe(TRACKER_BODY); // 剥行号后与原文一致
+    expect(tracker.readCount).toBe(1);
+    expect(tracker.writeCount).toBe(0);
+    // readCount 排序：重复读的文件排前（活跃计划信号）
+    expect(c.plan[0].source).toBe("tracker.md");
+  });
+
+  it("规程窗口：dispatch 前引导区全窗（T27 读 flow 模板不再被 take:10 截掉）", async () => {
+    // 真实 day0 会话形态：golden_flow.md 在 T27 读、首 dispatch 在 T163——
+    // 旧 take:10 窗口把 dispatch 前的所有 flow/tracker 模板全部切掉
+    const FLOW_BODY = "# Golden Flow — Stage 1\n\n## 流水线\n\n### Phase 0 依赖判定\n### Phase 1 Designer\n" + "f".repeat(200);
+    const flowTc = {
+      id: "tc-flow",
+      turnId: "t27",
+      toolName: "read",
+      argsJson: '{"file_path":"/repo/.claude/skills/day0/flows/golden_flow.md"}',
+      resultJson: `<content>${FLOW_BODY.split("\n").map((l, i) => `${i + 1}: ${l}`).join("\n")}</content>`,
+    };
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue({ turnId: "t163" }) },
+      turn: {
+        findUnique: vi.fn().mockResolvedValue({ turnIndex: 163 }),
+        findMany: vi.fn().mockResolvedValue([
+          { id: "t0", turnIndex: 0, role: "user", content: "跑 day0", agentName: null },
+          { id: "t27", turnIndex: 27, role: "assistant", content: "读 golden flow", agentName: "build" },
+        ]),
+      },
+      toolCall: {
+        findMany: vi.fn().mockImplementation(async (args: { where?: { turnId?: unknown; turn?: unknown; id?: { in?: string[] } } }) => {
+          const w = args?.where ?? {};
+          if (w.id) return [flowTc].filter((r) => w.id!.in?.includes(r.id)).map((r) => ({ id: r.id, resultJson: r.resultJson }));
+          if (w.turnId) return [flowTc];
+          if (w.turn) return [];
+          return [];
+        }),
+      },
+    } as unknown as PrismaClient;
+    const c = await collectWorkflowExtractCandidates("ses_win", prisma);
+    expect(c.regulation.map((r) => r.source)).toContain("golden_flow.md");
+    expect(c.regulation.find((r) => r.source === "golden_flow.md")!.content).toBe(FLOW_BODY);
+  });
+
+  it("写入来源标注：只读未写（外部契约）vs session 内被写（执行产物）", async () => {
+    const TRACKER_BODY = "# 跟踪单\n\n| 步骤 | 状态 |\n|---|---|\n| S1 | 进行中 |\n" + "t".repeat(120);
+    const REPORT_BODY = "# R1 审计报告\n\n## 结论\n\n通过。\n" + "r".repeat(120);
+    const bareRead = (path: string, body: string) => ({
+      toolName: "Read",
+      argsJson: JSON.stringify({ file_path: path }),
+      resultJson: body.split("\n").map((l, i) => `${i + 1}\t${l}`).join("\n"),
+    });
+    const tcs = [
+      { id: "tc-tracker", turnId: "t1", ...bareRead("/run/.day0/tracker.md", TRACKER_BODY) },
+      {
+        id: "tc-report-write",
+        turnId: "t1",
+        toolName: "Write",
+        argsJson: JSON.stringify({ file_path: "/run/audit/r1-audit-report.md", content: REPORT_BODY }),
+        resultJson: null,
+      },
+      { id: "tc-report-read", turnId: "t1", ...bareRead("/run/audit/r1-audit-report.md", REPORT_BODY) },
+    ];
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue(null) },
+      turn: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([{ id: "t0", turnIndex: 0, role: "user", content: "短任务", agentName: null }]),
+      },
+      toolCall: {
+        findMany: vi.fn().mockImplementation(async (args: { where?: { turnId?: unknown; turn?: unknown; id?: { in?: string[] } } }) => {
+          const w = args?.where ?? {};
+          if (w.id) return tcs.filter((r) => w.id!.in?.includes(r.id)).map((r) => ({ id: r.id, resultJson: r.resultJson }));
+          if (w.turnId) return tcs;
+          if (w.turn) return tcs;
+          return [];
+        }),
+      },
+    } as unknown as PrismaClient;
+    const c = await collectWorkflowExtractCandidates("ses_wr", prisma);
+    const tracker = c.plan.find((p) => p.source.includes("tracker.md"))!;
+    const report = c.plan.find((p) => p.source.includes("r1-audit-report.md"))!;
+    expect(tracker.writeCount).toBe(0);
+    expect(report.writeCount).toBe(1);
+    expect(report.readCount).toBe(1);
+    const prompt = buildCandidatePrompt(c);
+    // prompt 标注：中性信号直给 LLM（执行产物 vs 外部契约的判别依据）
+    expect(prompt).toContain("只读未写");
+    expect(prompt).toContain("session 内被写 1 次");
+    expect(prompt).toContain("结构："); // 标题骨架（跟踪单/审计报告一目了然）
+  });
+
+  it("同名消歧：不同目录的 handback.md → source 扩为「父目录/文件名」", async () => {
+    const mk = (id: string, dir: string, body: string) => ({
+      id,
+      turnId: "t1",
+      toolName: "Write",
+      argsJson: JSON.stringify({ file_path: `/run/parallel/impl/${dir}/handback.md`, content: body }),
+      resultJson: null,
+    });
+    const tcs = [
+      mk("tc-h1", "tester-1", "# Tester Handback\n\n全部通过。\n" + "a".repeat(150)),
+      mk("tc-h2", "accuracy-1", "# Accuracy Handback\n\n精度达标。\n" + "b".repeat(150)),
+    ];
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue(null) },
+      turn: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([{ id: "t0", turnIndex: 0, role: "user", content: "短任务", agentName: null }]),
+      },
+      toolCall: {
+        findMany: vi.fn().mockImplementation(async (args: { where?: { turnId?: unknown; turn?: unknown; id?: { in?: string[] } } }) => {
+          const w = args?.where ?? {};
+          if (w.id) return tcs.filter((r) => w.id!.in?.includes(r.id)).map((r) => ({ id: r.id, resultJson: r.resultJson }));
+          if (w.turnId) return tcs;
+          if (w.turn) return tcs;
+          return [];
+        }),
+      },
+    } as unknown as PrismaClient;
+    const c = await collectWorkflowExtractCandidates("ses_dup", prisma);
+    const sources = c.plan.map((p) => p.source).sort();
+    expect(sources).toEqual(["accuracy-1/handback.md", "tester-1/handback.md"]);
+  });
+
+  it("shell 隐式读（codex 无 read 工具，cat 计划文件）→ 计划候选", async () => {
+    const STATE_CAT = "# STATE\n\n- [ ] 1. 派发 developer\n- [ ] 2. 验收\n" + "s".repeat(150);
+    const shellTc = {
+      id: "tc-cat",
+      turnId: "t1",
+      toolName: "exec_command",
+      argsJson: JSON.stringify({ cmd: "cat /home/u/.day0/run/STATE.md" }),
+      resultJson: `Chunk ID: 77f\nWall time: 0.0000 seconds\nOutput:\n${STATE_CAT}`,
+    };
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue(null) },
+      turn: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([{ id: "t0", turnIndex: 0, role: "user", content: "短任务", agentName: null }]),
+      },
+      toolCall: {
+        findMany: vi.fn().mockImplementation(async (args: { where?: { turnId?: unknown; turn?: unknown; id?: { in?: string[] } } }) => {
+          const w = args?.where ?? {};
+          if (w.id) return [shellTc].filter((r) => w.id!.in?.includes(r.id)).map((r) => ({ id: r.id, resultJson: r.resultJson }));
+          if (w.turnId) return [shellTc];
+          if (w.turn) return [shellTc];
+          return [];
+        }),
+      },
+    } as unknown as PrismaClient;
+    const c = await collectWorkflowExtractCandidates("ses_cat", prisma);
+    expect(c.plan.map((p) => p.source)).toContain("STATE.md");
+    expect(c.plan.find((p) => p.source === "STATE.md")!.content).toBe(STATE_CAT);
+  });
 });
 
 describe("hasWorkflowExtractCandidates（root 可对账探测：候选非空，零 LLM 调用）", () => {
@@ -303,6 +489,16 @@ describe("parseCandidateSelection（选择解析：正文取候选原文，不�
   it("跨层引用（regulation 字段填 P1）→ 该层作 null；未知 ID 同理", () => {
     expect(parseCandidateSelection('{"regulation":"P1","plan":"P1"}', cands)).toHaveLength(1); // plan 命中
     expect(parseCandidateSelection('{"regulation":"R9","plan":"R1"}', cands)).toHaveLength(0);
+  });
+
+  it("两层互斥的机械强制：同内容候选撞车 → 计划层作废（规则 3 的构造性保证）", () => {
+    const dup: WorkflowExtractCandidates = {
+      regulation: [{ id: "R1", layer: "regulation", source: "golden_flow.md", content: "SAME-BODY", partialRead: false }],
+      plan: [{ id: "P1", layer: "plan", source: "golden_flow.md", content: "SAME-BODY", partialRead: false }],
+    };
+    const layers = parseCandidateSelection('{"regulation":"R1","plan":"P1"}', dup);
+    expect(layers).toHaveLength(1);
+    expect(layers[0].kind).toBe("regulation");
   });
 
   it("全 null / 非 JSON / 非对象 → 空层", () => {

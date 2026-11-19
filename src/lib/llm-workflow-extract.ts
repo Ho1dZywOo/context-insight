@@ -20,7 +20,11 @@ import {
 // SKILL.md 正文候选走 skill-content 三通道单点（skill-tool / Read / shell）——
 // codex 无 read 工具，cat 读 SKILL.md 同样入规程候选，词表与摄取/恢复侧共用。
 import { skillMdReadsOfToolCall, skillMdReadsOfTurn } from "./skill-content";
-import { isShellToolCall } from "./tool-conventions";
+import { isShellToolCall, SHELL_TOOL_NAMES } from "./tool-conventions";
+// shell 隐式读（cat/sed 等）的文件归因引擎——与 skill-content shell 通道同源；
+// codex 无 read 工具，计划/规程文件此前只认 Read 词表 → 全灭。
+import { restoreShellReads, renderShellEntryText } from "./shell-restore";
+import { extractShellFileReads } from "./file-reads";
 import { logError } from "@/lib/logger";
 
 /**
@@ -41,8 +45,14 @@ import { logError } from "@/lib/logger";
  * - 计划层（任务承诺，"干什么"）：任务清单文件（STATE/TODO/PLAN 类）的读写快照
  */
 
+/** 引导区语境行上限（prompt 语境用，非候选）。 */
 const MAX_TURNS = 10;
 const CLAUDE_TIMEOUT_MS = 300_000;
+
+/** 规程候选扫描窗口：dispatch 前非子代理轮（引导区全窗）。
+ * 真实 day0 会话实证：flow 模板/tracker 模板在 T27-T52 读入、首 dispatch 在 T163——
+ * 此前 take:10 的静默截窄把这些规程材料全部切掉，规程候选只剩注入通道侥幸兜底。 */
+const REG_WINDOW_MAX_TURNS = 500;
 
 /** 候选正文的机械下限（过滤空/残片，非领域启发）。 */
 const CANDIDATE_MIN_CHARS = 100;
@@ -56,8 +66,9 @@ const MAX_PLAN_CANDIDATES = 16;
 const MAX_REG_CANDIDATES = 8;
 /** 计划候选的文件扩展名白名单（任务清单/计划文档的实际载体）。 */
 const PLAN_FILE_EXTENSIONS = [".md", ".txt"];
-/** 计划候选查询的 take 上限（与确定性提取的 PLAN_FILE_SCAN_TAKE 对齐）。 */
-const PLAN_SCAN_TAKE = 1000;
+/** 计划候选查询的 take 上限（read/write/shell 三通道合并池；Bash 千级调用入池后
+ * 防时序截断把晚段 Read 挤出——真实会话 1700+ 调用里 tracker.md 的读集中在 T722+）。 */
+const PLAN_SCAN_TAKE = 4000;
 
 /** 一份可被 LLM 选择的声明候选（正文为 DB 原文，归一化见各收集点）。 */
 export interface WorkflowExtractCandidate {
@@ -72,6 +83,11 @@ export interface WorkflowExtractCandidate {
   partialRead: boolean;
   /** 同一文件被读的次数（多次读取 = 活跃计划文件信号，仅排序提示）。 */
   readCount?: number;
+  /** 同一文件在 session 内被写的次数（写入来源 = 执行产物的中性信号；
+   * 0 = 只读未写，更像事先存在的契约/清单）。 */
+  writeCount?: number;
+  /** 完整路径（basename 撞名时 source 扩为「父目录/文件名」，其余时候不展示）。 */
+  pathHint?: string;
 }
 
 export interface WorkflowExtractCandidates {
@@ -202,10 +218,14 @@ export async function llmExtractWorkflowDeclaration(
 /**
  * 确定性收集候选（LLM 只在此之上做选择）：
  *
- * - 规程候选（dispatch 前的引导区，与旧实现同窗口）：turn0 user 注入、skill invoke 的
- *   `<skill_content>` 正文、Read 的文件正文（覆盖 skill resources 编排模板）。
- * - 计划候选（全 session）：.md/.txt 文件读写（每文件取首次实质读取快照，同文件多次读
- *   不重复占位）。todowrite 不入候选（主 agent 自我维护的 todos 是自评循环，不作为计划层）。
+ * - 规程候选（dispatch 前引导区全窗，cap REG_WINDOW_MAX_TURNS）：turn0 user 注入、
+ *   skill invoke 的 `<skill_content>` 正文、Read 的文件正文（覆盖 skill resources
+ *   编排模板）、shell 隐式读的 .md/.txt（codex 无 read 工具）。文件多通道按路径
+ *   分组取首份实质快照。
+ * - 计划候选（全 session）：.md/.txt 文件 read/write + shell 隐式读（每文件取首次
+ *   实质读取快照，同文件多次读不重复占位），readCount/writeCount 分开计——
+ *   「session 内被写」是执行产物 vs 外部契约的中性信号。
+ *   todowrite 不入候选（主 agent 自我维护的 todos 是自评循环，不作为计划层）。
  *
  * 收集零领域启发（文件名白名单/内容特征全交给 LLM 判断）——这是泛化路径；
  * 排序仅用中性信号（读次数、时序）帮助候选进入名单。
@@ -240,12 +260,15 @@ export async function collectWorkflowExtractCandidates(
       ...(cutoff != null ? { turnIndex: { lt: cutoff } } : {}),
     },
     orderBy: { turnIndex: "asc" },
-    take: MAX_TURNS,
+    take: REG_WINDOW_MAX_TURNS,
     select: { id: true, turnIndex: true, role: true, content: true, agentName: true },
   });
 
   const regCandidates: WorkflowExtractCandidate[] = [];
   const contextLines: string[] = [];
+  // 窗口内文件读（Read/shell 隐式读）按路径分组 → 每文件首份实质快照
+  // （同文件多次/多通道读不重复占席——overlay_flow 两段部分读此前吃掉 2 个候选位）。
+  const regFileSnaps = new Map<string, Array<{ content: string; partialRead: boolean }>>();
   if (turns.length > 0) {
     // 步骤 1：窗口内工具调用的轻量元数据（不含 resultJson）
     const regMeta = await prisma.toolCall.findMany({
@@ -253,12 +276,12 @@ export async function collectWorkflowExtractCandidates(
       orderBy: { createdAt: "asc" },
       select: { id: true, turnId: true, toolName: true, argsJson: true },
     });
-    // 步骤 2：只为"skill invoke + Read(.md/.txt)"批量取 resultJson
+    // 步骤 2：只为"skill invoke + Read/shell(.md/.txt)"批量取 resultJson
     const regNeedIds = regMeta
       .filter((tc) => {
         const tn = tc.toolName.toLowerCase();
         if (isSkillInvokeToolCall(tc.toolName)) return true;
-        if (isShellToolCall(tn) && (tc.argsJson ?? "").includes("SKILL.md")) return true;
+        if (isShellToolCall(tn) && /\.(md|txt)/i.test(tc.argsJson ?? "")) return true;
         if (tn !== "read") return false;
         const base = basenameOf(extractFilePath(tc.argsJson));
         return PLAN_FILE_EXTENSIONS.some((e) => base.toLowerCase().endsWith(e));
@@ -274,8 +297,10 @@ export async function collectWorkflowExtractCandidates(
     }
 
     for (const t of turns) {
-      // 引导区语境（供 LLM 理解，非候选）
-      contextLines.push(`- Turn ${t.turnIndex} (${t.role}${t.agentName ? `, agent=${t.agentName}` : ""}): ${firstLine(t.content)}`);
+      // 引导区语境（供 LLM 理解，非候选；封顶防爆 prompt）
+      if (contextLines.length < MAX_TURNS) {
+        contextLines.push(`- Turn ${t.turnIndex} (${t.role}${t.agentName ? `, agent=${t.agentName}` : ""}): ${firstLine(t.content)}`);
+      }
 
       // C 形（斜杠命令注入，claude-code v1：/skill 展开全文进 system 轮、无工具调用行）
       // 与 S3（opencode ≥1.17 注入体带 Base directory 标记）的注入正文都在轮级——
@@ -332,33 +357,59 @@ export async function collectWorkflowExtractCandidates(
         } else if (tc.toolName.toLowerCase() === "read") {
           const ex = extractFileContent(tc);
           if (ex && ex.content.length >= CANDIDATE_MIN_CHARS && ex.basename) {
-            regCandidates.push({
-              id: "",
-              layer: "regulation",
-              source: ex.basename,
-              content: ex.content,
-              partialRead: hasReadOffsetOrLimit(tc.argsJson),
-            });
+            const key = extractFilePath(tc.argsJson) ?? ex.basename;
+            const arr = regFileSnaps.get(key) ?? [];
+            arr.push({ content: ex.content, partialRead: hasReadOffsetOrLimit(tc.argsJson) });
+            regFileSnaps.set(key, arr);
+          }
+        } else if (isShellToolCall(tc.toolName)) {
+          // shell 隐式读（cat/sed 等）：.md/.txt 规程材料（flow 模板等）入候选
+          for (const entry of restoreShellReads(tc.argsJson, tc.resultJson)) {
+            const base = basenameOf(entry.filePath);
+            if (!PLAN_FILE_EXTENSIONS.some((e) => base.toLowerCase().endsWith(e))) continue;
+            const { content, maxLine, covered } = renderShellEntryText(entry);
+            if (content.length < CANDIDATE_MIN_CHARS) continue;
+            const arr = regFileSnaps.get(entry.filePath) ?? [];
+            arr.push({ content, partialRead: covered < maxLine });
+            regFileSnaps.set(entry.filePath, arr);
           }
         }
       }
     }
+    // 文件分组 → 规程候选（每文件首份实质读取，首触时序）
+    for (const [fp, snaps] of regFileSnaps) {
+      const best = pickFirstSubstantial(snaps);
+      if (!best) continue;
+      regCandidates.push({
+        id: "",
+        layer: "regulation",
+        source: basenameOf(fp),
+        content: best.content,
+        partialRead: best.partialRead,
+        pathHint: fp,
+      });
+    }
   }
 
-  // ── 计划候选：全 session 的 read/write ──
-  // 步骤 1：轻量元数据；write 的正文在 argsJson 里，无需 resultJson
+  // ── 计划候选：全 session 的 read/write + shell 隐式读 ──
+  // 步骤 1：轻量元数据；write 的正文在 argsJson 里，read/shell 的正文在 resultJson
   const planMeta = await prisma.toolCall.findMany({
     where: {
       turn: { sessionId },
-      toolName: { in: ["read", "Read", "write", "Write"] },
+      toolName: { in: ["read", "Read", "write", "Write", ...SHELL_TOOL_NAMES] },
     },
     orderBy: { createdAt: "asc" },
     take: PLAN_SCAN_TAKE,
     select: { id: true, toolName: true, argsJson: true },
   });
-  // 步骤 2：只为"Read(.md/.txt)"批量取 resultJson（write 用 argsJson 即可）
+  // 步骤 2：只为"Read/shell(.md/.txt)"批量取 resultJson（write 用 argsJson 即可）
   const planReadIds = planMeta
     .filter((tc) => {
+      if (isShellToolCall(tc.toolName)) {
+        // shell：命令侧路径初筛（与恢复引擎同一路径判定单点），命中才回捞 resultJson
+        const paths = extractShellFileReads(tc.argsJson).map((r) => r.filePath);
+        return paths.some((p) => PLAN_FILE_EXTENSIONS.some((e) => p.toLowerCase().endsWith(e)));
+      }
       if (tc.toolName.toLowerCase() !== "read") return false;
       const base = basenameOf(extractFilePath(tc.argsJson));
       return PLAN_FILE_EXTENSIONS.some((e) => base.toLowerCase().endsWith(e));
@@ -371,8 +422,20 @@ export async function collectWorkflowExtractCandidates(
     resultJson: planResultById.get(tc.id) ?? null,
   }));
 
-  const fileGroups = new Map<string, Array<{ content: string; partialRead: boolean }>>();
+  const fileGroups = new Map<string, Array<{ content: string; partialRead: boolean; op: "read" | "write" }>>();
   for (const tc of planTcs) {
+    if (isShellToolCall(tc.toolName)) {
+      for (const entry of restoreShellReads(tc.argsJson, tc.resultJson)) {
+        const base = basenameOf(entry.filePath);
+        if (!PLAN_FILE_EXTENSIONS.some((e) => base.toLowerCase().endsWith(e))) continue;
+        const { content, maxLine, covered } = renderShellEntryText(entry);
+        if (content.length < CANDIDATE_MIN_CHARS) continue;
+        const arr = fileGroups.get(entry.filePath) ?? [];
+        arr.push({ content, partialRead: covered < maxLine, op: "read" });
+        fileGroups.set(entry.filePath, arr);
+      }
+      continue;
+    }
     const ex = extractFileContent(tc);
     if (!ex || ex.content.length < CANDIDATE_MIN_CHARS) continue;
     const fp = extractFilePath(tc.argsJson);
@@ -380,11 +443,16 @@ export async function collectWorkflowExtractCandidates(
     if (!base || !PLAN_FILE_EXTENSIONS.some((e) => base.toLowerCase().endsWith(e))) continue;
     const key = fp ?? base;
     const arr = fileGroups.get(key) ?? [];
-    arr.push({ content: ex.content, partialRead: hasReadOffsetOrLimit(tc.argsJson) });
+    arr.push({
+      content: ex.content,
+      partialRead: hasReadOffsetOrLimit(tc.argsJson),
+      op: /write/i.test(tc.toolName) ? "write" : "read",
+    });
     fileGroups.set(key, arr);
   }
 
-  // 每文件取首次实质读取（与确定性提取同语义：早读=承诺态，非终态）
+  // 每文件取首次实质读取（与确定性提取同语义：早读=承诺态，非终态）；
+  // readCount/writeCount 分开计——「session 内被写」是执行产物 vs 外部契约的中性信号
   const fileCandidates: WorkflowExtractCandidate[] = [];
   for (const [fp, snaps] of fileGroups) {
     const best = pickFirstSubstantial(snaps);
@@ -395,7 +463,9 @@ export async function collectWorkflowExtractCandidates(
       source: basenameOf(fp),
       content: best.content,
       partialRead: best.partialRead,
-      readCount: snaps.length,
+      readCount: snaps.filter((s) => s.op === "read").length,
+      writeCount: snaps.filter((s) => s.op === "write").length,
+      pathHint: fp,
     });
   }
   // 排序：文件按读取次数降序（反复读 = 活跃计划）+ 名字序稳定
@@ -403,6 +473,9 @@ export async function collectWorkflowExtractCandidates(
 
   const planCandidates = fileCandidates.slice(0, MAX_PLAN_CANDIDATES);
   const regulation = dedupeCandidates(regCandidates).slice(0, MAX_REG_CANDIDATES);
+  // basename 撞名消歧：同名候选的 source 扩为「父目录/文件名」（handback.md ×10 可分辨）
+  disambiguateCollidingSources(regulation);
+  disambiguateCollidingSources(planCandidates);
 
   return {
     regulation: regulation.map((c, i) => ({ ...c, id: `R${i + 1}` })),
@@ -460,6 +533,19 @@ function dedupeCandidates(cands: WorkflowExtractCandidate[]): WorkflowExtractCan
   return out;
 }
 
+/** basename 撞名的候选，source 扩为「父目录/文件名」（同名不同径可分辨；
+ * 无撞名保持 basename——source 口径与确定性提取一致，只在歧义处加路径）。 */
+function disambiguateCollidingSources(cands: WorkflowExtractCandidate[]): void {
+  const byBase = new Map<string, number>();
+  for (const c of cands) byBase.set(c.source, (byBase.get(c.source) ?? 0) + 1);
+  for (const c of cands) {
+    if ((byBase.get(c.source) ?? 0) > 1 && c.pathHint) {
+      const segs = c.pathHint.split(/[\\/]/).filter(Boolean);
+      if (segs.length >= 2) c.source = `${segs[segs.length - 2]}/${segs[segs.length - 1]}`;
+    }
+  }
+}
+
 /**
  * 选择式 prompt：两层定义 + 候选预览 + 选择规则（镜像确定性提取的优先级）+ 严格 JSON 输出。
  */
@@ -468,7 +554,7 @@ export function buildCandidatePrompt(candidates: WorkflowExtractCandidates): str
 
 背景：主 agent 的 workflow 声明分两层——
 - 规程层（编排规程，"怎么干"）：主 agent 的角色定位、职责边界、阶段推进规则、派发纪律、验收要求等编排规程。常见形态：skill 注入的编排规程正文、编排模板文件（教每阶段怎么派发、带验收标准的模板）、注入首条 user 消息的系统级指令。
-- 计划层（任务计划，"干什么"）：本 session 要完成的具体任务清单/里程碑/检查单。常见形态：任务清单文件（如 STATE/TODO/PLAN/TASKS 类命名的文档）。
+- 计划层（任务计划，"干什么"）：本 session 要完成的具体任务清单/里程碑/检查单/跟踪单。判内容不判命名——tracker、状态单、阶段推进表皆算计划。
 
 引导区语境（dispatch 之前的 turn 骨架）：
 ${(candidates.contextLines ?? []).join("\n") || "（无）"}
@@ -493,11 +579,12 @@ ${(candidates.contextLines ?? []).join("\n") || "（无）"}
   text += `
 ## 选择规则
 
-1. 规程层选最完整、最具体的编排规程：含每阶段派发参数/验收标准的编排模板 > 编排规程骨架（原则/边界/阶段）> 泛化指令。同内容多份时选字数最多、结构最全的。
-2. 计划层选本 session 的任务承诺：列明要完成任务的清单/检查单。不要把源代码、API 文档、参考资料、需求原文当计划。
+1. 规程层选最完整、最具体的编排规程：覆盖全程的编排总纲优先于只覆盖单阶段的细则；同覆盖面里含每阶段派发参数/验收标准的编排模板 > 编排规程骨架（原则/边界/阶段）> 泛化指令。同内容多份时选字数最多、结构最全的。
+2. 计划层选本 session 的任务承诺：列明要完成任务的清单/检查单/跟踪单。不要把源代码、API 文档、参考资料、需求原文当计划；也不要把执行产物当计划——审计报告、回执、交接记录、进度汇总记录的是「干了什么」，不是「承诺要干什么」。
 3. 两层互斥：同一候选内容不得同时选为两层。编排模板（教怎么干，即使含检查单）归规程层；任务清单（列干什么）归计划层。
 4. 标注「部分读取」的候选尽量避免（内容不完整）；有完整候选时优先完整。
 5. 某层确实不存在时填 null（例如纯问答 session 无计划层；无任何编排规程时规程层为 null）。
+6. 候选标注是中性信号：「只读未写」的候选更像事先存在/外部给定的契约与清单；「session 内被写」的候选更可能是本 session 的执行产物。结合内容判断，不要只凭标注。
 
 输出要求：严格输出一个 JSON 对象，不要包裹代码块，不要任何解释文字：
 {"regulation": "R1", "plan": "P1"}
@@ -511,14 +598,23 @@ function formatCandidateBlock(c: WorkflowExtractCandidate): string {
   const marks = [
     c.partialRead ? "部分读取" : null,
     c.readCount && c.readCount > 1 ? `被读 ${c.readCount} 次` : null,
+    c.layer === "plan" && c.writeCount != null
+      ? c.writeCount > 0
+        ? `session 内被写 ${c.writeCount} 次`
+        : "只读未写"
+      : null,
   ].filter(Boolean).join("，");
-  return `### [${c.id}] 来源：${c.source}${marks ? `（${marks}）` : ""}\n${preview}${ellipsis}\n\n`;
+  // 标题骨架（廉价可判性：同名文件靠结构分辨——审计报告/流程模板/跟踪单一目了然）
+  const heads = c.content.split("\n").filter((l) => /^#{1,3} /.test(l)).slice(0, 8).map((l) => l.slice(0, 60));
+  const skeleton = heads.length > 0 ? `结构：${heads.join(" / ")}\n` : "";
+  return `### [${c.id}] 来源：${c.source}${marks ? `（${marks}）` : ""}\n${skeleton}${preview}${ellipsis}\n\n`;
 }
 
 /**
  * 解析 LLM 选择输出 → 层列表（正文取候选原文，不信任 LLM 抄写）：
  * - 容忍代码块包裹/前后杂文（提取首个 JSON 对象）
  * - 字段引用不存在/跨层引用的 ID → 该层作 null 处理
+ * - 两层互斥（选择规则 3 的机械强制）：同内容候选不得同时作两层，撞车时计划层作废
  * - 计划层正文做 [x]→[ ] 归一（与确定性提取同规则：声明=该干什么，非执行结果）
  */
 export function parseCandidateSelection(
@@ -541,7 +637,7 @@ export function parseCandidateSelection(
     layers.push({ kind: "regulation", label: "编排规程", source: reg.source, content: reg.content });
   }
   const plan = candidates.plan.find((c) => c.id === sel.plan);
-  if (plan) {
+  if (plan && plan.content !== reg?.content) {
     layers.push({
       kind: "plan",
       label: "任务计划",
