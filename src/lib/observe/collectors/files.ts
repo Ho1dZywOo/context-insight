@@ -18,7 +18,7 @@ import { extractFilePath, restoreFile, renderRestoredText, type RestoreOp, type 
 import { parseApplyPatch } from '@/lib/apply-patch';
 import { restoreShellReads } from '@/lib/shell-restore';
 import { buildZip } from '@/lib/zip-store';
-import { SHELL_TOOL_NAMES, isShellToolCall, parseReadToolArgs } from '@/lib/tool-conventions';
+import { SHELL_TOOL_DB_NAMES, isShellToolCall, parseReadToolArgs } from '@/lib/tool-conventions';
 
 export interface FileAnalysis {
   path: string;
@@ -67,7 +67,7 @@ export async function analyzeFileReadsForRows(
     // shell 命令工具族（词表）：bash=opencode 1.x / shell=opencode 2.x /
     // exec·exec_command=codex——v2 会话 shell:read≈3:1，隐式读此前整页缺失
     prisma.toolCall.findMany({
-      where: { toolName: { in: [...SHELL_TOOL_NAMES] }, turn: { sessionId: { in: rowIds } } },
+      where: { toolName: { in: [...SHELL_TOOL_DB_NAMES] }, turn: { sessionId: { in: rowIds } } },
       select: { toolName: true, argsJson: true, turn: { select: TURN_SELECT } },
     }),
   ]);
@@ -194,7 +194,7 @@ async function loadRestoreOps(prisma: PrismaClient, rowIds: string[]): Promise<A
     }),
     prisma.toolCall.findMany({
       where: {
-        toolName: { in: [...SHELL_TOOL_NAMES] },
+        toolName: { in: [...SHELL_TOOL_DB_NAMES] },
         turn: { sessionId: { in: rowIds } },
       },
       select: {

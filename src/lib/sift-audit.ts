@@ -13,7 +13,10 @@ import type { AuditLayerInfo } from "@/lib/sift-audit-types";
 // 调 ensureWorkflowExtractPluginLoaded 激活），此处只引类型/默认值/holder。
 import { DEFAULT_PLUGIN, getWorkflowExtractPlugin } from "@/lib/workflow-extract-plugin";
 import { buildAgentRoleNameMap } from "@/lib/agent-role-name-map";
-import { unwrapSkillContent, SHELL_TOOL_NAMES, isShellToolCall, isSkillToolCall } from "@/lib/tool-conventions";
+import { unwrapSkillContent, SHELL_TOOL_DB_NAMES, isShellToolCall, isSkillToolCall } from "@/lib/tool-conventions";
+// Read 无信封格式（claude-code-proxy 裸 `N\t` / opencode `N: ` / 纯文本）的多格式
+// 行表解析单点——FILES 恢复层同源，本文件不另造格式判定。
+import { parseReadLines, extractOffset } from "@/lib/file-restore";
 import { restoreShellReads, renderShellEntryText } from "@/lib/shell-restore";
 import { extractShellFileReads } from "@/lib/file-reads";
 // skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
@@ -428,7 +431,9 @@ function isPlanFilename(filePath: string | null): boolean {
 
 /**
  * 从一个文件工具调用（read/write）提取 content + filePath + basename。
- * Read：resultJson 的 `<content>…</content>`，剥行号（opencode 格式 `1: line\n2: line`）。
+ * Read 两种形态：`<content>…</content>` 信封（信封内剥 opencode `N: ` 与 claude `N\t`
+ * 行号）；无信封的裸行号文本（claude-code-proxy `N\t` / opencode `N: ` / 纯文本）回退
+ * file-restore 的 parseReadLines 多格式行表（按真实行号排序拼接）。
  * Write：argsJson.content（JSON parse）。无 content → null。
  * apply_patch（codex 写通道）不在此提取：它是终态自证写产物，计划/资源声明恢复
  * 只取读承诺态（见 recoverPlanFileDeclaration 的「早读=承诺态」），且其裸 patch
@@ -444,7 +449,20 @@ export function extractFileContent(tc: {
   let content: string | null = null;
   if (tn === "read" && tc.resultJson) {
     const m = tc.resultJson.match(/<content>([\s\S]*?)<\/content>/);
-    if (m) content = m[1].replace(/^\s*\d+:\s/gm, "");
+    if (m) {
+      const lines = m[1].split("\n");
+      // claude 信封格式整篇 `N\t` 行号：全行皆 tab 行号才整篇剥（防 TSV 正文误剥）
+      if (lines.filter((l) => l.trim()).every((l) => /^\s*\d+\t/.test(l))) {
+        content = lines.map((l) => l.replace(/^\s*\d+\t/, "")).join("\n");
+      } else {
+        content = m[1].replace(/^\s*\d+:\s/gm, "");
+      }
+    } else {
+      const lines = parseReadLines(tc.resultJson, extractOffset(tc.argsJson));
+      if (lines.size > 0) {
+        content = [...lines.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v).join("\n");
+      }
+    }
   } else if (tn === "write" && tc.argsJson) {
     try {
       const a = JSON.parse(tc.argsJson);
@@ -525,7 +543,7 @@ export async function recoverPlanFileDeclaration(
     prisma.toolCall.findMany({
       where: {
         turn: { sessionId },
-        toolName: { in: [...SHELL_TOOL_NAMES] },
+        toolName: { in: [...SHELL_TOOL_DB_NAMES] },
       },
       select: { id: true, argsJson: true, createdAt: true },
       orderBy: { createdAt: "asc" },
@@ -613,7 +631,7 @@ export async function recoverSkillResourceFile(
   const tcs = (await prisma.toolCall.findMany({
     where: {
       turn: { sessionId },
-      toolName: { in: ["read", "Read", ...SHELL_TOOL_NAMES] },
+      toolName: { in: ["read", "Read", ...SHELL_TOOL_DB_NAMES] },
       argsJson: { contains: skillName },
     },
     select: { toolName: true, argsJson: true, resultJson: true },

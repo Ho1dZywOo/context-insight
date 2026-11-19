@@ -248,6 +248,15 @@ export function isShellToolCall(toolName: string): boolean {
   return SHELL_TOOL_EXACT.has(toolName.toLowerCase());
 }
 
+/** shell 工具名的 DB `in` 匹配形态：toolName 按框架协议原样落库（opencode/codex
+ *  小写、Claude Code PascalCase 如 `Bash`），SQLite 精确 `in` 需两态并列才不漏
+ *  PascalCase 变体。判定（是否 shell 工具调用）仍走 isShellToolCall 的大小写
+ *  归一——此表仅供 findMany 的 where.toolName.in 预筛，不参与语义判定。 */
+export const SHELL_TOOL_DB_NAMES: readonly string[] = [
+  ...SHELL_TOOL_NAMES,
+  ...SHELL_TOOL_NAMES.map((n) => n[0]!.toUpperCase() + n.slice(1)),
+];
+
 /** 写工具族词表（单一真理源）——claude/opencode 的 Write/Edit 家族 +
  *  codex 的 apply_patch（argsJson 是裸 patch 文本，路径提取须走
  *  apply-patch 解析器，见 extractFilePath 的 patch 回退）。 */

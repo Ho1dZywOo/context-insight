@@ -8,7 +8,7 @@
 
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { restoreFile, renderRestoredText, type RestoreOp, type ResolvedRestoreOp } from './file-restore';
-import { isShellToolCall, SHELL_TOOL_NAMES } from './tool-conventions';
+import { isShellToolCall, SHELL_TOOL_DB_NAMES } from './tool-conventions';
 import { restoreShellReads } from './shell-restore';
 
 export interface RecoveredAgentMd {
@@ -121,7 +121,7 @@ export async function recoverAgentMdFromSession(
   const toolCalls = ((await prisma.toolCall.findMany({
     where: {
       turn: { sessionId },
-      toolName: { in: ['read', 'Read', ...SHELL_TOOL_NAMES] },
+      toolName: { in: ['read', 'Read', ...SHELL_TOOL_DB_NAMES] },
       argsJson: { contains: `agents/${agentName}.md`, not: null },
     },
     select: { toolName: true, argsJson: true, resultJson: true, startedAt: true },
