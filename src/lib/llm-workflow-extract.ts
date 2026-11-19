@@ -42,7 +42,10 @@ import { logError } from "@/lib/logger";
  *
  * 两层分工：
  * - 规程层（编排纪律，"怎么干"）：skill 注入的编排规程 / 编排模板文件 / turn0 注入
- * - 计划层（任务承诺，"干什么"）：任务清单文件（STATE/TODO/PLAN 类）的读写快照
+ * - 计划层（任务承诺，"干什么"）：事先写定的承诺态清单（勾选承载进度、可机械归一
+ *   [x]→[ ] 还原承诺态）。运行时状态账本（状态列/进度日志/欠账登记）记录的是「干到
+ *   了哪」——需要内容手术才能还原承诺态的文档永远不能入声明（选择规则见
+ *   buildCandidatePrompt；账本的归宿是证据侧，不是声明侧）。
  */
 
 /** 引导区语境行上限（prompt 语境用，非候选）。 */
@@ -86,6 +89,9 @@ export interface WorkflowExtractCandidate {
   /** 同一文件在 session 内被写的次数（写入来源 = 执行产物的中性信号；
    * 0 = 只读未写，更像事先存在的契约/清单）。 */
   writeCount?: number;
+  /** markdown 勾选框行数（[ ]/[x]，计划层归一载体计数——「进度是否由勾选承载」的
+   * 机械信号，与 readCount/writeCount 同为中性标注，判内容仍交给 LLM）。 */
+  checkboxCount?: number;
   /** 完整路径（basename 撞名时 source 扩为「父目录/文件名」，其余时候不展示）。 */
   pathHint?: string;
 }
@@ -465,6 +471,7 @@ export async function collectWorkflowExtractCandidates(
       partialRead: best.partialRead,
       readCount: snaps.filter((s) => s.op === "read").length,
       writeCount: snaps.filter((s) => s.op === "write").length,
+      checkboxCount: (best.content.match(/^\s*[-*]\s*\[[ xX]\]/gm) ?? []).length,
       pathHint: fp,
     });
   }
@@ -554,7 +561,7 @@ export function buildCandidatePrompt(candidates: WorkflowExtractCandidates): str
 
 背景：主 agent 的 workflow 声明分两层——
 - 规程层（编排规程，"怎么干"）：主 agent 的角色定位、职责边界、阶段推进规则、派发纪律、验收要求等编排规程。常见形态：skill 注入的编排规程正文、编排模板文件（教每阶段怎么派发、带验收标准的模板）、注入首条 user 消息的系统级指令。
-- 计划层（任务计划，"干什么"）：本 session 要完成的具体任务清单/里程碑/检查单/跟踪单。判内容不判命名——tracker、状态单、阶段推进表皆算计划。
+- 计划层（任务承诺，"干什么"）：事先写定的任务承诺态——逐条列明「要完成什么」的清单/检查单/里程碑，进度只由勾选框承载（勾选可机械归一回未勾选，承诺态完整可还原，正文本身独立于执行过程）。运行时状态账本不算计划：进度写在状态列、状态字段、进度日志、欠账/备注登记里的跟踪单/进度表记录「干到了哪」——由被审计的 agent 自己回写，作为声明就是拿自我记录自证。判内容不判命名——文件叫 tracker、STATE、TODO 皆不重要，看进度由什么承载。
 
 引导区语境（dispatch 之前的 turn 骨架）：
 ${(candidates.contextLines ?? []).join("\n") || "（无）"}
@@ -580,7 +587,11 @@ ${(candidates.contextLines ?? []).join("\n") || "（无）"}
 ## 选择规则
 
 1. 规程层选最完整、最具体的编排规程：覆盖全程的编排总纲优先于只覆盖单阶段的细则；同覆盖面里含每阶段派发参数/验收标准的编排模板 > 编排规程骨架（原则/边界/阶段）> 泛化指令。同内容多份时选字数最多、结构最全的。
-2. 计划层选本 session 的任务承诺：列明要完成任务的清单/检查单/跟踪单。不要把源代码、API 文档、参考资料、需求原文当计划；也不要把执行产物当计划——审计报告、回执、交接记录、进度汇总记录的是「干了什么」，不是「承诺要干什么」。
+2. 计划层只选承诺态清单（事先写定、逐条列明「要完成什么」的清单/检查单）。声明将用于完成度对账，必须独立于执行过程，按顺序判定：
+   a. 看进度由什么承载（候选标注「勾选 N 项」= 勾选框行数）：进度只藏在勾选框里（[ ]/[x]，选中后会被机械归一回未勾选，承诺态可完整还原）→ 承诺态清单，可选；完全静态、不承载任何进度的任务列举同样可选；进度写在状态列、状态字段、进度日志、欠账/备注登记里（如标题带「状态：」、步骤表带状态列、含「进度日志」段）→ 运行时状态账本，不选——这些进度是被审计的 agent 自己回写的，选它等于让对账拿被审计者的自我记录自证完成度；勾选与状态列混排的同样按账本处理。
+   b. 源代码、API 文档、参考资料、需求原文不是计划。
+   c. 审计报告、回执、交接记录、进度汇总等执行产物记录「干了什么」，不是「承诺要干什么」。
+   d. 只有状态账本/执行产物、没有承诺清单时 plan 填 null（流程即计划，诚实留空优于拿账本凑数；不要因为「账本是唯一列出任务的文档」而放宽判据——宁缺毋假）。
 3. 两层互斥：同一候选内容不得同时选为两层。编排模板（教怎么干，即使含检查单）归规程层；任务清单（列干什么）归计划层。
 4. 标注「部分读取」的候选尽量避免（内容不完整）；有完整候选时优先完整。
 5. 某层确实不存在时填 null（例如纯问答 session 无计划层；无任何编排规程时规程层为 null）。
@@ -603,6 +614,7 @@ function formatCandidateBlock(c: WorkflowExtractCandidate): string {
         ? `session 内被写 ${c.writeCount} 次`
         : "只读未写"
       : null,
+    c.layer === "plan" && c.checkboxCount != null ? `勾选 ${c.checkboxCount} 项` : null,
   ].filter(Boolean).join("，");
   // 标题骨架（廉价可判性：同名文件靠结构分辨——审计报告/流程模板/跟踪单一目了然）
   const heads = c.content.split("\n").filter((l) => /^#{1,3} /.test(l)).slice(0, 8).map((l) => l.slice(0, 60));

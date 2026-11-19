@@ -439,7 +439,7 @@ describe("buildCandidatePrompt（选择式提示词）", () => {
   const cands: WorkflowExtractCandidates = {
     regulation: [{ id: "R1", layer: "regulation", source: "turn0 (注入编排规程)", content: "你是纯编排者……", partialRead: false }],
     plan: [
-      { id: "P1", layer: "plan", source: "STATE.md", content: "# STATE\n\n## Tasks\n\n- [ ] a", partialRead: false, readCount: 3 },
+      { id: "P1", layer: "plan", source: "STATE.md", content: "# STATE\n\n## Tasks\n\n- [ ] a", partialRead: false, readCount: 3, checkboxCount: 1 },
     ],
     contextLines: ["- Turn 0 (user): 任务描述"],
   };
@@ -463,6 +463,22 @@ describe("buildCandidatePrompt（选择式提示词）", () => {
     const p = buildCandidatePrompt(cands);
     expect(p).toContain("你只输出选择结果");
     expect(p).toContain("不抄写正文");
+  });
+
+  it("计划层判据：只认可机械归一的承诺态清单，运行时状态账本不选、只有账本时 null 兜底", () => {
+    const p = buildCandidatePrompt(cands);
+    // 承诺态定义（勾选可归一还原）与账本排除（状态列/进度日志/欠账登记）
+    expect(p).toContain("承诺态");
+    expect(p).toContain("状态账本");
+    expect(p).toContain("进度日志");
+    expect(p).toContain("机械归一");
+    // 勾选载体机械标注（进度是否由勾选承载的中性信号）
+    expect(p).toContain("勾选 1 项"); // cands 的 STATE.md 带一行勾选
+    // 诚实兜底：只有账本 → plan=null（流程即计划）；唯一性不放宽（宁缺毋假）
+    expect(p).toContain("只有状态账本");
+    expect(p).toContain("宁缺毋假");
+    // 判内容不判命名仍在（tracker 命名不是判据本身）
+    expect(p).toContain("判内容不判命名");
   });
 });
 
@@ -583,6 +599,57 @@ describe("llmExtractWorkflowDeclaration（选择 → 共享装配，端到端）
     expect(r!.content).toContain(TURN0_BODY);
     expect(r!.content).toContain(STATE_BODY.replace(/\[x\]/g, "[ ]"));
     expect(r!.content).not.toContain("我篡改的声明正文");
+  });
+
+  it("day0 型：tracker 状态账本照常入候选（收集零启发）、prompt 带账本判别信号；LLM 判 plan=null → 规程单层诚实直出", async () => {
+    // 真实 day0 会话形态：tracker.md 是「单一状态源」账本——状态列（待签收/打回）+
+    // 进度日志混排，不是承诺态清单（勾选归一还原不出它的承诺态）→ 计划层诚实为 null
+    const TRACKER_BODY =
+      "# Day0 流程跟踪单\n\n## Stage 1 步骤表\n\n| 步骤 | 状态 | 备注 |\n|---|---|---|\n| S1.0 立项 | 待签收 | 产物已出 |\n| S1.2 设计 | 进行中 | — |\n\n## 进度日志\n\n- T10 designer 完成 S1.2 设计，产物见备注\n" + "t".repeat(200);
+    const trackerTc = {
+      id: "tc-tracker",
+      turnId: "t1",
+      toolName: "Read",
+      argsJson: '{"file_path":"/run/.day0/tracker.md"}',
+      resultJson: TRACKER_BODY.split("\n").map((l, i) => `${i + 1}\t${l}`).join("\n"),
+    };
+    const prisma = {
+      skillEvent: { findFirst: vi.fn().mockResolvedValue(null) },
+      turn: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([
+          { id: "t0", turnIndex: 0, role: "user", content: TURN0_BODY, agentName: null },
+          { id: "t1", turnIndex: 1, role: "assistant", content: "读跟踪单", agentName: "build" },
+        ]),
+      },
+      toolCall: {
+        findMany: vi.fn().mockImplementation(async (args: { where?: { turnId?: unknown; turn?: unknown; id?: { in?: string[] } } }) => {
+          const w = args?.where ?? {};
+          if (w.id) return [trackerTc].filter((r) => w.id!.in?.includes(r.id)).map((r) => ({ id: r.id, resultJson: r.resultJson }));
+          if (w.turnId) return [trackerTc];
+          if (w.turn) return [trackerTc];
+          return [];
+        }),
+      },
+    } as unknown as PrismaClient;
+
+    // 收集零启发不动：状态账本照样进候选面（排除发生在选择规则层，不在收集层）
+    const c = await collectWorkflowExtractCandidates("ses_day0", prisma);
+    expect(c.plan.map((p) => p.source)).toContain("tracker.md");
+
+    // prompt 可判别：标题骨架把「## 进度日志」账本信号直给 LLM + 判据规则在文
+    const prompt = buildCandidatePrompt(c);
+    expect(prompt).toContain("结构：# Day0 流程跟踪单 / ## Stage 1 步骤表 / ## 进度日志");
+    expect(prompt).toContain("状态账本");
+    // 勾选载体机械标注：账本 0 勾选（进度在状态列/日志，不在勾选框）
+    expect(prompt).toContain("勾选 0 项");
+
+    // LLM 按收紧判据判 plan=null → 规程单层直出（诚实留空，与单层行为同构）
+    const runner = vi.fn(async () => ({ text: '{"regulation": "R1", "plan": null}', error: null }));
+    const r = await llmExtractWorkflowDeclaration("ses_day0", prisma, runner);
+    expect(r!.content).toBe(TURN0_BODY);
+    expect(r!.source).toBe("turn0 (注入编排规程)");
+    expect(r!.layers).toHaveLength(1);
   });
 });
 
