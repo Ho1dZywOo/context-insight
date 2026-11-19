@@ -20,7 +20,7 @@ import {
 // SKILL.md 正文候选走 skill-content 三通道单点（skill-tool / Read / shell）——
 // codex 无 read 工具，cat 读 SKILL.md 同样入规程候选，词表与摄取/恢复侧共用。
 import { skillMdReadsOfToolCall, skillMdReadsOfTurn } from "./skill-content";
-import { isShellToolCall, SHELL_TOOL_NAMES } from "./tool-conventions";
+import { isShellToolCall, SHELL_TOOL_DB_NAMES } from "./tool-conventions";
 // shell 隐式读（cat/sed 等）的文件归因引擎——与 skill-content shell 通道同源；
 // codex 无 read 工具，计划/规程文件此前只认 Read 词表 → 全灭。
 import { restoreShellReads, renderShellEntryText } from "./shell-restore";
@@ -402,7 +402,7 @@ export async function collectWorkflowExtractCandidates(
   const planMeta = await prisma.toolCall.findMany({
     where: {
       turn: { sessionId },
-      toolName: { in: ["read", "Read", "write", "Write", ...SHELL_TOOL_NAMES] },
+      toolName: { in: ["read", "Read", "write", "Write", ...SHELL_TOOL_DB_NAMES] },
     },
     orderBy: { createdAt: "asc" },
     take: PLAN_SCAN_TAKE,

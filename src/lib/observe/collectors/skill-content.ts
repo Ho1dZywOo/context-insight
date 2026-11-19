@@ -14,7 +14,7 @@
 // 单点在 skill-content.ts。
 
 import type { PrismaClient } from '@prisma/client';
-import { SHELL_TOOL_NAMES } from '@/lib/tool-conventions';
+import { SHELL_TOOL_DB_NAMES } from '@/lib/tool-conventions';
 import type { SkillToolCall } from '@/lib/skill-content';
 
 export interface SkillContentCandidates {
@@ -36,8 +36,8 @@ export async function collectSkillContentCandidates(
           { AND: [{ toolName: 'Read' }, { argsJson: { contains: 'SKILL.md' } }] },
           { AND: [{ toolName: 'read' }, { argsJson: { contains: 'SKILL.md' } }] },
           // shell 读类命令（exec_command cat …/SKILL.md——codex 主通道）；
-          // 摄取侧已给源工具行打 isSkillRelated，此分支兜旧数据与大小写变体
-          { AND: [{ toolName: { in: [...SHELL_TOOL_NAMES, 'Bash', 'Shell', 'Exec'] } }, { argsJson: { contains: 'SKILL.md' } }] },
+          // 摄取侧已给源工具行打 isSkillRelated，此分支兜历史未打标数据
+          { AND: [{ toolName: { in: [...SHELL_TOOL_DB_NAMES] } }, { argsJson: { contains: 'SKILL.md' } }] },
         ],
       },
       select: { toolName: true, argsJson: true, resultJson: true, startedAt: true },

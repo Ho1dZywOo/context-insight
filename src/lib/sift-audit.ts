@@ -13,7 +13,7 @@ import type { AuditLayerInfo } from "@/lib/sift-audit-types";
 // 调 ensureWorkflowExtractPluginLoaded 激活），此处只引类型/默认值/holder。
 import { DEFAULT_PLUGIN, getWorkflowExtractPlugin } from "@/lib/workflow-extract-plugin";
 import { buildAgentRoleNameMap } from "@/lib/agent-role-name-map";
-import { unwrapSkillContent, SHELL_TOOL_NAMES, isShellToolCall, isSkillToolCall } from "@/lib/tool-conventions";
+import { unwrapSkillContent, SHELL_TOOL_DB_NAMES, isShellToolCall, isSkillToolCall } from "@/lib/tool-conventions";
 // Read 无信封格式（claude-code-proxy 裸 `N\t` / opencode `N: ` / 纯文本）的多格式
 // 行表解析单点——FILES 恢复层同源，本文件不另造格式判定。
 import { parseReadLines, extractOffset } from "@/lib/file-restore";
@@ -543,7 +543,7 @@ export async function recoverPlanFileDeclaration(
     prisma.toolCall.findMany({
       where: {
         turn: { sessionId },
-        toolName: { in: [...SHELL_TOOL_NAMES] },
+        toolName: { in: [...SHELL_TOOL_DB_NAMES] },
       },
       select: { id: true, argsJson: true, createdAt: true },
       orderBy: { createdAt: "asc" },
@@ -631,7 +631,7 @@ export async function recoverSkillResourceFile(
   const tcs = (await prisma.toolCall.findMany({
     where: {
       turn: { sessionId },
-      toolName: { in: ["read", "Read", ...SHELL_TOOL_NAMES] },
+      toolName: { in: ["read", "Read", ...SHELL_TOOL_DB_NAMES] },
       argsJson: { contains: skillName },
     },
     select: { toolName: true, argsJson: true, resultJson: true },
