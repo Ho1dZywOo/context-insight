@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState, memo } from "react";
 import { useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { BotIcon, FileSearchIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
+import { BotIcon, FileSearchIcon, InfoIcon, SparklesIcon, TriangleAlertIcon, WorkflowIcon } from "lucide-react";
 import {
   subscribeSkillAudit,
   getSkillAuditSnapshot,
@@ -31,6 +31,7 @@ import {
 import { deriveDomainTargets, deriveAgentTargetsFromDispatches, targetMemberLabels, type RunAuditTarget } from "@/lib/run/audit-registry";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
 import { buildMainAgentTurnMap, type TurnDigest } from "@/lib/shared/turn-digest";
+import { isProxyVersion } from "@/lib/shared/session-format";
 import type { RunMemberRow } from "@/lib/run/member-rows";
 import { AuditReportPanel } from "@/components/run/audit/AuditReportPanel";
 import { useRunDataEpoch } from "@/lib/run/data-epoch";
@@ -183,6 +184,36 @@ const WorkflowRow = memo(function WorkflowRow({
     </button>
   )
 })
+
+// ── SubAgent 域依赖提示：声明恢复依赖 cpx 捕获的会话日志（system 注入的
+// subagent.md）；非 proxy 会话无此注入 → 该板块不可用。客户向一句话说清，
+// 不展开恢复链细节。判定口径 = isProxyVersion(version)（session.version 带
+// -proxy 后缀，库侧唯一口径）。
+
+function AgentDomainNotice({ hasProxyCapture }: { hasProxyCapture: boolean }) {
+  return (
+    <div
+      data-audit-agent-notice={hasProxyCapture ? "proxy" : "non-proxy"}
+      className={cn(
+        "mx-2 mt-2 flex shrink-0 gap-2 rounded-xl px-2.5 py-2 ring-1",
+        hasProxyCapture
+          ? "bg-foreground/[0.03] ring-foreground/[0.06]"
+          : "bg-amber-500/[0.08] ring-amber-500/25 dark:bg-amber-500/[0.12]",
+      )}
+    >
+      {hasProxyCapture ? (
+        <InfoIcon className="mt-px size-3.5 shrink-0 text-muted-foreground/70" />
+      ) : (
+        <TriangleAlertIcon className="mt-px size-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
+      )}
+      <p className={cn("text-[11px] leading-4.5", hasProxyCapture ? "text-muted-foreground/90" : "text-amber-700 dark:text-amber-400")}>
+        {hasProxyCapture
+          ? "SubAgent 对账依赖 cpx 捕获的会话日志（subagent 定义声明从中恢复）。"
+          : "当前会话不是 cpx 捕获的 proxy 会话，SubAgent 对账无法使用。"}
+      </p>
+    </div>
+  )
+}
 
 // ── 右栏域导览（未选目标时的空态：域语义 + 统计瓦片 + 引导） ─────────────────
 
@@ -349,6 +380,10 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
   // agent 域目标来自派发种群（events 恒不含 dispatch——collector 把它分流进
   // dispatches；事件源=真实派发段，member 源=成员种群不入 agent 域）
   const agentTargets = useMemo(() => deriveAgentTargetsFromDispatches(dispatches), [dispatches])
+  // proxy 捕获判定（SubAgent 域依赖提示用）：统一走 isProxyVersion(version)
+  // （session.version 带 -proxy 后缀，库侧唯一口径；framework 后缀不可靠——
+  // 旧数据无后缀、同 sid 双行回落 native）。有任一 proxy 成员 → system 注入主路径可用。
+  const hasProxyCapture = useMemo(() => members.some(m => isProxyVersion(m.version)), [members])
 
   // sessionStorage 恢复（reload / 切 tab 回来）：全部域的既有结果灌回 store
   useEffect(() => {
@@ -492,6 +527,10 @@ export function RunAuditTab({ runId, members, onOpenTurn }: RunAuditTabProps) {
             })}
           </div>
         </nav>
+
+        {/* SubAgent 域常驻依赖提示（其余域无此依赖，不渲染）：proxy 捕获在 →
+            说明主路径；不在 → 明示兜底路径与不可用条件 */}
+        {domain === "agent" && <AgentDomainNotice hasProxyCapture={hasProxyCapture} />}
 
         {/* 目标列表（key=domain：切换域即重放列表入场；禁横向滚动——行内容自适应收缩） */}
         <div

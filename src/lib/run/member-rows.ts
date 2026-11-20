@@ -15,6 +15,8 @@ import type { RunViewModel, SessionMemberRef } from './view-model';
 export interface RunMemberRow {
   taskId: string;
   framework: string;
+  /** 会话行版本（proxy 与否走 isProxyVersion，对齐 SessionRef.version） */
+  version: string | null;
   displayName: string;
   role: string;
   nodeId: string;
@@ -84,6 +86,7 @@ export function runMemberRowsOf(vm: RunViewModel): RunMemberRow[] {
     bySid.set(ref.sessionId, {
       taskId: ref.sessionId,
       framework: ref.session.framework,
+      version: ref.session.version ?? null,
       displayName: "",
       role: ref.role,
       nodeId,
