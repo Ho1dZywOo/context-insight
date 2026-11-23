@@ -85,6 +85,16 @@ describe('collectSubagentLinkageMaps：三条精确连接键', () => {
     expect(maps.taskToSessionId.has('<system-reminder>注入的上下文</system-reminder>')).toBe(false);
   });
 
+  it('首条任务文本字符串形态夹 reminder 段：按 span 拆段命中真实任务（不整串判死）', () => {
+    writeSub('sub-str', [
+      { type: 'user', message: { role: 'user', content: '<system-reminder>注入的上下文</system-reminder>\n\n  真实任务  ' }, timestamp: '2026-03-01T00:00:00Z' },
+    ], { toolUseId: null, x_lake: { schema: 'cc-subagent-meta', version: 1, data: { toolUseId: null, subagentSessionId: 'sub-str' } } });
+
+    const maps = collectSubagentLinkageMaps(mainFile, 'sess1');
+    expect(maps.taskToSessionId.get('真实任务')).toBe('sub-str');
+    expect(maps.taskToSessionId.has('<system-reminder>注入的上下文</system-reminder>')).toBe(false);
+  });
+
   it('codex legacy meta（agentId 存在、无 idSource）：规范 id 回填语义不变', () => {
     writeSub('sub-placeholder', [
       { type: 'user', message: { role: 'user', content: 'task' }, timestamp: '2026-03-01T00:00:00Z' },

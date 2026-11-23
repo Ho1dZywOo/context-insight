@@ -704,8 +704,15 @@ function subagentTaskOfCapture(filePath: string): string | null {
 // 手工对齐——两包不互相 import，双端语义同源）。
 function subagentTaskTextOf(content: string | ContentBlock[] | undefined): string | null {
   if (typeof content === 'string') {
-    const t = content.trim();
-    return (t && !t.startsWith('<system-reminder>') && !t.startsWith('The user stepped away')) ? t : null;
+    // native claude 常用纯字符串内容夹 reminder 段（readSession 同款形态）：
+    // 按壳段拆开逐段跳过，取首个非 reminder / 非 stepped-away 段——
+    // 整串以 reminder 开头就判死会把段尾的真实任务文本一起丢掉。
+    for (const span of splitReminderSpans(content)) {
+      const t = span.trim();
+      if (!t || t.startsWith('<system-reminder>') || t.startsWith('The user stepped away')) continue;
+      return t;
+    }
+    return null;
   }
   if (!Array.isArray(content)) return null;
   for (const b of content) {
