@@ -42,8 +42,18 @@ export interface RawInteraction {
   finish_reason: string | null;
 }
 
-export interface ToolCallInfo {
-  toolCallId: string;
+// 子代理关联映射（claude-jsonl 适配器产出，bridge-builder 建桥消费）。
+// 三条精确连接键，按可靠性排序：toolUseId（meta 直锚）> claudeAgentId
+//（claude 逻辑成员身份，meta 落盘）> 任务文本（派发 prompt ↔ 子文件首条
+// 用户任务，trim 归一——老版本捕获 meta 全空时的兜底硬链，与 cpx 的
+// subagentTaskTextOf 语义手工对齐，两包不互相 import）。
+export interface SubagentLinkageMaps {
+  toolUseIdToSessionId: Map<string, string>;
+  claudeAgentIdToSessionId: Map<string, string>;
+  taskToSessionId: Map<string, string>;
+}
+
+export interface ToolCallInfo {  toolCallId: string;
   toolName: string;
   argsJson: string | null;
   resultJson: string | null;

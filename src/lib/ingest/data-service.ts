@@ -15,7 +15,7 @@ import { listSubagentSessionsWithDb, readSessionWithDb, readSessionMeta } from '
 import { extractVersion as extractClaudeVersion } from './adapters/claude-jsonl';
 import { classifyProxyCapture, readCcSessionMeta, proxyRecordingFrameworkFromVersion } from './proxy-classify';
 import { isProxyVersion } from '../shared/session-format';
-import { truncateUtf16Safe } from '../shared/text-strip';
+import { truncateUtf16Safe, stripSystemReminders } from '../shared/text-strip';
 import { normalize } from './normalize';
 import { splitIntoTurns, resetIdCounter } from './turn-split';
 import type { TurnRow, ToolCallRow, SkillEventRow } from './turn-split';
@@ -25,7 +25,7 @@ import { backfillTurnNamesFromDispatches } from './dispatch-tools';
 import { splitExecutions, resetIdCounter as resetExecIdCounter } from './execution-split';
 import type { ExecutionRow } from './execution-split';
 import type { InteractionBridgeRow } from './bridge-builder';
-import type { RawInteraction } from '../shared/types';
+import type { RawInteraction, SubagentLinkageMaps } from '../shared/types';
 import { createLogger } from '@/lib/logger';
 
 const impLog = createLogger('import');
@@ -50,11 +50,15 @@ function recordingClassOfSessionRow(row: { framework: string; version: string | 
   return row.framework;
 }
 
-// user turn 现保留 <system-reminder> 全文（wire 保真）；label/query 预览
-// 剥掉 reminder 前缀块 —— 显示真实提示而非注入上下文。
+// label/query 预览剥掉 reminder 噪声——显示真实提示而非注入上下文。多块
+// reminder 全剥（预览口径，与 listSessions firstQuery 共用 shared 实现）；
+// 剥后为空回落原文（截断保底）。历史 bug：旧实现只剥首个前缀块，多块
+// 混排消息的块 2 残留成了标签头——现场会话标签裸奔 <system-reminder>。
+// 时间线侧已按指纹剥除（claude-jsonl readSession），此处兜底 legacy 行与
+// 未知块。
 function previewText(text: string | null | undefined): string | null {
   if (!text) return null;
-  const stripped = text.replace(/^<system-reminder>[\s\S]*?<\/system-reminder>\s*/, '').trim();
+  const stripped = stripSystemReminders(text);
   return truncateUtf16Safe(stripped || text, 200);
 }
 
@@ -213,12 +217,12 @@ function buildExecutionGraph(
   skillEvents: SkillEventRow[],
   interactions: RawInteraction[],
   taskId: string,
-  toolUseIdMapping?: Map<string, string>,
+  linkageMaps?: SubagentLinkageMaps,
 ): ExecutionGraphData {
   const executions = splitExecutions(turns, toolCalls, skillEvents, taskId);
   const rootExecutionId = executions.find(e => !e.isSubagent)?.id ?? null;
   const bridges: InteractionBridgeRow[] = rootExecutionId
-    ? buildBridges(interactions, toolCalls, turns, taskId, rootExecutionId, toolUseIdMapping)
+    ? buildBridges(interactions, toolCalls, turns, taskId, rootExecutionId, linkageMaps)
     : [];
 
   const executionsData = executions.map(e => ({
@@ -630,7 +634,7 @@ async function importSessionInner(
 
     const t2 = Date.now();
     const allRawInteractions = [...rawInteractions];
-    let toolUseIdMapping: Map<string, string> | undefined = undefined;
+    let linkageMaps: SubagentLinkageMaps | undefined = undefined;
 
     // 子代理并入：opencode-db 走 sharedDb 连接复用（连接池优化，与框架注册
     // 正交保留）；其余源走注册表通用路径——发现/读取/打标全部在 descriptor
@@ -643,7 +647,7 @@ async function importSessionInner(
       }
       appendSubagentBlocksOrdered(allRawInteractions, subInteractions);
     } else if (descriptor.readSubagents) {
-      toolUseIdMapping = descriptor.collectSubagentToolUseMap?.(dbPath, sessionId);
+      linkageMaps = descriptor.collectSubagentLinkage?.(dbPath, sessionId);
       appendSubagentBlocksOrdered(allRawInteractions, descriptor.readSubagents(dbPath, sessionId));
     }
     impLog.info('subagents', { sid: sessionId, ms: Date.now() - t2, interactions: allRawInteractions.length });
@@ -719,7 +723,7 @@ async function importSessionInner(
       });
       const executionGraph = buildExecutionGraph(
         turnsForGraph, remappedToolCalls, remappedSkillEvents,
-        normalized as unknown as RawInteraction[], sessionId, toolUseIdMapping,
+        normalized as unknown as RawInteraction[], sessionId, linkageMaps,
       );
 
       // 工具调用合并：增量 + 漂移更新（diffToolCalls，与 deltaRefresh / turns
@@ -861,7 +865,7 @@ async function importSessionInner(
     const t6 = Date.now();
     const executionGraph = buildExecutionGraph(
       turns, toolCalls, skillEvents,
-      normalized as unknown as RawInteraction[], sessionId, toolUseIdMapping,
+      normalized as unknown as RawInteraction[], sessionId, linkageMaps,
     );
     const rootExecutionId = executionGraph.rootExecutionId;
 
@@ -1074,7 +1078,7 @@ export async function deltaRefreshSession(
       : descriptor.readSession(session.sourcePath, sessionId);
 
     const allRawInteractions = [...rawInteractions];
-    let toolUseIdMapping: Map<string, string> | undefined = undefined;
+    let linkageMaps: SubagentLinkageMaps | undefined = undefined;
 
     if (srcType === 'opencode-db' && sharedDb) {
       const subIds = listSubagentSessionsWithDb(sharedDb, sessionId);
@@ -1087,7 +1091,7 @@ export async function deltaRefreshSession(
       // 注册表通用子代理路径（与导入路径同源：readSubagents 已打标含
       // name/type——此前刷新分支只打 session_id，刷新后子代理轮缺名，导入
       // 与刷新两口径就此统一）
-      toolUseIdMapping = descriptor.collectSubagentToolUseMap?.(session.sourcePath, sessionId);
+      linkageMaps = descriptor.collectSubagentLinkage?.(session.sourcePath, sessionId);
       appendSubagentBlocksOrdered(allRawInteractions, descriptor.readSubagents(session.sourcePath, sessionId));
     }
 
@@ -1177,7 +1181,7 @@ export async function deltaRefreshSession(
       }));
       const executionGraph = buildExecutionGraph(
         turns, toolCalls, skillEvents,
-        normalized as unknown as RawInteraction[], sessionId, toolUseIdMapping,
+        normalized as unknown as RawInteraction[], sessionId, linkageMaps,
       );
       await prisma.$transaction(async (tx) => {
         await tx.turn.deleteMany({ where: { sessionId: session.id } }); // 级联 toolCalls/skillEvents
@@ -1306,7 +1310,7 @@ export async function deltaRefreshSession(
     });
     const executionGraph = buildExecutionGraph(
       turnsForGraph, remappedToolCalls, remappedSkillEvents,
-      normalized as unknown as RawInteraction[], sessionId, toolUseIdMapping,
+      normalized as unknown as RawInteraction[], sessionId, linkageMaps,
     );
     const rootExecutionId = executionGraph.rootExecutionId;
 

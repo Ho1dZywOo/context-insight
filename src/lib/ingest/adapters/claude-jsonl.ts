@@ -7,17 +7,17 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import fs from 'node:fs';
-import { truncateUtf16Safe } from '@/lib/shared/text-strip';
+import { truncateUtf16Safe, stripSystemReminders } from '@/lib/shared/text-strip';
 import path from 'node:path';
 import { readCaptureBuffer, readCaptureHead, readCaptureText as readArchivedText } from '@/lib/compression';
 import { createLogger } from '@/lib/logger';
 import { readEnvelope, readEnvelopeWithLegacy } from '@/lib/shared/envelope';
-import { classifyUserInjection, stripTokenBudgetReminders } from './injections/index';
+import { classifyUserInjection, staticInjectionBlockPredicateFor, stripTokenBudgetReminders } from './injections/index';
 import { isSkillInjectionText } from './injections/claude-code';
 import { isRolloutFileName } from './codex-naming';
 import { isDshSessionLogName } from '../dsh-bridge/native';
 import type { SubagentRef } from './contract';
-import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage } from '../../shared/types';
+import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage, SubagentLinkageMaps } from '../../shared/types';
 import { normalizeToolResultPayload } from '../../tool-conventions';
 
 // Shared scan helpers (claude-format concepts, also reused by the proxy
@@ -99,6 +99,11 @@ export interface XLake {
     agentType?: string | null;
     subagentSessionId?: string;
     agentId?: string | null;
+    /** claude 捕获关联扩展（cpx claude-linkage 契约）：逻辑成员身份 / 任务
+     *  文本安全键 / 规范 id 语义声明。codex meta 不写这些字段。 */
+    claudeAgentId?: string | null;
+    task?: string | null;
+    idSource?: string | null;
   };
 }
 
@@ -151,9 +156,12 @@ interface ClaudeUsage {
   reasoning_tokens?: number;
 }
 
-function extractTextContent(content: string | ContentBlock[] | undefined): string | null {
+// user/assistant 内容的文本段抽取（块级剥除与全文拼接的共用原语）：
+// 字符串内容即一段；块数组取 text 段 + thinking 伪段。join('\n') 即
+// extractTextContent 的全文口径。
+function extractTextParts(content: string | ContentBlock[] | undefined): string[] | null {
   if (!content) return null;
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') return [content];
   const parts: string[] = [];
   for (const block of content) {
     if (block.type === 'text' && block.text) {
@@ -162,7 +170,28 @@ function extractTextContent(content: string | ContentBlock[] | undefined): strin
       parts.push(`<thinking>${block.thinking}</thinking>`);
     }
   }
-  return parts.length > 0 ? parts.join('\n') : null;
+  return parts.length > 0 ? parts : null;
+}
+
+function extractTextContent(content: string | ContentBlock[] | undefined): string | null {
+  return extractTextParts(content)?.join('\n') ?? null;
+}
+
+// 字符串内容拆段（块数组的对偶——native claude 会话的 user 消息常用纯字符串
+// 内容夹 reminder 段）：按 <system-reminder> 壳段切开，段间原文保留。剥除
+// 谓词作用于每个壳段（整段恰为一个壳才可能命中），普通文本段永不命中。
+function splitReminderSpans(text: string): string[] {
+  const parts: string[] = [];
+  const re = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    parts.push(m[0]);
+    last = re.lastIndex;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length > 0 ? parts : [text];
 }
 
 // claude-code 系注入指纹（task-notification 解析 / ≥2.1 协议注入 / skill
@@ -174,9 +203,8 @@ function extractTextContent(content: string | ContentBlock[] | undefined): strin
 // currentDate / available-skills as these tags inside user messages — they're
 // context, not real user input. Used for the session label / firstQuery
 // extraction (the prompt preview should not be reminder noise).
-function stripSystemReminders(text: string): string {
-  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim();
-}
+// 预览口径（全部 reminder 视为噪声）；时间线口径的按指纹剥除见 readSession
+// 的静态注入分支。实现在 shared/text-strip（与 data-service previewText 共用）。
 
 function extractToolCalls(content: ContentBlock[]): ToolCallInfo[] | null {
   const toolUseBlocks = content.filter(b => b.type === 'tool_use');
@@ -506,11 +534,16 @@ export function findSessionFile(dirPath: string, sessionId: string): string | nu
 }
 
 // 发现产出的子代理引用：contract.SubagentRef（id = 规范连接键）+ claude
-// meta 契约的 toolUseId 锚定键。meta.json 由发现层单次读取
+// meta 契约的 toolUseId 锚定键 + 关联别名（claudeAgentId/task，cpx 捕获
+// 新契约；老捕获无这些字段全 null）。meta.json 由发现层单次读取
 // （readSubagentMeta），打标/技能归因等下游不再各自开文件。
 interface ClaudeSubagentRef extends SubagentRef {
   /** Task tool_use 锚定键（claude meta.json 契约，技能归因用） */
   toolUseId: string | null;
+  /** x-claude-code-agent-id 头（claude 逻辑成员身份；关联别名，非规范 id） */
+  claudeAgentId: string | null;
+  /** 派发任务文本（cpx meta 契约；老捕获无 → 由 collectSubagentLinkageMaps 从捕获文件回读） */
+  task: string | null;
 }
 
 // 子代理 meta.json 单读（双名信封优先，顶层旧字段 fallback；兼容压缩形态
@@ -520,6 +553,11 @@ function readSubagentMeta(filePath: string): {
   toolUseId: string | null;
   name: string | null;
   agentType: string | null;
+  claudeAgentId: string | null;
+  task: string | null;
+  /** 规范 id 语义声明：'fileStem'（claude 捕获，文件名 id 恒为规范 id）|
+   *  'agentId'（codex 捕获，文件名是占位）。legacy meta 无声明 → null。 */
+  idSource: string | null;
 } | null {
   try {
     const metaPath = filePath.replace(/\.jsonl(\.7z|\.gz)?$/, '.meta.json');
@@ -533,6 +571,9 @@ function readSubagentMeta(filePath: string): {
       toolUseId: str(data?.toolUseId ?? meta.toolUseId),
       name: str(data?.name ?? meta.name) ?? str(data?.agentType ?? meta.agentType) ?? str(meta.description),
       agentType: str(data?.agentType ?? meta.agentType),
+      claudeAgentId: str(data?.claudeAgentId ?? meta.claudeAgentId),
+      task: str(data?.task ?? meta.task),
+      idSource: str(data?.idSource ?? meta.idSource),
     };
   } catch {
     return null;
@@ -594,17 +635,24 @@ export function listSubagentSessions(dirPath: string, sessionId: string): Claude
       if (entry.isFile() && m) {
         const filePath = path.join(subagentsDir, entry.name);
         const meta = readSubagentMeta(filePath);
-        // codex-proxy 身份对齐：文件名 id（sub-<hash>）是 cpx 在 spawn 输出
-        // 到达前铸的占位，真身 agentId 由 meta backfill——bridge-builder 按
-        // spawn 输出的 agent_id 锚定，规范 id 必须用 agentId 才能和 Bridge/
-        // Execution 对上（否则泳道/性能视图全部 0 turns）。claude 捕获无
-        // agentId，回退文件名 id（= 真身会话 id，行为不变）。
+        // 规范 id 语义由 meta.idSource 声明（cpx 两框架显式落盘）：
+        //   fileStem（claude 捕获）——文件名 id（sub-<md5(task)>）即规范 id，
+        //     claudeAgentId 只是关联别名，绝不顶替（否则桥/泳道/Execution
+        //     全线换键）；agentId（codex 捕获）——文件名是 spawn 输出到达前
+        //     铸的占位，真身 id 在 meta，必须回填。legacy meta 无声明：沿旧
+        //     口径 agentId 字段存在即 codex 回填语义（claude 老 meta 从不写
+        //     agentId，行为不变）。
+        const canonicalId = meta?.idSource === 'fileStem' ? m[1]
+          : meta?.idSource === 'agentId' ? (meta.agentId ?? m[1])
+          : (meta?.agentId ?? m[1]);
         results.push({
-          id: meta?.agentId ?? m[1],
+          id: canonicalId,
           filePath,
           name: meta?.name ?? null,
           type: meta?.agentType ?? null,
           toolUseId: meta?.toolUseId ?? null,
+          claudeAgentId: meta?.claudeAgentId ?? null,
+          task: meta?.task ?? null,
         });
       }
     }
@@ -613,14 +661,67 @@ export function listSubagentSessions(dirPath: string, sessionId: string): Claude
   return results;
 }
 
-export function collectSubagentToolUseMappings(dirPath: string, sessionId: string): Map<string, string> {
-  // Maps toolUseId (from meta.json) → canonical subagent session ID
-  // （subagent_session_id 同键，与打标口径一致）
-  const mapping = new Map<string, string>();
+// 子代理关联三映射（contract.collectSubagentLinkage 能力实现，data-service
+// 单次调用穿线给 bridge-builder）。三条精确连接键独立成立、互不依赖：
+//   toolUseId      —— meta 直锚（cpx/原生 harness 持有派发 id 时最硬）
+//   claudeAgentId  —— claude 逻辑成员身份（cpx 新契约落盘；后台派发回执
+//                     的 agentId 由此解析为规范子会话 id）
+//   task           —— 派发 prompt ↔ 子文件首条用户任务（trim 归一）。meta
+//                     没写 task（老版本捕获，孤儿现场 solo:8ae4a944）时回
+//                     捕获文件回读——与 cpx 的 subagentTaskTextOf 语义手工
+//                     对齐（首条非 reminder/stepped-away 文本块 trim）。
+export function collectSubagentLinkageMaps(dirPath: string, sessionId: string): SubagentLinkageMaps {
+  const toolUseIdToSessionId = new Map<string, string>();
+  const claudeAgentIdToSessionId = new Map<string, string>();
+  const taskToSessionId = new Map<string, string>();
   for (const sub of listSubagentSessions(dirPath, sessionId)) {
-    if (sub.toolUseId) mapping.set(sub.toolUseId, sub.id);
+    if (sub.toolUseId) toolUseIdToSessionId.set(sub.toolUseId, sub.id);
+    if (sub.claudeAgentId) claudeAgentIdToSessionId.set(sub.claudeAgentId, sub.id);
+    const task = (sub.task ?? subagentTaskOfCapture(sub.filePath))?.trim();
+    if (task && !taskToSessionId.has(task)) taskToSessionId.set(task, sub.id);
   }
-  return mapping;
+  return { toolUseIdToSessionId, claudeAgentIdToSessionId, taskToSessionId };
+}
+
+// 子捕获文件的首条任务文本（cpx claude-linkage.taskOfSubagentFile 同语义：
+// 首条 user 行的真实任务文本，system-reminder / stepped-away 块跳过）。
+// 只对 meta 未带 task 的老捕获兜底——新捕获 meta.task 直取，不开文件。
+function subagentTaskOfCapture(filePath: string): string | null {
+  let task: string | null = null;
+  try {
+    for (const line of parseJsonlLines(filePath)) {
+      if (task) break;
+      if (line.type !== 'user' || !line.message) continue;
+      task = subagentTaskTextOf(line.message.content);
+    }
+  } catch {
+    return null;
+  }
+  return task;
+}
+
+// 首条用户消息里的任务文本提取（与 cpx claude-linkage.subagentTaskTextOf
+// 手工对齐——两包不互相 import，双端语义同源）。
+function subagentTaskTextOf(content: string | ContentBlock[] | undefined): string | null {
+  if (typeof content === 'string') {
+    // native claude 常用纯字符串内容夹 reminder 段（readSession 同款形态）：
+    // 按壳段拆开逐段跳过，取首个非 reminder / 非 stepped-away 段——
+    // 整串以 reminder 开头就判死会把段尾的真实任务文本一起丢掉。
+    for (const span of splitReminderSpans(content)) {
+      const t = span.trim();
+      if (!t || t.startsWith('<system-reminder>') || t.startsWith('The user stepped away')) continue;
+      return t;
+    }
+    return null;
+  }
+  if (!Array.isArray(content)) return null;
+  for (const b of content) {
+    if (b.type !== 'text' || !b.text) continue;
+    const t = b.text.trim();
+    if (!t || t.startsWith('<system-reminder>') || t.startsWith('The user stepped away')) continue;
+    return t;
+  }
+  return null;
 }
 
 // 子代理会话读取（SourceDescriptor.readSubagents 能力实现）：目录布局发现
@@ -729,10 +830,16 @@ const GATED_QUEUED_KEY = 'attachment/queued_command!gated';
 const KNOWN_SYSTEM_SKIP_SUBTYPES = new Set(['total_tokens_reminder', 'duplicate']);
 const SYSTEM_SKIP_TOKEN_BUDGET = 'system/total_tokens_reminder';
 const SYSTEM_SKIP_DUPLICATE = 'system/duplicate';
+// user 行语义跳过子类型：块级静态注入（契约原则 1 drop）与 wire 重放副件
+// 去重——同白名单机制，info 级不告警
+const KNOWN_USER_SKIP_SUBTYPES = new Set(['static-injection', 'replayed-injection']);
+const USER_SKIP_STATIC_INJECTION = 'user/static-injection';
+const USER_SKIP_REPLAYED_INJECTION = 'user/replayed-injection';
 const isKnownSkipKey = (key: string): boolean => {
   if (KNOWN_SKIP_TYPES.has(key)) return true;
   if (key.startsWith('attachment/')) return KNOWN_ATTACHMENT_SUBTYPES.has(key.slice('attachment/'.length));
   if (key.startsWith('system/')) return KNOWN_SYSTEM_SKIP_SUBTYPES.has(key.slice('system/'.length));
+  if (key.startsWith('user/')) return KNOWN_USER_SKIP_SUBTYPES.has(key.slice('user/'.length));
   return false;
 };
 
@@ -1145,6 +1252,11 @@ export function readSession(filePath: string, sessionId: string): RawInteraction
   // system 行已见内容（wire 重复注入去重）：system 组件无 message.id，捕获
   // 侧逐请求原样落盘——同内容首现保留，重复跳过（见 system 分支注释）
   const seenSystemTexts = new Set<string>();
+  // 注入行已见原文（wire 重放副件去重）：注入行 byte-identical 重现 = 捕获侧
+  // 进程重启的 multiset 失守产物（真事件通知各轮内容必变——tokens/结果文本
+  // 递进，不可能逐字节相同），首现保留。真实人类输入不在此去重：人类重复
+  // 输入是真实事件，契约「真实人类输入保持 user」。
+  const seenInjectionLines = new Set<string>();
   // 重放签章已见集 + 重放组计数（见 replaySignature——resume/compact 历史重写去重）
   const seenReplaySigs = new Set<string>();
   let replaySkippedGroups = 0;
@@ -1208,6 +1320,8 @@ export function readSession(filePath: string, sessionId: string): RawInteraction
       const injection = classifyUserInjection(line.source, raw, { isFirstTurn: result.length === 0 });
       if (injection) {
         if (injection.action === 'drop') { noteSkip(line.type); continue; }
+        if (seenInjectionLines.has(raw)) { noteSkip(USER_SKIP_REPLAYED_INJECTION); continue; }
+        seenInjectionLines.add(raw);
         result.push({
           role: 'system',
           content: injection.content ?? raw,
@@ -1220,12 +1334,32 @@ export function readSession(filePath: string, sessionId: string): RawInteraction
         continue;
       }
 
-      // <system-reminder>（CLAUDE.md / gitStatus / currentDate 等注入上下文）
-      // 在 wire 上是 user 消息内部的 text block —— 与真实提示同属一条消息。
-      // 不再拆分成独立 system turn（拆开是过度切分：时间线零碎、LLM Input
-      // 重建时还得 toWireOrder 拼回去）。user turn 原样保留全文（wire 保真），
-      // 渲染层（LlmContextView.reminderPrefix）把 reminder 块显示为独立子块。
-      const content = raw;
+      // 块级静态注入剥除（契约原则 1「静态注入丢弃不进时间线」的块级实现）：
+      // claude-code 给每个代理进程启动时注入的上下文块（CLAUDE.md 回显 /
+      // gitStatus 快照 / 署名规则 / 日历）与真实提示同属一条 wire 消息——
+      // 按块级指纹剥除，真实提示保留；剥后无实质文本的纯注入消息整条 drop。
+      // 指纹经 injections/ 按行级 source 分发（框架自持），未知 reminder 块
+      // 保留可见（前向兼容）；native 与 proxy 同口径（框架语义，非 proxy
+      // 特有）。wire 原文不动——wire-rounds / full-context 直读捕获文件。
+      // 历史决策注：此前这里「原样保留全文 + 渲染层拆分」，实测每个会话
+      // （主 + 全部子代理）首条 user 轮都背着一坨静态块、时间线裸奔 XML
+      // 噪声——契约本就要求 drop，此为实现到位。
+      let content = raw;
+      const isStaticBlock = staticInjectionBlockPredicateFor(line.source);
+      if (isStaticBlock) {
+        // 形态拆段：字符串按 reminder 壳段拆（join('') 还原），块数组按
+        // text/thinking 段拆（join('\n')，extractTextContent 口径）
+        const isString = typeof line.message.content === 'string';
+        const parts = isString
+          ? splitReminderSpans(line.message.content as string)
+          : (extractTextParts(line.message.content) ?? []);
+        const kept = parts.filter(p => !isStaticBlock(p));
+        if (kept.length < parts.length) {
+          const joined = kept.join(isString ? '' : '\n').trim();
+          if (!joined) { noteSkip(USER_SKIP_STATIC_INJECTION); continue; }
+          content = joined;
+        }
+      }
       if (content) {
         // 用户输入是新的请求边界（下一 assistant 请求始于用户消息之后）
         nativeBoundary = timeCreated;

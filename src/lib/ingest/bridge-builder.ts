@@ -7,7 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import { subagentTiming } from '@/lib/subagent-timing';
-import type { RawInteraction } from '../shared/types';
+import type { RawInteraction, SubagentLinkageMaps } from '../shared/types';
 import type { ToolCallRow, TurnRow } from './turn-split';
 import { resolveDispatchToolCall, type DispatchRecord } from './dispatch-tools';
 
@@ -63,7 +63,7 @@ export function buildBridges(
   turns: TurnRow[],
   sessionId: string,
   rootExecutionId: string,
-  toolUseIdToSubagentSessionId?: Map<string, string>,
+  linkageMaps?: SubagentLinkageMaps,
 ): InteractionBridgeRow[] {
   const bridges: InteractionBridgeRow[] = [];
 
@@ -105,20 +105,35 @@ export function buildBridges(
 
   const usedSessionIds = new Set<string>();
 
+  // 派发目标解析（声明式注册表 + 关联映射的五段精确链，pre-pass 与主循环
+  // 同构共用——两处链序分叉会让复用窗口的「同 sid 下次派发」时刻表算错）：
+  //   ① arg 直连（复用/预知形态：subagent_session_id / sessionID）
+  //   ② meta toolUseId 映射（cpx 捕获契约，claude proxy 形态）
+  //   ③ 结果侧子会话 id（spec 提取器：json-agent-id / task-id-* / subagent-result）
+  //   ④ 结果侧 claude 逻辑成员 id（agent-id-text 提取器）→ meta.claudeAgentId
+  //     映射——后台派发回执只有逻辑 id，规范 id 由捕获侧 meta 落盘解析
+  //   ⑤ 派发 prompt ↔ 子文件首条任务文本精确匹配——meta 全空的旧捕获
+  //     （孤儿现场 solo:8ae4a944）也能硬链；trim 归一与捕获侧同源
+  const resolveTargetSid = (rec: DispatchRecord, toolCallId: string): string | null =>
+    rec.argSessionId
+    ?? (rec.spec.linkViaToolUseMeta && linkageMaps
+      ? linkageMaps.toolUseIdToSessionId.get(toolCallId) ?? null
+      : null)
+    ?? rec.resultSessionId
+    ?? (rec.resultAgentId && linkageMaps
+      ? linkageMaps.claudeAgentIdToSessionId.get(rec.resultAgentId) ?? null
+      : null)
+    ?? (rec.prompt && linkageMaps
+      ? linkageMaps.taskToSessionId.get(rec.prompt.trim()) ?? null
+      : null);
+
   // 复用会话的派发时刻表：同 sid 相邻两次派发（dispatch_i → dispatch_{i+1}）
   // 构成本次派发的窗口，response/末条 turn/tokens 只在窗口内锚定。否则复用
   // 会话（首发+返工重入）的每条桥都锚到会话全局末条 turn，两窗互相包含
   //（现场 ses_ecb797cb P1/P2 各一对，读成「没执行完就返工」）
   const dispatchTimesBySession = new Map<string, number[]>();
   for (const { tc, rec } of dispatchEntries) {
-    // 与主循环 matchedSessionId 同序三段解析（arg → meta 映射 → result）：
-    // meta 直连形态（claude proxy Agent）下 meta 值可能与 resultSessionId
-    // 不同，只认 arg/result 会查空时刻表 → 窗口退化为无界、复用配对失效
-    const preSid = rec.argSessionId
-      ?? (rec.spec.linkViaToolUseMeta && toolUseIdToSubagentSessionId
-        ? toolUseIdToSubagentSessionId.get(tc.toolCallId) ?? null
-        : null)
-      ?? rec.resultSessionId;
+    const preSid = resolveTargetSid(rec, tc.toolCallId);
     if (!preSid) continue;
     const preMs = tc.startedAt ? new Date(tc.startedAt).getTime() : NaN;
     if (!Number.isFinite(preMs)) continue;
@@ -129,30 +144,19 @@ export function buildBridges(
   for (const arr of dispatchTimesBySession.values()) arr.sort((a, b) => a - b);
 
   for (const { tc: dispatchTc, rec } of dispatchEntries) {
-    let matchedSessionId: string | null = rec.argSessionId;
-
-    // For Agent tool calls, use the meta.json toolUseId mapping for precise matching
-    if (!matchedSessionId && rec.spec.linkViaToolUseMeta && toolUseIdToSubagentSessionId) {
-      matchedSessionId = toolUseIdToSubagentSessionId.get(dispatchTc.toolCallId) ?? null;
-    }
-
-    // 结果侧提取（spawn_agent JSON agent_id / task_id 文本协议）在 spec 的
-    // 提取器列表里按序完成
-    if (!matchedSessionId) {
-      matchedSessionId = rec.resultSessionId;
-    }
+    let matchedSessionId: string | null = resolveTargetSid(rec, dispatchTc.toolCallId);
 
     if (!matchedSessionId) {
-      // 派发已得到结果、却提取不出任何子会话 id（agent_id/task_id/
-      // subagent_session_id 全无）——工具以错误文本作答，子代理从未被创建。
-      // 失败的派发尝试不是子代理：跳过建桥（错误 tool call 在主时间线
-      // verbatim 完整可见），更不能落入下方时间邻近回退——那会把失败
-      // 尝试误锚到无关子代理。真机 0.162：模型 6 次失败 spawn（双参被拒
-      // ×3、reasoning_effort 被拒×3），旧逻辑产出 4 条误锚桥 + 2 条
-      // 0-turn 幽灵 lane（wire 上 codex 的 function_call_output 无
-      // is_error 标志，错误只在内容里——state=completed 不能作判据）。
-      // 结果为空/null 语义不同：结果尚未到达（导入进行中的会话），
-      // 'dispatched' 桥保留。
+      // 派发已得到结果、却解析不出任何子会话 id（arg 直连 / meta toolUseId /
+      // 结果 task_id·agent_id / claudeAgentId 映射 / prompt 任务匹配五路全
+      // 空）——工具以错误文本作答，子代理从未被创建。失败的派发尝试不是
+      // 子代理：跳过建桥（错误 tool call 在主时间线 verbatim 完整可见），更
+      // 不能落入下方时间邻近回退——那会把失败尝试误锚到无关子代理。真机
+      // 0.162：模型 6 次失败 spawn（双参被拒×3、reasoning_effort 被拒×3），
+      // 旧逻辑产出 4 条误锚桥 + 2 条 0-turn 幽灵 lane（wire 上 codex 的
+      // function_call_output 无 is_error 标志，错误只在内容里——state=
+      // completed 不能作判据）。结果为空/null 语义不同：结果尚未到达
+      //（导入进行中的会话），'dispatched' 桥保留。
       if (dispatchTc.resultJson && dispatchTc.resultJson.trim()) {
         continue;
       }

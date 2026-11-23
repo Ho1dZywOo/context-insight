@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-import type { SessionListItem, RawInteraction } from '../../shared/types';
+import type { SessionListItem, RawInteraction, SubagentLinkageMaps } from '../../shared/types';
 
 // ── 多 Agent 源接入契约（agent-source-framework）──────────────────────
 // 设计文档：docs/design/agent-source-framework/design.md
@@ -123,9 +123,9 @@ export interface SourceDescriptor {
    * dbPath 可能是文件或 sessions 根目录（UI「列表选择→导入」传目录）——
    * 适配器须自行按 sessionId 解析，两条路径结果必须同构。 */
   readSubagents?(dbPath: string, sessionId: string): RawInteraction[];
-  /** 子代理工具调用归属映射（toolUseId → subagentSessionId），技能归因专用
-   * （claude meta.json 契约）；无此数据结构的源不实现。 */
-  collectSubagentToolUseMap?(dbPath: string, sessionId: string): Map<string, string>;
+  /** 子代理关联映射（SubagentLinkageMaps：toolUseId / claudeAgentId / 任务
+   * 文本 → subagentSessionId），建桥与技能归因共用；无此数据结构的源不实现。 */
+  collectSubagentLinkage?(dbPath: string, sessionId: string): SubagentLinkageMaps;
   /** 从源文件提取 agent CLI 版本号（Session.version 候选）。dbPath 为目录时
    * 用 sessionId 解析到具体文件（无 sessionId 则按文件直读）。 */
   extractVersion?(dbPath: string, sessionId?: string): string | null;

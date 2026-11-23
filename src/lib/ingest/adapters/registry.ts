@@ -18,7 +18,7 @@ import {
   listSessions as claudeJsonlListSessions,
   readSession as claudeJsonlReadSession,
   readSubagentInteractions as claudeJsonlReadSubagents,
-  collectSubagentToolUseMappings,
+  collectSubagentLinkageMaps,
   extractVersion as extractClaudeVersion,
   detectContent as detectClaudeContent,
   deriveSessionIdFromPath as deriveClaudeSessionId,
@@ -108,7 +108,7 @@ const claudeJsonlSource: SourceDescriptor = {
   listSessions: claudeJsonlListSessions,
   readSession: claudeJsonlReadSession,
   readSubagents: claudeJsonlReadSubagents,
-  collectSubagentToolUseMap: collectSubagentToolUseMappings,
+  collectSubagentLinkage: collectSubagentLinkageMaps,
   extractVersion: extractClaudeVersion,
   // 按 .jsonl 结尾认文件：任何 jsonl 都先按 claude 格式试着解析。放最后，
   // 前面按名字匹配的源（rollout- 等）会先命中

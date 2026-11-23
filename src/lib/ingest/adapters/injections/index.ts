@@ -15,7 +15,7 @@
 // 新框架接入 = injections/<framework>.ts + 下方分发表一行。
 import { agentFrameworkOf } from '@/lib/shared/session-format';
 import type { UserInjectionClassifier, UserInjectionContext, UserInjectionDecision } from '../contract';
-import { classifyClaudeCodeUserInjection, stripTokenBudgetReminders } from './claude-code';
+import { classifyClaudeCodeUserInjection, isStaticInjectionText, stripTokenBudgetReminders } from './claude-code';
 import { classifyCodexUserInjection } from './codex';
 import { classifyOpencodeFamilyUserInjection } from './opencode';
 
@@ -48,4 +48,19 @@ export function classifyUserInjection(
   const framework = agentFrameworkOf(source) ?? 'claude-code';
   const classifier = FRAMEWORK_CLASSIFIERS[framework] ?? classifyClaudeCodeUserInjection;
   return classifier(raw, ctx);
+}
+
+// 块级静态注入判定（契约原则 1 的块级通道，与消息级分类器同一张分发表
+// 语义）：user 消息内嵌的静态 reminder 块由框架自持的指纹识别，claude
+// 布局（native / insight-export / claude-proxy）走 claude-code 指纹；codex
+// 与 opencode 家族无已知块级指纹 → null（全保留，等新指纹模块补充）。
+// 返回块文本谓词；调用方（claude-jsonl）持有形态拆解与拼装。
+export function staticInjectionBlockPredicateFor(
+  source: string | undefined,
+): ((blockText: string) => boolean) | null {
+  if (typeof source !== 'string' || !source.endsWith('-proxy')) {
+    return isStaticInjectionText;
+  }
+  const framework = agentFrameworkOf(source) ?? 'claude-code';
+  return framework === 'claude' || framework === 'claude-code' ? isStaticInjectionText : null;
 }
