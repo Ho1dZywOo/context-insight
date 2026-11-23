@@ -15,7 +15,7 @@ import { listSubagentSessionsWithDb, readSessionWithDb, readSessionMeta } from '
 import { extractVersion as extractClaudeVersion } from './adapters/claude-jsonl';
 import { classifyProxyCapture, readCcSessionMeta, proxyRecordingFrameworkFromVersion } from './proxy-classify';
 import { isProxyVersion } from '../shared/session-format';
-import { truncateUtf16Safe } from '../shared/text-strip';
+import { truncateUtf16Safe, stripSystemReminders } from '../shared/text-strip';
 import { normalize } from './normalize';
 import { splitIntoTurns, resetIdCounter } from './turn-split';
 import type { TurnRow, ToolCallRow, SkillEventRow } from './turn-split';
@@ -50,11 +50,15 @@ function recordingClassOfSessionRow(row: { framework: string; version: string | 
   return row.framework;
 }
 
-// user turn 现保留 <system-reminder> 全文（wire 保真）；label/query 预览
-// 剥掉 reminder 前缀块 —— 显示真实提示而非注入上下文。
+// label/query 预览剥掉 reminder 噪声——显示真实提示而非注入上下文。多块
+// reminder 全剥（预览口径，与 listSessions firstQuery 共用 shared 实现）；
+// 剥后为空回落原文（截断保底）。历史 bug：旧实现只剥首个前缀块，多块
+// 混排消息的块 2 残留成了标签头——现场会话标签裸奔 <system-reminder>。
+// 时间线侧已按指纹剥除（claude-jsonl readSession），此处兜底 legacy 行与
+// 未知块。
 function previewText(text: string | null | undefined): string | null {
   if (!text) return null;
-  const stripped = text.replace(/^<system-reminder>[\s\S]*?<\/system-reminder>\s*/, '').trim();
+  const stripped = stripSystemReminders(text);
   return truncateUtf16Safe(stripped || text, 200);
 }
 

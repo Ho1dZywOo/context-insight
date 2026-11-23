@@ -104,6 +104,39 @@ export function classifyAgentInjection(raw: string): AgentInjection | null {
   return null;
 }
 
+// ── 静态注入块指纹（块级，契约原则 1 的 claude-code 实现）────────────
+// claude-code 给每个代理进程（主会话与每个子代理）启动时注入的 user 消息
+// 内嵌块：项目指令回显（CLAUDE.md）、环境快照（gitStatus/claudeMd/currentDate
+// 都在 "As you answer" 壳里）、commit 署名规则、独立日历块。这些块与真实
+// 提示同属一条 wire 消息，整条消息级分类（上文事件注入）不适用——按块级
+// 指纹从 user 轮剥除（消费方 claude-jsonl readSession / listSessions 预览）。
+// 指纹整块精确：块必须恰为一个 <system-reminder> 壳且壳内头行在清单内；
+// 头行不在清单（claude 新注入类型 / 用户粘贴的样本）一律保留可见——前向
+// 兼容，不静默丢失。skills/registry 清单不进此表：有下游消费（skill-merge
+// 折进 Skill tool_call 结果、可用技能全集），且已是独立 system 行路径。
+// 现场依据（solo:8ae4a944）：主会话与全部子代理首条 user 消息都是「3 个
+// 静态块 + 1 个任务文本块」结构，多块混排是常态而非例外。
+const STATIC_REMINDER_HEADS: readonly string[] = [
+  'Codebase and user instructions are shown below',
+  "As you answer the user's questions, you can use the following context",
+  'Attribution for git commits and pull requests',
+  '# currentDate',
+];
+
+// 整块 reminder 壳判定：text 恰为一个 <system-reminder>…</system-reminder>
+// 壳（首尾包围，允许壳外空白）→ 壳内文本；混合文本（壳外有字）返回 null
+// ——只剥独立成块的注入，不碰用户正文里内嵌的 reminder 样本。
+function reminderInner(text: string): string | null {
+  const m = text.trim().match(/^<system-reminder>([\s\S]*?)<\/system-reminder>$/);
+  return m ? m[1]!.trim() : null;
+}
+
+/** 静态注入块判定（块级）：整块 reminder 壳 + 壳内头行在静态清单。 */
+export function isStaticInjectionText(text: string): boolean {
+  const inner = reminderInner(text);
+  return inner != null && STATIC_REMINDER_HEADS.some(h => inner.startsWith(h));
+}
+
 // skill 注入指纹（claude-code Skills 机制；opencode ≥1.17 同款格式，故
 // opencode 家族分类器复用本谓词）。Markers: <skill-format> / 'Base directory
 // for this skill' / 'Launching skill' distinguish skill injections from /compact.
@@ -125,9 +158,8 @@ function skillInjectionDecision(raw: string, ctx: UserInjectionContext): UserInj
 }
 
 // claude-code 契约分类器：task-notification / ≥2.1 协议注入 / skill 注入
-// （次序即优先级，指纹互斥）。全部为事件类 → system turn；claude-code 的
-// 注入都携带可辨识事件语义，无静态丢弃类（system-reminder 是 user 消息
-// 内嵌块，渲染层拆分，不走注入分类）。
+// （次序即优先级，指纹互斥）。消息级注入全部为事件类 → system turn；静态
+// 注入走块级指纹（isStaticInjectionText，见上），不经此分类器。
 export const classifyClaudeCodeUserInjection: UserInjectionClassifier = (raw, ctx) => {
   if (raw.startsWith('<task-notification>')) {
     return { action: 'system-turn', kind: 'task-notification', content: parseTaskNotificationSummary(raw) };

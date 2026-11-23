@@ -25,3 +25,13 @@ export function stripThinkingAndReminder(text: string | null): string | null {
     ?.replace(/<thinking>[\s\S]*?<\/thinking>\s*/g, '')
     .replace(/^<system-reminder>[\s\S]*?<\/system-reminder>\s*/, '') || null;
 }
+
+// 剥掉全部 <system-reminder> 壳段（全局，不限前缀）：会话标签/预览口径——
+// claude-code 的上下文注入块在此全视为噪声，取真实提示文本。注意与时间线
+// 口径的分工：时间线侧按指纹剥除（adapters/injections，未知块保留可见，
+// 前向兼容），此处只服务标签/Query 预览（listSessions firstQuery 与
+// data-service previewText 共用，两处曾各持一份局部实现且一处只剥首个
+// 前缀块——多块混排消息的块 2 残留成了标签头，现场裸奔 <system-reminder>）。
+export function stripSystemReminders(text: string): string {
+  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim();
+}

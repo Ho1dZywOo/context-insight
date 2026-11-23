@@ -379,21 +379,24 @@ describe('claude-jsonl adapter', () => {
       expect(sessions[0].firstQuery).not.toContain('claudeMd');
     });
 
-    it('user 消息保留 reminder 全文（wire 保真，不再拆 system turn）', () => {
+    it('user 消息按指纹剥静态 reminder 块（契约原则 1：静态注入不进时间线），真实提示保留', () => {
       const interactions = readSession(SYSREMINDER_FILE, 'system-reminder-strip');
-      // reminder 是 user 消息内部的 text block —— 同一条 wire 消息，不拆分
+      // 字符串形态（native claude 常用）：2 个已知静态 span（gitStatus 壳 +
+      // currentDate）剥除，真实提示保留为 user 轮
       const withPrompt = interactions.filter(i => i.role === 'user' && i.content?.includes('看看有哪些没有提交的代码'));
       expect(withPrompt.length).toBe(1);
-      expect(withPrompt[0].content).toContain('<system-reminder>');
-      expect(withPrompt[0].content).toContain('claudeMd');
-      // 不再产出 reminder 拆分 system turn
+      expect(withPrompt[0].content).not.toContain('<system-reminder>');
+      expect(withPrompt[0].content).not.toContain('claudeMd');
+      expect(withPrompt[0].content).not.toContain('currentDate');
+      // 剥除不产生 reminder 拆分 system turn
       const sysTurns = interactions.filter(i => i.role === 'system');
       expect(sysTurns.filter(i => i.content?.includes('system-reminder')).length).toBe(0);
     });
 
-    it('纯 reminder 的 user 行（无真实提示）原样成为 user turn', () => {
+    it('纯 reminder 的 user 行：未知头行保留可见（前向兼容），已知静态整条 drop', () => {
       const interactions = readSession(SYSREMINDER_FILE, 'system-reminder-strip');
-      // line 3 是 reminder-only user 行 —— 原样保留（wire 上就是一条 user 消息）
+      // line 3 是 reminder-only user 行，壳内头行不在静态清单（未知注入类型）
+      // ——保留可见，不静默丢失
       expect(interactions.filter(i => i.role === 'user').length).toBe(2);
       expect(interactions.filter(i => i.role === 'assistant').length).toBe(2);
       const pure = interactions.filter(i => i.role === 'user').find(i => i.content?.includes('Some mid-session context injection'));
@@ -421,10 +424,11 @@ describe('claude-jsonl adapter', () => {
     it('registry system turn sits between the user prompt and the assistant turn', () => {
       const interactions = readSession(PROXY_FILE, 'proxy-system-line');
       const roles = interactions.map(i => i.role);
-      // order must mirror the wire conversation: user(reminder 在消息内), system(registry), assistant
+      // order must mirror the wire conversation: user(静态 reminder 块已按指纹
+      // 剥除), system(registry), assistant
       expect(roles).toEqual(['user', 'system', 'assistant']);
       const user = interactions.find(i => i.role === 'user');
-      expect(user?.content).toContain('<system-reminder>');
+      expect(user?.content).toBe('你用的什么模型');
     });
 
     it('native claude-code type:"system" lines (no message field) stay skipped', () => {

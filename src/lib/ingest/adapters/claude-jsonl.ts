@@ -7,12 +7,12 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 import fs from 'node:fs';
-import { truncateUtf16Safe } from '@/lib/shared/text-strip';
+import { truncateUtf16Safe, stripSystemReminders } from '@/lib/shared/text-strip';
 import path from 'node:path';
 import { readCaptureBuffer, readCaptureHead, readCaptureText as readArchivedText } from '@/lib/compression';
 import { createLogger } from '@/lib/logger';
 import { readEnvelope, readEnvelopeWithLegacy } from '@/lib/shared/envelope';
-import { classifyUserInjection, stripTokenBudgetReminders } from './injections/index';
+import { classifyUserInjection, staticInjectionBlockPredicateFor, stripTokenBudgetReminders } from './injections/index';
 import { isSkillInjectionText } from './injections/claude-code';
 import { isRolloutFileName } from './codex-naming';
 import { isDshSessionLogName } from '../dsh-bridge/native';
@@ -156,9 +156,12 @@ interface ClaudeUsage {
   reasoning_tokens?: number;
 }
 
-function extractTextContent(content: string | ContentBlock[] | undefined): string | null {
+// user/assistant 内容的文本段抽取（块级剥除与全文拼接的共用原语）：
+// 字符串内容即一段；块数组取 text 段 + thinking 伪段。join('\n') 即
+// extractTextContent 的全文口径。
+function extractTextParts(content: string | ContentBlock[] | undefined): string[] | null {
   if (!content) return null;
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') return [content];
   const parts: string[] = [];
   for (const block of content) {
     if (block.type === 'text' && block.text) {
@@ -167,7 +170,28 @@ function extractTextContent(content: string | ContentBlock[] | undefined): strin
       parts.push(`<thinking>${block.thinking}</thinking>`);
     }
   }
-  return parts.length > 0 ? parts.join('\n') : null;
+  return parts.length > 0 ? parts : null;
+}
+
+function extractTextContent(content: string | ContentBlock[] | undefined): string | null {
+  return extractTextParts(content)?.join('\n') ?? null;
+}
+
+// 字符串内容拆段（块数组的对偶——native claude 会话的 user 消息常用纯字符串
+// 内容夹 reminder 段）：按 <system-reminder> 壳段切开，段间原文保留。剥除
+// 谓词作用于每个壳段（整段恰为一个壳才可能命中），普通文本段永不命中。
+function splitReminderSpans(text: string): string[] {
+  const parts: string[] = [];
+  const re = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    parts.push(m[0]);
+    last = re.lastIndex;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length > 0 ? parts : [text];
 }
 
 // claude-code 系注入指纹（task-notification 解析 / ≥2.1 协议注入 / skill
@@ -179,9 +203,8 @@ function extractTextContent(content: string | ContentBlock[] | undefined): strin
 // currentDate / available-skills as these tags inside user messages — they're
 // context, not real user input. Used for the session label / firstQuery
 // extraction (the prompt preview should not be reminder noise).
-function stripSystemReminders(text: string): string {
-  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim();
-}
+// 预览口径（全部 reminder 视为噪声）；时间线口径的按指纹剥除见 readSession
+// 的静态注入分支。实现在 shared/text-strip（与 data-service previewText 共用）。
 
 function extractToolCalls(content: ContentBlock[]): ToolCallInfo[] | null {
   const toolUseBlocks = content.filter(b => b.type === 'tool_use');
@@ -800,10 +823,16 @@ const GATED_QUEUED_KEY = 'attachment/queued_command!gated';
 const KNOWN_SYSTEM_SKIP_SUBTYPES = new Set(['total_tokens_reminder', 'duplicate']);
 const SYSTEM_SKIP_TOKEN_BUDGET = 'system/total_tokens_reminder';
 const SYSTEM_SKIP_DUPLICATE = 'system/duplicate';
+// user 行语义跳过子类型：块级静态注入（契约原则 1 drop）与 wire 重放副件
+// 去重——同白名单机制，info 级不告警
+const KNOWN_USER_SKIP_SUBTYPES = new Set(['static-injection', 'replayed-injection']);
+const USER_SKIP_STATIC_INJECTION = 'user/static-injection';
+const USER_SKIP_REPLAYED_INJECTION = 'user/replayed-injection';
 const isKnownSkipKey = (key: string): boolean => {
   if (KNOWN_SKIP_TYPES.has(key)) return true;
   if (key.startsWith('attachment/')) return KNOWN_ATTACHMENT_SUBTYPES.has(key.slice('attachment/'.length));
   if (key.startsWith('system/')) return KNOWN_SYSTEM_SKIP_SUBTYPES.has(key.slice('system/'.length));
+  if (key.startsWith('user/')) return KNOWN_USER_SKIP_SUBTYPES.has(key.slice('user/'.length));
   return false;
 };
 
@@ -1216,6 +1245,11 @@ export function readSession(filePath: string, sessionId: string): RawInteraction
   // system 行已见内容（wire 重复注入去重）：system 组件无 message.id，捕获
   // 侧逐请求原样落盘——同内容首现保留，重复跳过（见 system 分支注释）
   const seenSystemTexts = new Set<string>();
+  // 注入行已见原文（wire 重放副件去重）：注入行 byte-identical 重现 = 捕获侧
+  // 进程重启的 multiset 失守产物（真事件通知各轮内容必变——tokens/结果文本
+  // 递进，不可能逐字节相同），首现保留。真实人类输入不在此去重：人类重复
+  // 输入是真实事件，契约「真实人类输入保持 user」。
+  const seenInjectionLines = new Set<string>();
   // 重放签章已见集 + 重放组计数（见 replaySignature——resume/compact 历史重写去重）
   const seenReplaySigs = new Set<string>();
   let replaySkippedGroups = 0;
@@ -1279,6 +1313,8 @@ export function readSession(filePath: string, sessionId: string): RawInteraction
       const injection = classifyUserInjection(line.source, raw, { isFirstTurn: result.length === 0 });
       if (injection) {
         if (injection.action === 'drop') { noteSkip(line.type); continue; }
+        if (seenInjectionLines.has(raw)) { noteSkip(USER_SKIP_REPLAYED_INJECTION); continue; }
+        seenInjectionLines.add(raw);
         result.push({
           role: 'system',
           content: injection.content ?? raw,
@@ -1291,12 +1327,32 @@ export function readSession(filePath: string, sessionId: string): RawInteraction
         continue;
       }
 
-      // <system-reminder>（CLAUDE.md / gitStatus / currentDate 等注入上下文）
-      // 在 wire 上是 user 消息内部的 text block —— 与真实提示同属一条消息。
-      // 不再拆分成独立 system turn（拆开是过度切分：时间线零碎、LLM Input
-      // 重建时还得 toWireOrder 拼回去）。user turn 原样保留全文（wire 保真），
-      // 渲染层（LlmContextView.reminderPrefix）把 reminder 块显示为独立子块。
-      const content = raw;
+      // 块级静态注入剥除（契约原则 1「静态注入丢弃不进时间线」的块级实现）：
+      // claude-code 给每个代理进程启动时注入的上下文块（CLAUDE.md 回显 /
+      // gitStatus 快照 / 署名规则 / 日历）与真实提示同属一条 wire 消息——
+      // 按块级指纹剥除，真实提示保留；剥后无实质文本的纯注入消息整条 drop。
+      // 指纹经 injections/ 按行级 source 分发（框架自持），未知 reminder 块
+      // 保留可见（前向兼容）；native 与 proxy 同口径（框架语义，非 proxy
+      // 特有）。wire 原文不动——wire-rounds / full-context 直读捕获文件。
+      // 历史决策注：此前这里「原样保留全文 + 渲染层拆分」，实测每个会话
+      // （主 + 全部子代理）首条 user 轮都背着一坨静态块、时间线裸奔 XML
+      // 噪声——契约本就要求 drop，此为实现到位。
+      let content = raw;
+      const isStaticBlock = staticInjectionBlockPredicateFor(line.source);
+      if (isStaticBlock) {
+        // 形态拆段：字符串按 reminder 壳段拆（join('') 还原），块数组按
+        // text/thinking 段拆（join('\n')，extractTextContent 口径）
+        const isString = typeof line.message.content === 'string';
+        const parts = isString
+          ? splitReminderSpans(line.message.content as string)
+          : (extractTextParts(line.message.content) ?? []);
+        const kept = parts.filter(p => !isStaticBlock(p));
+        if (kept.length < parts.length) {
+          const joined = kept.join(isString ? '' : '\n').trim();
+          if (!joined) { noteSkip(USER_SKIP_STATIC_INJECTION); continue; }
+          content = joined;
+        }
+      }
       if (content) {
         // 用户输入是新的请求边界（下一 assistant 请求始于用户消息之后）
         nativeBoundary = timeCreated;
