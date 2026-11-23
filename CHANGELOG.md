@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.7] - 2026-11-23
+## [Unreleased]
 
 ### Fixed
 - 【静态注入块裸奔时间线 + 会话标签 + 背景事件重放副本（读侧三修）】现场 solo:8ae4a944 三个可见症状同根于注入解释缺口：① 主会话与每个子代理的首条 user 轮都背着一坨 `<system-reminder>` 静态上下文块（CLAUDE.md 回显 / gitStatus 快照 / 署名规则），时间线裸奔 XML 噪声——契约原则 1 早就写明「静态注入丢弃不进时间线」，claude-code 分类器却无静态丢弃类（注释推给渲染层，渲染层从未实现）；② 会话标签裸奔 `<system-reminder>` 头——label 链的 `previewText` 只剥首个前缀块，多块混排消息的块 2 残留成标签头；③ cpx 捕获侧进程重启的重放副本（multiset 失守，见 cpx 同版 changelog）在 insight 无去重直达时间线——背景事件 ×5 放大（单代理 32 条）。修复（契约原则 1 实现到位，三处同构）：① **块级静态指纹剥除**——新谓词 `isStaticInjectionText`（injections/claude-code 框架自持：CLAUDE.md 回显 / gitStatus 壳 / 署名规则 / currentDate 四头行，整块恰为一个 reminder 壳才命中），`staticInjectionBlockPredicateFor` 按行级 source 分发（claude 布局全口径，codex/opencode 无指纹不剥），readSession 用户分支按块剥除留真实提示（字符串形态按 span 拆段，native claude 常用），剥后无实质文本的纯注入消息整条 drop，未知头行保留可见（前向兼容不静默丢失），wire 原文不动（wire-rounds / full-context 直读捕获）；② **标签口径统一**——`stripSystemReminders` 收编 shared/text-strip（全局剥），listSessions firstQuery 与 data-service previewText 共用，多块残留根治；③ **注入行重放副件去重**——注入分类行 byte-identical 重现按 wire 重放副本跳过（真事件通知各轮内容必变），真实人类输入不去重（人类重复是真实事件），旧捕获重导自愈。真机验证：现场捕获件重导 readSession——背景事件 214 → 38 条（178 条重放副本去重）、首条 user 轮 = 真实任务文本、标签链取到真实提示、残留 5 条 reminder user 轮全部为设计内保留（人类干预/续会摘要/工具结果回放，混合消息与未知头行）；桥链任务文本提取（file 级真源）不受时间线剥除影响。UT 新增 9 例（块级剥除两形态 / 纯静态 drop / 未知保留 / 原生与 proxy 同口径 / codex 不剥 / 重放去重 / 真实重复保留 / label 链 / 桥链对齐），更新 3 例旧断言（「wire 保真保留全文」决策翻转为按指纹剥除），全量 3310 + e2e 46 全绿
