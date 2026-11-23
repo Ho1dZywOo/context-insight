@@ -17,7 +17,7 @@ import { isSkillInjectionText } from './injections/claude-code';
 import { isRolloutFileName } from './codex-naming';
 import { isDshSessionLogName } from '../dsh-bridge/native';
 import type { SubagentRef } from './contract';
-import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage } from '../../shared/types';
+import type { SessionListItem, RawInteraction, ToolCallInfo, TokenUsage, SubagentLinkageMaps } from '../../shared/types';
 import { normalizeToolResultPayload } from '../../tool-conventions';
 
 // Shared scan helpers (claude-format concepts, also reused by the proxy
@@ -99,6 +99,11 @@ export interface XLake {
     agentType?: string | null;
     subagentSessionId?: string;
     agentId?: string | null;
+    /** claude 捕获关联扩展（cpx claude-linkage 契约）：逻辑成员身份 / 任务
+     *  文本安全键 / 规范 id 语义声明。codex meta 不写这些字段。 */
+    claudeAgentId?: string | null;
+    task?: string | null;
+    idSource?: string | null;
   };
 }
 
@@ -506,11 +511,16 @@ export function findSessionFile(dirPath: string, sessionId: string): string | nu
 }
 
 // 发现产出的子代理引用：contract.SubagentRef（id = 规范连接键）+ claude
-// meta 契约的 toolUseId 锚定键。meta.json 由发现层单次读取
+// meta 契约的 toolUseId 锚定键 + 关联别名（claudeAgentId/task，cpx 捕获
+// 新契约；老捕获无这些字段全 null）。meta.json 由发现层单次读取
 // （readSubagentMeta），打标/技能归因等下游不再各自开文件。
 interface ClaudeSubagentRef extends SubagentRef {
   /** Task tool_use 锚定键（claude meta.json 契约，技能归因用） */
   toolUseId: string | null;
+  /** x-claude-code-agent-id 头（claude 逻辑成员身份；关联别名，非规范 id） */
+  claudeAgentId: string | null;
+  /** 派发任务文本（cpx meta 契约；老捕获无 → 由 collectSubagentLinkageMaps 从捕获文件回读） */
+  task: string | null;
 }
 
 // 子代理 meta.json 单读（双名信封优先，顶层旧字段 fallback；兼容压缩形态
@@ -520,6 +530,11 @@ function readSubagentMeta(filePath: string): {
   toolUseId: string | null;
   name: string | null;
   agentType: string | null;
+  claudeAgentId: string | null;
+  task: string | null;
+  /** 规范 id 语义声明：'fileStem'（claude 捕获，文件名 id 恒为规范 id）|
+   *  'agentId'（codex 捕获，文件名是占位）。legacy meta 无声明 → null。 */
+  idSource: string | null;
 } | null {
   try {
     const metaPath = filePath.replace(/\.jsonl(\.7z|\.gz)?$/, '.meta.json');
@@ -533,6 +548,9 @@ function readSubagentMeta(filePath: string): {
       toolUseId: str(data?.toolUseId ?? meta.toolUseId),
       name: str(data?.name ?? meta.name) ?? str(data?.agentType ?? meta.agentType) ?? str(meta.description),
       agentType: str(data?.agentType ?? meta.agentType),
+      claudeAgentId: str(data?.claudeAgentId ?? meta.claudeAgentId),
+      task: str(data?.task ?? meta.task),
+      idSource: str(data?.idSource ?? meta.idSource),
     };
   } catch {
     return null;
@@ -594,17 +612,24 @@ export function listSubagentSessions(dirPath: string, sessionId: string): Claude
       if (entry.isFile() && m) {
         const filePath = path.join(subagentsDir, entry.name);
         const meta = readSubagentMeta(filePath);
-        // codex-proxy 身份对齐：文件名 id（sub-<hash>）是 cpx 在 spawn 输出
-        // 到达前铸的占位，真身 agentId 由 meta backfill——bridge-builder 按
-        // spawn 输出的 agent_id 锚定，规范 id 必须用 agentId 才能和 Bridge/
-        // Execution 对上（否则泳道/性能视图全部 0 turns）。claude 捕获无
-        // agentId，回退文件名 id（= 真身会话 id，行为不变）。
+        // 规范 id 语义由 meta.idSource 声明（cpx 两框架显式落盘）：
+        //   fileStem（claude 捕获）——文件名 id（sub-<md5(task)>）即规范 id，
+        //     claudeAgentId 只是关联别名，绝不顶替（否则桥/泳道/Execution
+        //     全线换键）；agentId（codex 捕获）——文件名是 spawn 输出到达前
+        //     铸的占位，真身 id 在 meta，必须回填。legacy meta 无声明：沿旧
+        //     口径 agentId 字段存在即 codex 回填语义（claude 老 meta 从不写
+        //     agentId，行为不变）。
+        const canonicalId = meta?.idSource === 'fileStem' ? m[1]
+          : meta?.idSource === 'agentId' ? (meta.agentId ?? m[1])
+          : (meta?.agentId ?? m[1]);
         results.push({
-          id: meta?.agentId ?? m[1],
+          id: canonicalId,
           filePath,
           name: meta?.name ?? null,
           type: meta?.agentType ?? null,
           toolUseId: meta?.toolUseId ?? null,
+          claudeAgentId: meta?.claudeAgentId ?? null,
+          task: meta?.task ?? null,
         });
       }
     }
@@ -613,14 +638,60 @@ export function listSubagentSessions(dirPath: string, sessionId: string): Claude
   return results;
 }
 
-export function collectSubagentToolUseMappings(dirPath: string, sessionId: string): Map<string, string> {
-  // Maps toolUseId (from meta.json) → canonical subagent session ID
-  // （subagent_session_id 同键，与打标口径一致）
-  const mapping = new Map<string, string>();
+// 子代理关联三映射（contract.collectSubagentLinkage 能力实现，data-service
+// 单次调用穿线给 bridge-builder）。三条精确连接键独立成立、互不依赖：
+//   toolUseId      —— meta 直锚（cpx/原生 harness 持有派发 id 时最硬）
+//   claudeAgentId  —— claude 逻辑成员身份（cpx 新契约落盘；后台派发回执
+//                     的 agentId 由此解析为规范子会话 id）
+//   task           —— 派发 prompt ↔ 子文件首条用户任务（trim 归一）。meta
+//                     没写 task（老版本捕获，孤儿现场 solo:8ae4a944）时回
+//                     捕获文件回读——与 cpx 的 subagentTaskTextOf 语义手工
+//                     对齐（首条非 reminder/stepped-away 文本块 trim）。
+export function collectSubagentLinkageMaps(dirPath: string, sessionId: string): SubagentLinkageMaps {
+  const toolUseIdToSessionId = new Map<string, string>();
+  const claudeAgentIdToSessionId = new Map<string, string>();
+  const taskToSessionId = new Map<string, string>();
   for (const sub of listSubagentSessions(dirPath, sessionId)) {
-    if (sub.toolUseId) mapping.set(sub.toolUseId, sub.id);
+    if (sub.toolUseId) toolUseIdToSessionId.set(sub.toolUseId, sub.id);
+    if (sub.claudeAgentId) claudeAgentIdToSessionId.set(sub.claudeAgentId, sub.id);
+    const task = sub.task ?? subagentTaskOfCapture(sub.filePath);
+    if (task && !taskToSessionId.has(task)) taskToSessionId.set(task, sub.id);
   }
-  return mapping;
+  return { toolUseIdToSessionId, claudeAgentIdToSessionId, taskToSessionId };
+}
+
+// 子捕获文件的首条任务文本（cpx claude-linkage.taskOfSubagentFile 同语义：
+// 首条 user 行的真实任务文本，system-reminder / stepped-away 块跳过）。
+// 只对 meta 未带 task 的老捕获兜底——新捕获 meta.task 直取，不开文件。
+function subagentTaskOfCapture(filePath: string): string | null {
+  let task: string | null = null;
+  try {
+    for (const line of parseJsonlLines(filePath)) {
+      if (task) break;
+      if (line.type !== 'user' || !line.message) continue;
+      task = subagentTaskTextOf(line.message.content);
+    }
+  } catch {
+    return null;
+  }
+  return task;
+}
+
+// 首条用户消息里的任务文本提取（与 cpx claude-linkage.subagentTaskTextOf
+// 手工对齐——两包不互相 import，双端语义同源）。
+function subagentTaskTextOf(content: string | ContentBlock[] | undefined): string | null {
+  if (typeof content === 'string') {
+    const t = content.trim();
+    return (t && !t.startsWith('<system-reminder>') && !t.startsWith('The user stepped away')) ? t : null;
+  }
+  if (!Array.isArray(content)) return null;
+  for (const b of content) {
+    if (b.type !== 'text' || !b.text) continue;
+    const t = b.text.trim();
+    if (!t || t.startsWith('<system-reminder>') || t.startsWith('The user stepped away')) continue;
+    return t;
+  }
+  return null;
 }
 
 // 子代理会话读取（SourceDescriptor.readSubagents 能力实现）：目录布局发现

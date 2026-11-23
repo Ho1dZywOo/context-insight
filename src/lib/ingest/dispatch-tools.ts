@@ -52,7 +52,7 @@ export interface DispatchToolSpec {
   linkViaToolUseMeta?: boolean;
 }
 
-export type ResultSessionIdExtractor = 'json-agent-id' | 'task-id-text' | 'task-id-xml' | 'subagent-result';
+export type ResultSessionIdExtractor = 'json-agent-id' | 'task-id-text' | 'task-id-xml' | 'subagent-result' | 'agent-id-text';
 
 export const DISPATCH_TOOLS: readonly DispatchToolSpec[] = [
   {
@@ -67,7 +67,10 @@ export const DISPATCH_TOOLS: readonly DispatchToolSpec[] = [
     resultSessionIdExtractors: ['task-id-text', 'task-id-xml'],
   },
   {
-    // claude Task 的 proxy 形态（原硬编码 toolName === 'Agent'）
+    // claude Task 的 proxy 形态（原硬编码 toolName === 'Agent'）。
+    // 后台派发（Async agent launched…）的回执只有 claude 逻辑成员 id
+    // （agentId: <hex>），不是规范子会话 id——经 agent-id-text 提取为
+    // resultAgentId，由 bridge-builder 的 meta.claudeAgentId 映射解析
     names: ['agent'],
     sessionIdArgKeys: ['subagent_session_id'],
     agentTypeArgKeys: ['subagent_type', 'mode', 'subagent_name'],
@@ -75,7 +78,7 @@ export const DISPATCH_TOOLS: readonly DispatchToolSpec[] = [
     contentArgKeys: ['description'],
     promptArgKeys: ['prompt'],
     linkViaToolUseMeta: true,
-    resultSessionIdExtractors: ['task-id-text'],
+    resultSessionIdExtractors: ['task-id-text', 'agent-id-text'],
   },
   {
     // codex spawn_agent：任务文本 wire 双形态（0.161 message 直传；0.162 只传
@@ -143,6 +146,9 @@ export interface DispatchRecord {
   prompt: string | null;
   /** 结果侧提取的子会话 id。 */
   resultSessionId: string | null;
+  /** 结果侧提取的 claude 逻辑成员 id（后台派发回执 agentId: <hex>）——
+   *  非规范子会话 id，由 bridge-builder 经 meta.claudeAgentId 映射解析。 */
+  resultAgentId: string | null;
   /** 结果侧展示名 fallback（spawn_agent JSON nickname）。 */
   resultNickname: string | null;
 }
@@ -174,7 +180,7 @@ export function resolveDispatchToolCall(
     ? spec.extractPromptFromArgs(args)
     : firstStr(spec.promptArgKeys, args);
 
-  const { sessionId: resultSessionId, nickname } = extractResultSessionId(
+  const { sessionId: resultSessionId, agentId: resultAgentId, nickname } = extractResultSessionId(
     tc.resultJson, spec.resultSessionIdExtractors,
   );
 
@@ -188,6 +194,7 @@ export function resolveDispatchToolCall(
     content: firstStr(spec.contentArgKeys, args) ?? prompt,
     prompt,
     resultSessionId,
+    resultAgentId,
     resultNickname: spec.resultNickname ? nickname : null,
   };
 }
@@ -313,8 +320,9 @@ function firstTextOfSpawnItems(items: unknown): string | null {
 function extractResultSessionId(
   resultJson: string | null,
   extractors?: readonly ResultSessionIdExtractor[],
-): { sessionId: string | null; nickname: string | null } {
-  if (!resultJson || !extractors || extractors.length === 0) return { sessionId: null, nickname: null };
+): { sessionId: string | null; agentId: string | null; nickname: string | null } {
+  let agentId: string | null = null;
+  if (!resultJson || !extractors || extractors.length === 0) return { sessionId: null, agentId: null, nickname: null };
   for (const extractor of extractors) {
     if (extractor === 'json-agent-id') {
       // codex spawn_agent 的输出是干净 JSON：{"agent_id":"<子会话 id>","nickname":"…"}
@@ -323,7 +331,7 @@ function extractResultSessionId(
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           const obj = parsed as { agent_id?: unknown; nickname?: unknown };
           if (typeof obj.agent_id === 'string' && obj.agent_id) {
-            return { sessionId: obj.agent_id, nickname: strOf(obj.nickname) };
+            return { sessionId: obj.agent_id, agentId, nickname: strOf(obj.nickname) };
           }
         }
       } catch {
@@ -332,19 +340,26 @@ function extractResultSessionId(
     } else if (extractor === 'task-id-text') {
       // claude 文本协议：task_id: ses_xxx
       const claudeTask = resultJson.match(/task_id:\s*(\S+)/);
-      if (claudeTask) return { sessionId: claudeTask[1]!, nickname: null };
+      if (claudeTask) return { sessionId: claudeTask[1]!, agentId, nickname: null };
       // dsh（DeepSeek Harness）：派发成功的工具结果是 `started subagent <uuid>`
       // （原生适配器把派发工具名统一为 Agent，命中本 spec 的结果提取器）。
       // 缺了这条，DSH 派发取不到子会话 id——既不是 claude 的 task_id、也不是
       // codex 的 JSON agent_id——会撞「结果非空即不建桥」的失败派发守卫，
       // 子代理连不上、退化成普通 tool call
       const dshSub = resultJson.match(/started subagent\s+([0-9a-fA-F-]{36})/);
-      if (dshSub) return { sessionId: dshSub[1]!, nickname: null };
+      if (dshSub) return { sessionId: dshSub[1]!, agentId, nickname: null };
+    } else if (extractor === 'agent-id-text') {
+      // claude 后台派发回执：agentId: <hex16>。这是 claude 的逻辑成员
+      // id，不是规范子会话 id——本提取器只把它放 agentId 通道
+      // （resultAgentId），由 bridge-builder 经 meta.claudeAgentId 映射解析
+      // 出规范 id。不 return（回执里若还有其他可提取信息，后续提取器继续）
+      const m = resultJson.match(/agentId:\s*([0-9a-f]{16,64})\b/);
+      if (m) agentId = m[1]!;
     } else if (extractor === 'task-id-xml') {
       // opencode task 真机结果形态：<task id="ses_…" state="completed">。结果
       // 可能是 JSON 内容块数组（text 内层引号转义成 \"），直引号与转义引号都要容
       const match = resultJson.match(/<task\s+id=\\?"([^"\\]+)\\?"/);
-      if (match) return { sessionId: match[1]!, nickname: null };
+      if (match) return { sessionId: match[1]!, agentId, nickname: null };
     } else if (extractor === 'subagent-result') {
       // reuseDispatch 插件结果双形态（真机核实）。结果常是嵌套 JSON 字符串
       // （content = JSON 数组的文本形态，内层引号带转义），先解一层拼出干净
@@ -365,10 +380,10 @@ function extractResultSessionId(
         // 非 JSON：原样探测
       }
       const xml = probe.match(/<subagent\s+sessionID="([^"]+)"/);
-      if (xml) return { sessionId: xml[1]!, nickname: null };
+      if (xml) return { sessionId: xml[1]!, agentId, nickname: null };
       const paren = probe.match(/\(sessionID:\s*(\S+?)\)/);
-      if (paren) return { sessionId: paren[1]!, nickname: null };
+      if (paren) return { sessionId: paren[1]!, agentId, nickname: null };
     }
   }
-  return { sessionId: null, nickname: null };
+  return { sessionId: null, agentId, nickname: null };
 }

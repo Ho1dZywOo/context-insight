@@ -177,7 +177,11 @@ describe('bridge-builder: meta 直连 ≠ result 会话 id 的窗口配对', () 
       ['call-meta-1', 'sub-meta'],
       ['call-meta-2', 'sub-meta'],
     ]);
-    const bs = buildBridges(normalized, split.toolCalls, split.turns, 'session-meta-window', 'root-exec-m', toolUseIdToSubagentSessionId);
+    const bs = buildBridges(normalized, split.toolCalls, split.turns, 'session-meta-window', 'root-exec-m', {
+      toolUseIdToSessionId: toolUseIdToSubagentSessionId,
+      claudeAgentIdToSessionId: new Map(),
+      taskToSessionId: new Map(),
+    });
 
     const first = bs.find(b => b.dispatchContent === 'P1 meta 首发')!;
     const rework = bs.find(b => b.dispatchContent === 'P1 meta 返工')!;

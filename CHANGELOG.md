@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- 【后台派发孤儿桥根治（消费端闭环，配 cpx claude-linkage 修复）】claude 后台派发（Async agent launched）回执只有 claude 逻辑成员 id（`agentId: <hex16>`），不是规范子会话 id——派发 spec 此前只有 task_id 文本提取器，回执提取不出 id，叠加「结果非空即不建桥」失败守卫，派发直接跳过不建桥；cpx 侧 meta 全空的旧捕获（跨进程内存态失守，见 cpx 同版 changelog）连 toolUseId 映射也没有，子代理成孤儿（现场 solo:8ae4a944：2 孤儿 69M/520M tokens 无归属）。声明式注册表扩展（`agent-id-text` 提取器 → `DispatchRecord.resultAgentId` 独立通道，不冒充规范 id）+ 建桥链从三段升五段（arg 直连 → meta toolUseId → 结果子会话 id → **claudeAgentId 映射**（meta.claudeAgentId 落盘后回执 agentId 精确解析）→ **prompt↔任务文本精确匹配**（meta 全空的旧捕获也能硬链；trim 归一与 cpx subagentTaskTextOf 手工对齐——首条非 reminder/stepped-away 文本块）），五段链 pre-pass 与主循环同构共用（复用会话派发窗时刻表对新链路同样成立，不再退化为无界窗口）；适配器能力 `collectSubagentToolUseMap` 升格 `collectSubagentLinkage`（SubagentLinkageMaps 三映射单参穿线：toolUseId / claudeAgentId / 任务文本 → 规范子会话 id，任务键 meta 缺失回捕获文件回读）；meta 规范 id 语义改显式声明 `idSource`（fileStem=claude 捕获文件名 id 恒规范 / agentId=codex 捕获真身回填；legacy 无声明沿旧口径 agentId 存在即 codex 语义，行为不变）。真机验证：solo:8ae4a944 捕获件重跑管线——44/44 子代理全部建桥（旧 42 桥零回归 + 2 孤儿经任务文本链归位，tokens 69.3M/520.1M 落归属），claudeAgentId 映射空位/键缺位不误链、失败派发守卫保持（五路全空仍不建桥不落时间邻近）。UT 新增 11 例（后台回执建桥 5 + 关联映射/规范 id 语义 6），全量 3300 例绿
+
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
 ## [1.0.6] - 2026-11-19
