@@ -677,7 +677,7 @@ export function collectSubagentLinkageMaps(dirPath: string, sessionId: string): 
   for (const sub of listSubagentSessions(dirPath, sessionId)) {
     if (sub.toolUseId) toolUseIdToSessionId.set(sub.toolUseId, sub.id);
     if (sub.claudeAgentId) claudeAgentIdToSessionId.set(sub.claudeAgentId, sub.id);
-    const task = sub.task ?? subagentTaskOfCapture(sub.filePath);
+    const task = (sub.task ?? subagentTaskOfCapture(sub.filePath))?.trim();
     if (task && !taskToSessionId.has(task)) taskToSessionId.set(task, sub.id);
   }
   return { toolUseIdToSessionId, claudeAgentIdToSessionId, taskToSessionId };

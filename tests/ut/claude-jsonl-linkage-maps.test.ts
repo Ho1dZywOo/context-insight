@@ -61,6 +61,16 @@ describe('collectSubagentLinkageMaps：三条精确连接键', () => {
     expect(maps.taskToSessionId.get('任务全文')).toBe('sub-aaa');
   });
 
+  it('meta.task 带首尾空白：任务键 trim 归一，与派发侧 rec.prompt.trim() 对齐', () => {
+    writeSub('sub-trim', [
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '任务全文' }] }, timestamp: '2026-03-01T00:00:00Z' },
+    ], claudeMeta({ claudeAgentId: 'a98641f58960793f1', task: '  任务全文\n', idSource: 'fileStem' }));
+
+    const maps = collectSubagentLinkageMaps(mainFile, 'sess1');
+    expect(maps.taskToSessionId.get('任务全文')).toBe('sub-trim');
+    expect(maps.taskToSessionId.has('  任务全文\n')).toBe(false);
+  });
+
   it('老捕获（meta 三字段全空、无 task）：任务键回捕获文件回读', () => {
     writeSub('sub-orphan', [
       { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '孤儿派发的任务文本\n' }] }, timestamp: '2026-03-01T00:00:00Z' },
