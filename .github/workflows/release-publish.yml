@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Required for next releases; leave empty for dev"
-        required: false
+        description: "Git tag to release (vX.Y.Z, must exist and be contained in main)"
+        required: true
         type: string
       confirm_version:
-        description: "Required for next releases; leave empty for dev"
-        required: false
+        description: "Version confirmation (X.Y.Z, must match package.json)"
+        required: true
         type: string
       mode:
         description: "dry-run validates only; publish performs npm publication"
@@ -20,18 +20,13 @@ on:
           - dry-run
           - publish
       dist_tag:
-        description: "Publish channel; dev leaves next and latest unchanged"
+        description: "Publish channel: beta for verification, latest goes straight to users"
         required: true
-        default: next
+        default: beta
         type: choice
         options:
-          - next
-          - dev
-      promote_latest:
-        description: "Stable only: after next verification promote both packages to latest"
-        required: true
-        default: false
-        type: boolean
+          - beta
+          - latest
 
 permissions:
   contents: read
@@ -55,7 +50,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.dist_tag == 'dev' && 'main' || inputs.release_tag }}
+          ref: ${{ inputs.release_tag }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -73,15 +68,9 @@ jobs:
 
       - name: Resolve release version
         id: version
-        env:
-          DIST_TAG: ${{ inputs.dist_tag }}
         run: |
-          if [ "$DIST_TAG" = "dev" ]; then
-            node scripts/release/prepare-dev-version.mjs
-          else
-            VERSION=$(node -p "require('./package.json').version")
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          fi
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Validate release identity
         env:
@@ -89,13 +78,8 @@ jobs:
           CONFIRM_VERSION: ${{ inputs.confirm_version }}
           MODE: ${{ inputs.mode }}
           DIST_TAG: ${{ inputs.dist_tag }}
-          PROMOTE_LATEST: ${{ inputs.promote_latest }}
         run: |
-          if [ "$DIST_TAG" = "dev" ]; then
-            node scripts/release/preflight-publish.mjs --mode "$MODE" --dist-tag dev --promote-latest "$PROMOTE_LATEST"
-          else
-            node scripts/release/preflight-publish.mjs --tag "$RELEASE_TAG" --confirm "$CONFIRM_VERSION" --mode "$MODE" --dist-tag next --promote-latest "$PROMOTE_LATEST"
-          fi
+          node scripts/release/preflight-publish.mjs --tag "$RELEASE_TAG" --confirm "$CONFIRM_VERSION" --mode "$MODE" --dist-tag "$DIST_TAG"
 
   build:
     needs: preflight
@@ -108,7 +92,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.dist_tag == 'dev' && 'main' || inputs.release_tag }}
+          ref: ${{ inputs.release_tag }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -120,10 +104,6 @@ jobs:
         run: |
           npm install --global npm@11.21.3
           npm --version
-
-      - name: Apply generated dev version
-        if: inputs.dist_tag == 'dev'
-        run: node scripts/release/prepare-dev-version.mjs --version "${{ needs.preflight.outputs.version }}"
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund --no-package-lock
@@ -180,7 +160,7 @@ jobs:
     timeout-minutes: 30
     environment: npm-release
     permissions:
-      contents: write
+      contents: read
       id-token: write
     env:
       NEXT_TELEMETRY_DISABLED: "1"
@@ -188,7 +168,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.dist_tag == 'dev' && 'main' || inputs.release_tag }}
+          ref: ${{ inputs.release_tag }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -210,19 +190,6 @@ jobs:
       - name: Verify downloaded checksums
         run: sha256sum -c release-artifacts/SHA256SUMS
 
-      - name: Create dev release tag
-        if: inputs.dist_tag == 'dev'
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          TAG="v$VERSION"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "tag $TAG already exists" >&2
-            exit 1
-          fi
-          git tag "$TAG"
-          git push origin "$TAG"
-
       - name: Publish packages to selected dist-tag
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
@@ -230,11 +197,3 @@ jobs:
         run: |
           npm publish "./release-artifacts/context-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
           npm publish "./release-artifacts/cannbot-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
-
-      - name: Promote packages to latest
-        if: inputs.promote_latest == true && inputs.dist_tag != 'dev'
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          npm dist-tag add "context-insight@${VERSION}" latest
-          npm dist-tag add "cannbot-insight@${VERSION}" latest
