@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- npm 发版通道收敛为 `latest`（用户默认安装）与 `beta`（验证通道）两级：发布与提升解耦，beta 验证通过后经新的 Release Promote 流程提升 latest，旧 next/dev 指针一并清理
+
 ## [1.0.7] - 2026-11-24
 
 ### Fixed
