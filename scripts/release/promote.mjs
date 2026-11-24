@@ -10,8 +10,8 @@
 //   node scripts/release/promote.mjs --version X.Y.Z --confirm X.Y.Z [--prune-legacy true|false]
 // 前置：该版本已发布（任一 dist-tag 下，通常为 beta）且两包齐备；
 // 动作：两包 npm dist-tag add <pkg>@<version> latest，可选清理旧 next/dev 指针。
-// 凭据：dist-tag add/rm 不支持 --provenance（OIDC），CI 内由 setup-node 经 NODE_AUTH_TOKEN
-// 写入 .npmrc 的 _authToken 认证；本地须维护者 2FA。
+// 凭据：CI 内走 OIDC trusted publishing（npm 官方支持 dist-tag 操作，npmjs.com 侧
+// trusted publisher 须勾选 Allow npm dist-tag）；本地须维护者 2FA。
 
 import { spawnSync } from 'node:child_process'
 
