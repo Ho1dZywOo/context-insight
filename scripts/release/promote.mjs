@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
 // This program is free software: you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You should not use this file except in compliance with the License.
+// Please refer to the License for details. You may not use this file except in compliance with the License.
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
@@ -10,7 +10,8 @@
 //   node scripts/release/promote.mjs --version X.Y.Z --confirm X.Y.Z [--prune-legacy true|false]
 // 前置：该版本已发布（任一 dist-tag 下，通常为 beta）且两包齐备；
 // 动作：两包 npm dist-tag add <pkg>@<version> latest，可选清理旧 next/dev 指针。
-// 凭据：GitHub Actions 内走 npm Trusted Publishing（OIDC），本地须维护者 2FA。
+// 凭据：dist-tag add/rm 不支持 --provenance（OIDC），CI 内由 setup-node 经 NODE_AUTH_TOKEN
+// 写入 .npmrc 的 _authToken 认证；本地须维护者 2FA。
 
 import { spawnSync } from 'node:child_process'
 
@@ -63,13 +64,23 @@ function distTagsOf(name) {
   return JSON.parse(output)
 }
 
-for (const name of packageNames) {
+// 先只读校验两包均已发布（任一 dist-tag 指向目标版本），全部通过后再统一变更，
+// 避免半程失败留下两包 latest 不一致（先动第一个包、第二个包才发现未发布）。
+const packageStates = packageNames.map((name) => {
   const tags = distTagsOf(name)
   const published = Object.entries(tags).some(([, value]) => value === version)
-  if (!published) {
+  return { name, tags, published }
+})
+
+const missing = packageStates.filter(({ published }) => !published)
+if (missing.length > 0) {
+  for (const { name } of missing) {
     console.error(`[release-promote] ${name}@${version} is not published yet (no dist-tag points at it)`)
-    process.exit(1)
   }
+  process.exit(1)
+}
+
+for (const { name, tags } of packageStates) {
   if (tags.latest === version) {
     console.log(`[release-promote] ${name}: latest already points at ${version} (idempotent)`)
   } else {

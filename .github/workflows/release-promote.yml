@@ -35,6 +35,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      # dist-tag add/rm 不支持 --provenance（OIDC），须经 registry token 认证：
+      # setup-node 据此把 //registry.npmjs.org/:_authToken 写入 .npmrc
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -45,6 +49,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
+          registry-url: "https://registry.npmjs.org/"
 
       - name: Upgrade npm for Trusted Publishing
         run: |
