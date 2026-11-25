@@ -123,7 +123,7 @@ proxy（cpx 捕获）是 insight 的扩展来源，不是核心管线的一部�
 
 ## Testing
 
-- **Test DB isolation**: 测试一律写独立 `prisma/test.db`（`tests/setup.ts` 默认 + pretest 每次重建）——禁止任何测试直连真实 `prisma/dev.db`（常驻 server 的生产库）；回归锁 `tests/ut/test-db-isolation.test.ts`
+- **Test DB isolation**: 测试库按 worker 分片——pretest 重建 `prisma/test.db` 黄金模板，`tests/setup.ts` 为每个测试进程复制出独立 `prisma/test-w<id>.db`（vitest isolate 默认下 ≈ 每测试文件一库；显式 `DATABASE_URL` 可越过）；禁止任何测试直连真实 `prisma/dev.db`（常驻 server 的生产库）；回归锁 `tests/ut/test-db-isolation.test.ts` + `tests/ut/worker-db.test.ts`
 - **Integration over unit**: 写测试用例时，不要简单的函数级别用例，需要从页面或 API 层面进行验证
 - **Data-driven**: 通过 JSON 或 DB 原始数据驱动测试，数据准备在 `tests/data/` 目录下
 - **Pipeline coverage**: 测试应覆盖完整数据流（如 JSONL → adapter → turn-split → SkillEvent → aggregates）
