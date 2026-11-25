@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { sessionViewUrlFor, type ViewUrlFor } from "@/lib/observe/member-url"
+import type { LineEvidence } from "@/lib/skill-evidence"
 
 export interface SkillContentAuditItem {
   skillName: string
@@ -16,6 +17,7 @@ export interface SkillContentAuditItem {
   lines: number
   fullRead: boolean
   maxLine: number | null
+  evidence?: LineEvidence
 }
 
 export function useSkillContentAudit(taskId: string, framework?: string, urlFor?: ViewUrlFor) {

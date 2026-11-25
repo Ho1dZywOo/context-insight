@@ -190,7 +190,10 @@ describe('skillMdReadsOfToolCall（三通道单点分类器）', () => {
       startedAt: t(1),
     };
     expect(skillMdReadsOfToolCall(skill)).toEqual([
-      { skillName: 'foo', source: 'skill-tool', content: 'BODY', fullRead: true, maxLine: null, ts: t(1).getTime() },
+      {
+        skillName: 'foo', source: 'skill-tool', content: 'BODY', fullRead: true, maxLine: null,
+        fileLines: null, truncated: false, ts: t(1).getTime(),
+      },
     ]);
     const read: SkillToolCall = {
       toolName: 'read',

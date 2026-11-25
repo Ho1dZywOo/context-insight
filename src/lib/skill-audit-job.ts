@@ -14,7 +14,7 @@
  * result 同步写 sessionStorage（reload 后可恢复）；首次挂载时 hydrate 把 sessionStorage 灌进 store。
  */
 
-import type { AuditLayerInfo, AuditMemberMap, AuditReport, SkillAuditStoredResult } from "@/lib/sift-audit-types"
+import type { AuditDeclarationEvidence, AuditLayerInfo, AuditMemberMap, AuditReport, SkillAuditStoredResult } from "@/lib/sift-audit-types"
 
 export type AuditKind = "skill" | "agent" | "root"
 // 注：workflow 声明提取已整体切换 LLM 选择式路（llm-workflow-extract 单点），
@@ -223,6 +223,8 @@ interface SiftStreamEvent {
   _layers?: AuditLayerInfo[]
   /** run 级对账的成员映射（transcript 文件名 → 成员），finding 深链用。 */
   _members?: AuditMemberMap
+  /** 不完整的对账声明及其行级证据，报告顶部常驻提示用。 */
+  _evidence?: AuditDeclarationEvidence[]
 }
 
 /** NDJSON 对账流消费：progress → state 更新；result → persist + 落 store；error → 落 error。 */
@@ -244,6 +246,7 @@ async function consumeAuditStream(
         _html: evt._html,
         _layers: evt._layers,
         _members: evt._members,
+        _evidence: evt._evidence,
       } as SkillAuditResult
       persist(r)
       update(key, { running: false, result: r, progress: null, percent: 100, startedAt: null, lastProgressAt: null })

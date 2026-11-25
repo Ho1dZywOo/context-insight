@@ -60,6 +60,7 @@ Run 统一工作台（`run/[runId]`）is `"use client"` with 11 tabs（Overview/
 - **Ingest read**: `src/lib/ingest/adapters/opencode-db.ts` — N+1 query pattern (per-session/per-message sub-queries to `part` table)
 - **Context windows**: `src/lib/context-window-config.ts` — configurable via `context-windows.json`, hardcoded defaults as fallback. Web `ContextTracker.tsx` has its own model mapping — keep in sync.
 - **AI analysis**: `src/lib/ai/analyzer.ts` — only OpenAI-compatible `/chat/completions`, config in localStorage only
+- **声明行级证据**: `src/lib/skill-evidence.ts` — 纯函数单点：行号读取合并（同号行矛盾即弃用并上报）、覆盖面/缺口计算、用户可读说明；`skill-content.ts`（Skills 面板原文恢复）与 `llm-workflow-extract.ts`（root 对账候选）共用，缺口只走证据提示、不写进声明正文（sift 把正文整体交 LLM 抽指令）
 - **CLI client**: `src/cli/client.ts` — InsightClient with 17 methods across `/api/observe/*`, `/api/ingest/*`, `/api/ai/*`
 - **CLI types**: `src/cli/types.ts` — `Api`-prefixed interfaces to distinguish from `src/lib/shared/types.ts`
 

@@ -568,7 +568,7 @@ describe("llmExtractWorkflowDeclaration（选择 → 共享装配，端到端）
       { kind: "regulation", label: "编排规程", source: "turn0 (注入编排规程)", content: TURN0_BODY },
       { kind: "plan", label: "任务计划", source: "STATE.md", content: STATE_BODY.replace(/\[x\]/g, "[ ]") },
     ]);
-    expect(r).toEqual(expected);
+    expect(r).toEqual({ ...expected, evidence: [] });
   });
 
   it("CLI 基础设施失败（认证 403 等）→ throw，错误消息直达用户", async () => {

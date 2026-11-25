@@ -21,7 +21,9 @@ import { restoreShellReads, renderShellEntryText } from "@/lib/shell-restore";
 import { extractShellFileReads } from "@/lib/file-reads";
 // skill-content（SKILL.md 正文恢复三通道单点：skill-tool / Read / shell）纯模块，
 // client bundle 安全；Audit 对账与 Skills 面板共用同一恢复词表，通道扩展不再双头漂移。
-import { selectSkillContent, stripSkillRuntimeTail } from "@/lib/skill-content";
+import { selectSkillContent, stripSkillRuntimeTail, type SkillContentResult } from "@/lib/skill-content";
+import type { AuditDeclarationEvidence } from "@/lib/sift-audit-types";
+import type { LineEvidence } from "@/lib/skill-evidence";
 import { collectSkillContentCandidates } from "@/lib/observe/collectors/skill-content";
 // dispatch-tools 是纯模块（唯一导入为 type-only，无 fs/db）——client bundle 安全；
 // 派发工具判定单点：task/agent/subagent/spawn_agent 及注册表未来形态自动纳入。
@@ -817,8 +819,31 @@ export async function recoverSkillBody(
   skillName: string,
   prisma: PrismaClient,
 ): Promise<string | null> {
+  return (await recoverSkillDeclaration(sessionId, skillName, prisma))?.content ?? null;
+}
+
+/**
+ * 对账用声明的恢复出口：正文只含会话中确实读到的行（未读部分不补、不猜），
+ * 行级证据随同一结果返回——对账路由据此在结果上挂「声明不完整」提示。
+ * 找不到 / 无可靠正文 → null。
+ */
+export async function recoverSkillDeclaration(
+  sessionId: string,
+  skillName: string,
+  prisma: PrismaClient,
+): Promise<SkillContentResult | null> {
   const { toolCalls, turns } = await collectSkillContentCandidates(prisma, sessionId);
-  return selectSkillContent(toolCalls, skillName, turns)?.content ?? null;
+  return selectSkillContent(toolCalls, skillName, turns);
+}
+
+/** 声明不完整（有未读行 / 读取被截断）→ 随对账结果回传的证据项；完整 → null。 */
+export function declarationEvidenceOf(
+  source: string,
+  layer: string | undefined,
+  decl: { fullRead: boolean; evidence: LineEvidence } | null | undefined,
+): AuditDeclarationEvidence | null {
+  if (!decl || decl.fullRead) return null;
+  return { source, ...(layer ? { layer } : {}), evidence: decl.evidence };
 }
 
 /**

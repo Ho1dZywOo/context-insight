@@ -48,7 +48,7 @@ export const GET = withRouteLog('observe/session/skill-content', async (request:
   // 诚实返回空——前端（SkillDetail 的 LLM 提取行）走 llm-workflow-extract job 端点预览。
   if (skillName === MAIN_AGENT_WORKFLOW_NAME) {
     return NextResponse.json(
-      { skillName, content: null, source: null, length: 0 },
+      { skillName, content: null, source: null, length: 0, fullRead: false, maxLine: null, evidence: null },
       { status: 200 },
     );
   }
@@ -59,7 +59,7 @@ export const GET = withRouteLog('observe/session/skill-content', async (request:
 
   if (!result) {
     return NextResponse.json(
-      { skillName, content: null, source: null, length: 0, fullRead: false, maxLine: null },
+      { skillName, content: null, source: null, length: 0, fullRead: false, maxLine: null, evidence: null },
       { status: 200 }
     );
   }

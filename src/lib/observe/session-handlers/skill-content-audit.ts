@@ -10,6 +10,7 @@ import { prisma } from '@/lib/db';
 import { selectSkillContent } from '@/lib/skill-content';
 import { collectSkillContentCandidates } from '@/lib/observe/collectors/skill-content';
 import { withRouteLog } from '@/lib/api-route';
+import type { LineEvidence } from '@/lib/skill-evidence';
 
 export interface SkillContentAuditItem {
   skillName: string;
@@ -17,10 +18,12 @@ export interface SkillContentAuditItem {
   source: 'skill-tool' | 'command' | 'read' | 'shell' | null;
   length: number;
   lines: number;
-  /** 是否判定为读取了完整 SKILL.md（注入通道恒 true；read 需无 offset/limit 且无截断标记）。 */
+  /** 是否为完整声明：注入通道恒 true；read/shell 需文件总行数可知且每行都有可靠内容。 */
   fullRead: boolean;
-  /** read 来源时实际读到的最大行号；skill-tool 为 null。 */
+  /** 实际读到的最大文件行号；注入通道为 null。 */
   maxLine: number | null;
+  /** 行级证据：覆盖了哪些行、缺哪些行、读取是否被截断（注入通道无行号语义，仅 readCount）。 */
+  evidence: LineEvidence;
 }
 
 export const GET = withRouteLog('observe/session/skill-content-audit', async (request: NextRequest) => {
@@ -70,6 +73,7 @@ export const GET = withRouteLog('observe/session/skill-content-audit', async (re
       lines: content.length > 0 ? content.split('\n').length : 0,
       fullRead: r?.fullRead ?? false,
       maxLine: r?.maxLine ?? null,
+      evidence: r?.evidence ?? { lineNumbers: [], fileLines: null, gaps: [], truncated: false, conflictLines: [], readCount: 0 },
     };
   });
 

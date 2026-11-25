@@ -40,6 +40,7 @@ import {
 } from "@/components/observe/skill-audit/verdictConfig";
 import type { AuditFinding, AuditVerdict, AuditLayerInfo, AuditMemberMap } from "@/lib/sift-audit-types";
 import { DeclarationCoverageOverview } from "@/components/observe/skill-audit/DeclarationCoverageOverview";
+import { DeclarationEvidenceNotice } from "@/components/observe/skill-audit/DeclarationEvidenceNotice";
 import { PERF_CARD_SM } from "@/components/observe/perf-shared";
 
 const VERDICT_BAR_CLS: Record<AuditVerdict, string> = {
@@ -538,6 +539,9 @@ export function AuditReportPanel({ runId, kind, name, title, members, onOpenTurn
                 </p>
               </div>
             ) : null}
+
+            {/* 声明不完整提示：置顶常驻——先知道「对账只覆盖已读部分」，再看结论 */}
+            <DeclarationEvidenceNotice items={result._evidence} />
 
             <DeclarationCoverageOverview
               textCoverage={result.text_coverage}

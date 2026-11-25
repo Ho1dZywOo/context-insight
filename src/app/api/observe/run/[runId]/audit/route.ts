@@ -40,7 +40,8 @@ import { prisma } from '@/lib/db';
 import { resolveRunScope } from '@/lib/run/observe/scope';
 import { resolveRunBundleDir } from '@/lib/run/bundle-source';
 import {
-  recoverSkillBody,
+  recoverSkillDeclaration,
+  declarationEvidenceOf,
   buildStructuredRecords,
 } from '@/lib/sift-audit';
 import { llmExtractWorkflowDeclaration } from '@/lib/llm-workflow-extract';
@@ -48,7 +49,7 @@ import { recoverAgentMdFromSystem } from '@/lib/agent-md-session-recover';
 import { recoverAgentMdFromSession } from '@/lib/agent-md-recover';
 import { resolveScanRoot, scanAgentDirs, resolveAgentMd } from '@/lib/agent-md-scan';
 import { makeStreamingAuditResponse } from '@/lib/sift-runner';
-import type { AuditLayerInfo, AuditMemberMap, AuditMemberRef } from '@/lib/sift-audit-types';
+import type { AuditDeclarationEvidence, AuditLayerInfo, AuditMemberMap, AuditMemberRef } from '@/lib/sift-audit-types';
 import { logError } from '@/lib/logger';
 
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -127,12 +128,17 @@ export const POST = withRouteLog(
     try {
       let skillPath: string;
       let layers: AuditLayerInfo[] | undefined;
+      let declarationEvidence: AuditDeclarationEvidence[] | undefined;
       if (kind === 'skill') {
-        let body: string | null = null;
+        // 声明 = 成员会话中确实读到的行（多段读取按行号合并）；未读部分不补，缺口走证据提示
+        let decl: Awaited<ReturnType<typeof recoverSkillDeclaration>> = null;
         for (const m of withSession) {
-          body = await recoverSkillBody(sessions.get(m.taskId)!.id, name, prisma);
-          if (body != null) break;
+          decl = await recoverSkillDeclaration(sessions.get(m.taskId)!.id, name, prisma);
+          if (decl != null) break;
         }
+        const body = decl?.content ?? null;
+        const ev = declarationEvidenceOf(name, undefined, decl);
+        declarationEvidence = ev ? [ev] : undefined;
         if (body == null) {
           return NextResponse.json(
             { error: `所选成员均恢复不到 skill "${name}" 的正文（无 invoke 事件 / resultJson）`, reason: 'no-declaration' },
@@ -235,6 +241,7 @@ export const POST = withRouteLog(
         );
         skillPath = dir;
         layers = combined.layers;
+        declarationEvidence = combined.evidence;
       }
 
       // ── 对账输入编排 ──
@@ -260,7 +267,7 @@ export const POST = withRouteLog(
             runArgs,
             outputDir,
             () => fs.rmSync(tmp, { recursive: true, force: true }),
-            { _layers: layers, _memberBySession: memberBySession, expectedSlices: scope.members.length },
+            { _layers: layers, _memberBySession: memberBySession, expectedSlices: scope.members.length, _evidence: declarationEvidence },
           );
         }
       }
@@ -287,7 +294,7 @@ export const POST = withRouteLog(
         args,
         outputDir,
         () => fs.rmSync(tmp, { recursive: true, force: true }),
-        { _layers: layers, _members: members, expectedSlices: withSession.length },
+        { _layers: layers, _members: members, expectedSlices: withSession.length, _evidence: declarationEvidence },
       );
     } catch (e) {
       logError('route:observe/run/audit', '准备 run 级对账失败', {

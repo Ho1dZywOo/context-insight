@@ -20,6 +20,7 @@ import { SkillCoverageCard } from "@/components/observe/SkillCoverageCard"
 import { SkillContentAudit } from "@/components/observe/SkillContentAudit"
 import { BookOpenIcon } from "lucide-react"
 import { useSkillContent } from "@/components/observe/use-skill-content"
+import { describeLineEvidence, formatRanges, layOutWithGaps } from "@/lib/skill-evidence"
 import {
   Table,
   TableHeader,
@@ -620,6 +621,11 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                 // skill 全文内容行（teal, session 注入的 SKILL.md body）；isAgentOnly 无 skill kind 跳过
                 const skillContentData = !isAgentOnly ? sc.content.get(sa.skillName) : undefined
                 const skillContentError = !isAgentOnly ? sc.error.get(sa.skillName) : undefined
+                const skillContentNotice = describeLineEvidence(
+                  skillContentData?.evidence,
+                  Boolean(skillContentData?.fullRead),
+                  skillContentData?.source === "shell",
+                )
                 if (skillContentData || skillContentError) {
                   rows.push(
                     <TableRow key={`${sa.skillName}-content`}>
@@ -631,44 +637,28 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                               {sa.skillName} · SKILL.md
                               {skillContentData?.source && (
                                 <span className="text-muted-foreground">
-                                  （来源：{skillContentData.source === "skill-tool" ? "Skill 工具注入" : skillContentData.source === "command" ? "命令注入" : skillContentData.source === "shell" ? "Shell 读取" : "Read 读取"}，{skillContentData.length} 字符
-                                  {skillContentData.source === "read"
-                                    ? skillContentData.fullRead
-                                      ? "，判定全文·无 offset/limit"
-                                      : "，部分读取·有 offset/limit 或截断"
-                                    : "，框架注入全文"}
-                                  {skillContentData.maxLine != null && `，到第 ${skillContentData.maxLine} 行`}）
+                                  （来源：{skillContentData.source === "skill-tool" ? "Skill 工具注入" : skillContentData.source === "command" ? "命令注入" : skillContentData.source === "shell" ? "Shell 读取" : "Read 读取"}，{skillContentData.length} 字符，{skillContentNotice.summary}）
                                 </span>
                               )}
-                            </span>
-                            <span className="flex items-center gap-3">
-                              {skillContentData?.content && (
-                                <span
-                                  role="button"
-                                  className="text-xs font-medium text-blue-500 cursor-pointer hover:underline"
-                                  onClick={(e) => { e.stopPropagation(); sc.download(sa.skillName) }}
-                                >
-                                  Download
-                                </span>
-                              )}
-                              <span
-                                role="button"
-                                title="收起"
-                                className="text-muted-foreground cursor-pointer hover:text-foreground text-sm leading-none px-1"
-                                onClick={(e) => { e.stopPropagation(); sc.clear(sa.skillName) }}
-                              >
-                                ×
-                              </span>
                             </span>
                           </div>
                           <div className="text-[11px] text-muted-foreground leading-snug">
-                            按时间顺序取本会话内该 skill 的注入内容或 SKILL.md 读取结果；若多次加载，取最长版本。仅含已采集内容，非运行时实时文件。
+                            注入内容若多次加载取最长版本；Read/Shell 读取按文件行号合并，只含会话中确实读到的行，缺口处标为「未读到」。仅含已采集内容，非运行时实时文件。
                           </div>
+                          {skillContentNotice.partial && (
+                            <div className="rounded border border-orange-500/40 bg-orange-500/5 px-2 py-1.5 text-[11px] leading-snug text-orange-700 dark:text-orange-400">
+                              ⚠ {skillContentNotice.summary}：{skillContentNotice.detail}
+                            </div>
+                          )}
                           {skillContentError ? (
                             <div className="text-xs text-destructive">Error: {skillContentError}</div>
                           ) : skillContentData?.content ? (
                             <pre className="max-h-[28rem] overflow-auto rounded border bg-background p-2 text-xs font-mono whitespace-pre-wrap break-words">
-                              {skillContentData.content}
+                              {layOutWithGaps(skillContentData.content, skillContentData.evidence).map((row, i) =>
+                                row.kind === "line"
+                                  ? <span key={i}>{row.text}{"\n"}</span>
+                                  : <span key={i} className="text-orange-700 dark:text-orange-400 bg-orange-500/10">⋯ 第 {formatRanges([{ from: row.from, to: row.to }])} 行未读到{row.tail ? "（文件到此是否结束未知）" : ""} ⋯{"\n"}</span>
+                              )}
                             </pre>
                           ) : (
                             <div className="text-xs text-muted-foreground">未采集到该 skill 的 SKILL.md 内容（本会话可能未通过 Skill 工具加载或读取 SKILL.md）。</div>
