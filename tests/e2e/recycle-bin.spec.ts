@@ -6,13 +6,15 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// 回收站全旅程（删除 → 回收站 → 恢复）：一次性夹具 claude-autorefresh-base
-// 自行经 HTTP 导入（global-setup 同款管线），UI 走行内删除钮 → 确认弹窗 →
-// 侧栏回收站行 → 恢复回流。全程自包自净——结束时该会话回流为普通行，
-// 与播种态等价（幂等重跑安全）。删除与恢复均整页 reload（恢复侧是修过的
-// 缺陷：主列表 items 是客户端 state，router.refresh() 只换 props 不重置
-// state，回流行原本不会浮现——徽章与列表自相矛盾），回收站面板随重挂载
-// 重新拉取，断言天然同步。
+// 回收站全旅程（删除 → 撤销回程 / 删除 → 回收站面板 → 恢复回流）：一次性
+// 夹具 claude-autorefresh-base 自行经 HTTP 导入（global-setup 同款管线）。
+// 删除走乐观移除范式：确认即行离场（不再整页 reload——SPA 标记断言锁死），
+// 结果以底部 toast 呈现，限时撤销 = POST /api/recycle restore 的真实数据
+// 恢复；面板路径覆盖另一恢复入口。全程自包自净——结束时该会话回流为普通
+// 行，与播种态等价（幂等重跑安全）。
+// 列表同步语义：主列表 items 是客户端 state，router.refresh() 只换 props 不
+// 重置 state——删除/撤销结算统一走 fetchAssets 局部刷新 + router.refresh()
+// 软刷指标卡（syncAfterDeletion），回流行靠 fetchAssets 浮现。
 
 import { expect, test } from "./fixtures";
 import { AUTOREFRESH_JSONL, AUTOREFRESH_SESSION_ID, BASE_URL } from "./constants";
@@ -55,7 +57,8 @@ test.describe("回收站旅程", () => {
     await expect(dialog.getByText("Delete Session", { exact: true })).toBeVisible();
     await dialog.getByRole("button", { name: "确认删除" }).click();
 
-    // 删除成功 → 整页 reload → 行消失
+    // 乐观移除：行离场（不等服务端结算、无整页 reload）。结果 toast（sonner）
+    // 带限时撤销——本用例走面板路径，不消费快照条目，toast 自行超时离场
     await expect(row).toHaveCount(0, { timeout: 15_000 });
 
     // 侧栏回收站面板：快照行在场（p[title=taskId] 携带身份）
@@ -64,10 +67,53 @@ test.describe("回收站旅程", () => {
     });
     await expect(recycleRow).toBeVisible({ timeout: 15_000 });
 
-    // 恢复：快照回流为独立会话（router.refresh() 主列表同步）
+    // 恢复：快照回流为独立会话（面板广播 assets-changed → 主列表 fetchAssets
+    // 软同步浮现，回收站行随之离场）
     await recycleRow.locator("[data-recycle-restore]").click();
     await expect(home.sessionRowByTaskId(AUTOREFRESH_SESSION_ID)).toBeVisible({ timeout: 15_000 });
     // 回收站行随之离场（恢复成功后条目移除）
     await expect(recycleRow).toHaveCount(0, { timeout: 15_000 });
+  });
+
+  test("乐观移除 + toast 撤销 → 行回归（全程无整页 reload）", async ({ page }) => {
+    await importDisposableSession();
+
+    const home = new WorkbenchHomePO(page);
+    await home.goto();
+    const row = home.sessionRowByTaskId(AUTOREFRESH_SESSION_ID);
+    await expect(row).toBeVisible();
+
+    // SPA 判定标记：乐观移除范式全程不得发生整页导航（location.reload 会
+    // 丢失窗口标记）——这是「删除卡住等刷新」缺陷的范式级回归锁
+    await page.evaluate(() => {
+      (window as unknown as { __noReload: number }).__noReload = 1;
+    });
+
+    await row.getByTitle("Delete session", { exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "确认删除" }).click();
+
+    // 乐观移除：行即刻离场（确认后同步隐藏，不等服务端结算）
+    await expect(row).toHaveCount(0, { timeout: 5_000 });
+
+    // 结果 toast（sonner）：限时撤销在场（撤销 = POST /api/recycle restore
+    // 真实恢复；action 按钮带 data-button 锚点）
+    const toastItem = page.locator('[data-sonner-toast]').filter({ hasText: "已删除会话" });
+    await expect(toastItem).toBeVisible({ timeout: 15_000 });
+    await toastItem.locator("[data-button]").click();
+
+    // 撤销结算：行回归（fetchAssets 局部刷新带回流数据）+ 删除 toast 离场
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await expect(toastItem).toHaveCount(0, { timeout: 10_000 });
+    // 快照条目已被撤销消费：回收站不再有该行
+    const recycleRow = page.locator("[data-recycle-row]").filter({
+      has: page.locator(`p[title="${AUTOREFRESH_SESSION_ID}"]`),
+    });
+    await expect(recycleRow).toHaveCount(0, { timeout: 15_000 });
+    // 全程无整页 reload（标记存活）
+    expect(
+      await page.evaluate(() => (window as unknown as { __noReload: number | undefined }).__noReload),
+    ).toBe(1);
   });
 });

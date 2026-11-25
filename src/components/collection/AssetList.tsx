@@ -30,6 +30,8 @@ import {
   UploadDialog,
   type UploadTarget,
 } from '@/components/collection/UploadDialog';
+import { toast } from 'sonner';
+import { notifyAssetsChanged, onAssetsChanged } from '@/lib/assets-events';
 import {
   Dialog,
   DialogContent,
@@ -194,7 +196,7 @@ export function AssetList({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  async function fetchAssets(nextPage: number, nextQ: string, nextKind: AssetKindFilter) {
+  async function fetchAssets(nextPage: number, nextQ: string, nextKind: AssetKindFilter): Promise<number> {
     const seq = ++reqSeq.current
     setLoading(true)
     try {
@@ -203,7 +205,7 @@ export function AssetList({
       if (nextKind !== 'all') params.set('kind', nextKind)
       const res = await fetch(`/api/observe/data?${params}`)
       const data = await res.json()
-      if (seq !== reqSeq.current || !res.ok) return
+      if (seq !== reqSeq.current || !res.ok) return 0
       setItems(data.items ?? [])
       setTotal(data.total ?? 0)
       if (data.totalCount != null) setAllCount(data.totalCount)
@@ -219,8 +221,10 @@ export function AssetList({
       if (nextPage > 1) url.searchParams.set('page', String(nextPage))
       else url.searchParams.delete('page')
       window.history.replaceState(null, '', url.toString())
+      return (data.items ?? []).length
     } catch {
       /* 网络错误：保留当前数据 */
+      return 0
     } finally {
       if (seq === reqSeq.current) setLoading(false)
     }
@@ -252,6 +256,18 @@ export function AssetList({
   const [deleteMode, setDeleteMode] = useState<'all' | 'selected' | null>(null)
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
 
+  // 删除乐观移除（Gmail 范式）：确认即隐藏行、后台结算、结果 sonner toast +
+  // 限时撤销（真实数据恢复，经 POST /api/recycle restore——删除级联内部本来
+  // 就会先归档快照到回收站）。hiddenKeys = 用户已确认删除的行，fetchAssets
+  // 结算前把行从渲染滤掉、结算后由服务端真值自然接管；失败/撤销按 key 回滚
+  // 显示。跨组件同步走 assets-changed 事件（本列表结算后广播，回收站面板
+  // 侧听并重取；面板恢复同理反向广播），不再整页 location.reload
+  const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set())
+  const toastSeq = useRef(0)
+  // 409 双行消歧（同 taskId 双记录并存）：删除路由要求显式 confirmAll 才放
+  // 行全删，此前前端从未接线——歧义删除一直静默失败。这里弹二次确认
+  const [ambiguity, setAmbiguity] = useState<{ taskId: string; rowCount: number; key: string } | null>(null)
+
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({})
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null)
   // 上传弹窗（统一组件，刀3 合一）：kind + target 一体；结果经回调回填行内状态
@@ -259,7 +275,9 @@ export function AssetList({
   const [uploadOpen, setUploadOpen] = useState(false)
 
   const confirmDeleteItem = confirmDeleteKey != null ? items.find(i => i.key === confirmDeleteKey) : undefined
-  const selectedItems = items.filter(i => selectedKeys.has(i.key))
+  // 乐观隐藏后的可见行：删除中行离场即时可见；选择/Compare 全部基于可见行
+  const visibleItems = items.filter(i => !hiddenKeys.has(i.key))
+  const selectedItems = visibleItems.filter(i => selectedKeys.has(i.key))
   const selectedSessions = selectedItems.filter((i): i is SessionAssetItem => i.kind === 'session')
   const selectedRuns = selectedItems.filter((i): i is RunAssetItem => i.kind === 'run')
   const compareReady = selectedSessions.length === 2 && selectedRuns.length === 0
@@ -300,7 +318,105 @@ export function AssetList({
     })
   }
 
+  // —— 删除交互基建（乐观移除 + sonner 相位 + 撤销） ——
+
+  function hideKeys(keys: string[]) {
+    if (keys.length === 0) return
+    setHiddenKeys(prev => {
+      const next = new Set(prev)
+      for (const k of keys) next.add(k)
+      return next
+    })
+  }
+
+  function unhideKeys(keys: string[]) {
+    if (keys.length === 0) return
+    setHiddenKeys(prev => {
+      const next = new Set(prev)
+      for (const k of keys) next.delete(k)
+      return next
+    })
+  }
+
+  function beginDeletionToast(message: string): string {
+    const tid = `del-${++toastSeq.current}`
+    toast.loading(message, { id: tid })
+    return tid
+  }
+
+  // 结算成功：带回收站条目名则提供限时撤销（action 按钮），并广播资产变更
+  //（本列表侧听重取 + 回收站面板重取）；无条目名（归档 best-effort 失败或
+  // run 目录删除不可逆）只报结果
+  function settleDeletion(tid: string, message: string, undo?: { names: string[]; keys: string[] }) {
+    if (undo && undo.names.length > 0) {
+      const { names, keys } = undo
+      toast.success(message, {
+        id: tid,
+        duration: 6_000,
+        action: { label: '撤销', onClick: () => { void handleUndo(names, keys, tid) } },
+      })
+    } else {
+      toast.success(message, { id: tid, duration: 3_000 })
+    }
+    notifyAssetsChanged()
+  }
+
+  function failDeletion(tid: string, keys: string[], message: string) {
+    unhideKeys(keys)
+    toast.error(message, { id: tid, duration: 6_000 })
+    // 失败也广播：部分成功时列表/面板靠重取对齐服务端真值
+    notifyAssetsChanged()
+  }
+
+  // 删除结算（事件回调）：局部刷新列表（/api/observe/data）+ router.refresh()
+  // 软刷指标卡；删除致当前页清空时回退上一页
+  async function syncAfterDeletion() {
+    const remaining = await fetchAssets(page, q, kindRef.current)
+    if (remaining === 0 && page > 1) await fetchAssets(page - 1, q, kindRef.current)
+    router.refresh()
+  }
+
+  // 资产变更软同步：本列表或回收站面板任一侧结算后广播事件、各持有方重取
+  //（订阅随 page/q 变化重建，闭包持有最新分页/搜索态）
+  useEffect(() => {
+    return onAssetsChanged(() => { void syncAfterDeletion() })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, q])
+
+  // 撤销 = 真实数据恢复：逐条 POST /api/recycle restore（快照在删除级联内
+  // best-effort 归档过），成功后回滚隐藏 + 广播重取；注意 restore 契约是
+  // 200 + imported 布尔（空会话 0 轮 / 同 taskId 已存在都不回流）——只有
+  // imported:true 才算恢复，res.ok 不等于恢复成功。全部失败提示走回收站
+  // 面板手动恢复（快照仍保留在那里）
+  async function handleUndo(names: string[], keys: string[], tid: string) {
+    toast.loading('恢复中…', { id: tid })
+    let restored = 0
+    for (const name of names) {
+      try {
+        const res = await fetch('/api/recycle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'restore', name }),
+        })
+        const data = res.ok ? await res.json().catch(() => null) : null
+        if (data?.imported === true) restored++
+      } catch {}
+    }
+    if (restored > 0) {
+      unhideKeys(keys)
+      toast.success(`已恢复 ${restored} 项`, { id: tid, duration: 3_000 })
+      notifyAssetsChanged()
+    } else {
+      toast.error('恢复失败，快照仍在回收站，可到面板手动恢复', { id: tid, duration: 6_000 })
+    }
+  }
+
   async function handleDeleteAll() {
+    const keys = visibleItems.map(i => i.key)
+    hideKeys(keys)
+    const tid = beginDeletionToast('正在清空全部资产…')
+    const recycle: string[] = []
+    let failed = false
     try {
       // 全资产删除：run 先行（级联删除其导入的成员会话），再清剩余独立会话。
       // run 列表会随删除收缩——循环取第一页直到取空，避免翻页错位
@@ -312,8 +428,11 @@ export function AssetList({
         if (runs.length === 0) break
         for (const run of runs) {
           try {
-            await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}`, { method: 'DELETE' })
-          } catch {}
+            const res = await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}`, { method: 'DELETE' })
+            const rd = res.ok ? await res.json().catch(() => ({})) : {}
+            if (!res.ok) failed = true
+            if (Array.isArray(rd.recycle)) recycle.push(...rd.recycle)
+          } catch { failed = true }
         }
       }
       const res = await fetch('/api/ingest/delete-session', {
@@ -321,46 +440,129 @@ export function AssetList({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deleteAll: true }),
       })
-      if (res.ok) window.location.reload()
-    } catch {}
+      const data = res.ok ? await res.json().catch(() => ({})) : {}
+      if (!res.ok) failed = true
+      if (Array.isArray(data.recycle)) recycle.push(...data.recycle)
+    } catch { failed = true }
+    if (failed) {
+      failDeletion(tid, keys, '清空未完全成功，列表已还原（已成功项随刷新对齐）')
+    } else {
+      settleDeletion(
+        tid,
+        recycle.length > 0 ? `已清空全部资产（${recycle.length} 个会话已入回收站）` : '已清空全部资产',
+        recycle.length > 0 ? { names: recycle, keys } : undefined,
+      )
+    }
   }
 
   async function handleDeleteSelected() {
     // 按 kind 分发：会话批量 delete-session；run 逐个走 observe/run 级联删除
+    const keys = selectedItems.map(i => i.key)
+    hideKeys(keys)
+    const tid = beginDeletionToast(`正在删除 ${keys.length} 项…`)
+    const recycle: string[] = []
+    let failed = false
     if (selectedSessions.length > 0) {
-      const entries = selectedSessions.map(i => ({ taskId: i.taskId, framework: i.framework ?? 'unknown' }))
-      try {
-        await fetch('/api/ingest/delete-session', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessions: entries }),
-        })
-      } catch {}
-    }
-    for (const run of selectedRuns) {
-      try {
-        await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}`, { method: 'DELETE' })
-      } catch {}
-    }
-    window.location.reload()
-  }
-
-  async function handleDeleteOne(item: AssetItem) {
-    if (item.kind === 'session') {
       try {
         const res = await fetch('/api/ingest/delete-session', {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId: item.taskId, framework: item.framework ?? 'unknown' }),
+          body: JSON.stringify({ sessions: selectedSessions.map(i => {
+            // framework 仅非空时携带：空值行传占位符会过滤成查无此行（404）
+            const entry: Record<string, unknown> = { taskId: i.taskId }
+            if (i.framework) entry.framework = i.framework
+            return entry
+          }) }),
         })
-        if (res.ok) window.location.reload()
-      } catch {}
-      return
+        const data = res.ok ? await res.json().catch(() => ({})) : {}
+        if (!res.ok) failed = true
+        if (Array.isArray(data.recycle)) recycle.push(...data.recycle)
+      } catch { failed = true }
     }
+    for (const run of selectedRuns) {
+      try {
+        const res = await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}`, { method: 'DELETE' })
+        const data = res.ok ? await res.json().catch(() => ({})) : {}
+        if (!res.ok) failed = true
+        if (Array.isArray(data.recycle)) recycle.push(...data.recycle)
+      } catch { failed = true }
+    }
+    if (failed) {
+      failDeletion(tid, keys, '部分删除失败，列表已还原（已成功项随刷新对齐）')
+    } else {
+      settleDeletion(
+        tid,
+        recycle.length > 0 ? `已删除 ${keys.length} 项（${recycle.length} 个会话已入回收站）` : `已删除 ${keys.length} 项`,
+        recycle.length > 0 ? { names: recycle, keys } : undefined,
+      )
+    }
+  }
+
+  async function handleDeleteOne(item: AssetItem) {
+    hideKeys([item.key])
+    const tid = beginDeletionToast('正在删除…')
     try {
-      const res = await fetch(`/api/observe/run/${encodeURIComponent(item.runId)}`, { method: 'DELETE' })
-      if (res.ok) window.location.reload()
-    } catch {}
+      if (item.kind === 'session') {
+        // framework 仅非空时携带：空值行传占位符会过滤成查无此行（404 静默
+        // 失败）；不带 framework 的歧义由路由 409 守卫接手（handleDeleteAmbiguous）
+        const body: Record<string, unknown> = { taskId: item.taskId }
+        if (item.framework) body.framework = item.framework
+        const res = await fetch('/api/ingest/delete-session', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (res.status === 409) {
+          const data = await res.json().catch(() => ({}))
+          unhideKeys([item.key])
+          toast.dismiss(tid)
+          setAmbiguity({
+            taskId: item.taskId,
+            rowCount: Number(data.rowCount ?? 0) || 2,
+            key: item.key,
+          })
+          return
+        }
+        const data = res.ok ? await res.json().catch(() => ({})) : {}
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+        const names: string[] = Array.isArray(data.recycle) ? data.recycle : []
+        settleDeletion(tid, names.length > 0 ? '已删除会话' : '已删除会话（回收站归档失败，不可撤销）',
+          names.length > 0 ? { names, keys: [item.key] } : undefined)
+      } else {
+        const res = await fetch(`/api/observe/run/${encodeURIComponent(item.runId)}`, { method: 'DELETE' })
+        const data = res.ok ? await res.json().catch(() => ({})) : {}
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+        const recycled = Array.isArray(data.recycle) ? data.recycle.length : 0
+        // run 目录本身删除后不可撤销（只能从原始 bundle 重导），但级联清掉
+        // 的成员会话已入回收站——提示可去恢复，不提供行级撤销
+        settleDeletion(tid, recycled > 0 ? `已删除 run（${recycled} 个成员会话已入回收站）` : '已删除 run')
+      }
+    } catch {
+      failDeletion(tid, [item.key], '删除失败，行已还原')
+    }
+  }
+
+  // 409 歧义确认后的全删：路由契约要求显式 confirmAll: true 才放行
+  async function handleDeleteAmbiguous() {
+    const amb = ambiguity
+    setAmbiguity(null)
+    if (!amb) return
+    hideKeys([amb.key])
+    const tid = beginDeletionToast('正在删除…')
+    try {
+      const res = await fetch('/api/ingest/delete-session', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: amb.taskId, confirmAll: true }),
+      })
+      const data = res.ok ? await res.json().catch(() => ({})) : {}
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const names: string[] = Array.isArray(data.recycle) ? data.recycle : []
+      settleDeletion(tid, `已删除 ${data.deleted ?? amb.rowCount} 行`,
+        names.length > 0 ? { names, keys: [amb.key] } : undefined)
+    } catch {
+      failDeletion(tid, [amb.key], '删除失败，行已还原')
+    }
   }
 
   const emptyText = kind === 'run'
@@ -684,15 +886,29 @@ export function AssetList({
           if (uploadRequest) setUploadStatus(prev => ({ ...prev, [uploadRequest.key]: ok ? 'done' : 'error' }))
         }}
       />
+      <Dialog open={ambiguity !== null} onOpenChange={(open) => { if (!open) setAmbiguity(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>同 ID 存在多条记录</DialogTitle>
+            <DialogDescription className="text-base">
+              {`taskId "${ambiguity?.taskId}" 有 ${ambiguity?.rowCount ?? 2} 条会话记录（双记录并存），确认删除将同时移除全部记录。删除前逐条归档回收站，可撤销恢复。`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAmbiguity(null)}>取消</Button>
+            <Button variant="destructive" onClick={handleDeleteAmbiguous}>全部删除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 overflow-hidden rounded-2xl border border-border/50 bg-card/50 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_16px_40px_-24px_rgba(0,0,0,0.22)]">
         <div className="divide-y divide-border/50">
-          {items.length === 0 && (
+          {visibleItems.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-14 text-center">
               <SearchIcon className="size-5 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">{emptyText}</p>
             </div>
           )}
-          {items.map((item) => (
+          {visibleItems.map((item) => (
             item.kind === 'run' ? renderRunRow(item) : renderSessionRow(item)
           ))}
         </div>

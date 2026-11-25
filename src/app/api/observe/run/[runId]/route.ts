@@ -9,14 +9,18 @@
 // GET    /api/observe/run/[runId] —— Run 详情：view-model + 成员会话 join。
 //          runId = solo:<taskId>（刀H）：无主 session 合成单例 run（不读
 //          run-store，framework 查询参数消歧同 sid 双行）。
-// DELETE /api/observe/run/[runId] —— 删 run 目录（不级联删除已导入会话）；
-//          solo 是会话视图，无目录可删（400，删会话走会话删除）。
+// DELETE /api/observe/run/[runId] —— 删 run 目录，并级联清理由它导入的成员
+//          会话行（owned 精确对，删除前经级联内部 best-effort 归档回收站，
+//          响应回传 recycle 条目名供前端撤销/手动恢复；run 目录本身删除后
+//          只能从原始 bundle 重新导入）；solo 是会话视图，无目录可删（400，
+//          删会话走会话删除）。
 
 import { NextRequest, NextResponse } from 'next/server';
 import { withRouteLog } from '@/lib/api-route';
 import { prisma } from '@/lib/db';
 import { logError, logInfo } from '@/lib/logger';
 import { deleteRun, readRun, runsRoot } from '@/lib/run/run-store';
+import { recycleEntryFileName } from '@/lib/recycle';
 import { deleteOwnedSessionRows } from '@/lib/run/session-scope';
 import { buildViewModel } from '@/lib/run/view-model';
 import { attachSessionRefs, joinSessionRefs } from '@/lib/run/session-link';
@@ -178,6 +182,9 @@ export const DELETE = withRouteLog(
       // 再删 run 目录——先会话后目录，中途失败时整体可重试
       const stored = readRun(runId);
       const owned = stored?.meta?.data.ownedSessions ?? [];
+      // 回收站条目名（确定性映射）：级联删除前会话已 best-effort 归档，前端
+      // 据此引导用户到回收站手动恢复（run 目录不可撤销，会话行可恢复）
+      const recycle = owned.map(o => recycleEntryFileName(o.sid, o.framework));
       const deletedSessions = await deleteOwnedSessionRows(prisma, runsRoot(), owned);
       // 级联删除了本 run 的会话行 → 观测缓存单点失效：不失效则 60s 内重导
       // 同一 run 时作用域缓存仍捂着已删行 id，观测端点按 IN(死行) 静默查空
@@ -190,7 +197,7 @@ export const DELETE = withRouteLog(
         runId,
         deletedSessions,
       });
-      return NextResponse.json({ ok: true, runId, deletedSessions });
+      return NextResponse.json({ ok: true, runId, deletedSessions, recycle });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       logError('route:observe/run/[runId]', '删除 run 失败', { runId, error: message });

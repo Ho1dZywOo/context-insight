@@ -11,15 +11,17 @@
 // 回收站（侧栏 section 形态，VS Code Explorer 同款位）：insight 库删除的资
 // 产先落快照于此——「恢复」回流为独立会话（原 run 目录已删，不复活 run），
 // 「彻底删除/清空」不可逆。破坏性操作走两步确认（行内按钮变形，3.5s 自动
-// 解除，轻确认无弹窗）；恢复成功后整页 reload 让主列表同步浮现（主列表
-// items 是客户端 state——分页/搜索局部更新——router.refresh() 只换 props
-// 不重置 state，回流行不会出现；与删除流程同口径）。
+// 解除，轻确认无弹窗）；恢复成功后广播 assets-changed 事件让主列表等各持有
+// 方软同步重取（主列表 items 是客户端 state，router.refresh() 只换 props
+// 不重置 state，回流行必须靠 fetchAssets 浮现——与删除/撤销同一同步口径）；
+// 反向同理：AssetList 删除/撤销结算后广播，本面板经事件重取条目。
 
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronDownIcon, RotateCcwIcon, TrashIcon, LoaderIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AssetIcon, modelIconId } from '@/components/collection/AssetIcon'
 import { cn } from '@/lib/utils'
+import { notifyAssetsChanged, onAssetsChanged } from '@/lib/assets-events'
 
 interface RecycleEntry {
   name: string
@@ -55,12 +57,19 @@ export function RecycleBin() {
   // 两步确认：arm 存放已武装的条目名（清空用 '__empty__' 哨兵）；3.5s 自动解除
   const [arm, setArm] = useState<string | null>(null)
 
-  useEffect(() => {
+  // 条目拉取：挂载拉一次 + 订阅 assets-changed 事件重取（AssetList 删除/
+  // 撤销结算后本面板即见新条目——不再依赖整页 reload 的重挂载）
+  const loadEntries = useCallback(() => {
     fetch('/api/recycle')
       .then(r => (r.ok ? r.json() : null))
       .then(d => setEntries(d?.entries ?? []))
       .catch(() => setEntries([]))
   }, [])
+
+  useEffect(() => {
+    loadEntries()
+    return onAssetsChanged(loadEntries)
+  }, [loadEntries])
 
   const disarmLater = useCallback((name: string) => {
     setTimeout(() => setArm(prev => (prev === name ? null : prev)), 3500)
@@ -88,10 +97,9 @@ export function RecycleBin() {
       const data = await post({ action: 'restore', name })
       if (data?.imported === true) {
         setEntries(prev => (prev ?? []).filter(e => e.name !== name))
-        // 整页 reload（非 router.refresh）：主列表 items 是客户端 state，
-        // refresh 只换 props 不重置 state，回流行不会浮现——徽章与列表会
-        // 自相矛盾（badge 4 / list 3）；删除流程同款出口，三处 UI 一致
-        window.location.reload()
+        // 广播资产变更：主列表 fetchAssets 浮现回流行 + 指标卡软刷（替代整页
+        // reload——items 是客户端 state，refresh 只换 props 不重置 state）
+        notifyAssetsChanged()
       } else if (data) {
         // imported:false（空会话 0 轮 / 同 taskId 已存在走 merge/dedup）：快照
         // 未回流也未删除——保留条目并如实提示，不静默抹掉列表条目
