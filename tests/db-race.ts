@@ -6,9 +6,12 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// 共享 test.db 的并行测试文件（e2e-import-observe / lake 等）用同一 opencode
-// fixture 会话，一方的 deleteMany 会与另一方的 merge update 赛跑（dedup 查到行、
-// update 时行已被删 → P2025）。对这类瞬时消失重试一次即可通过。
+// 共享测试库的并行文件竞态重试（历史层）。2026-11-25 起测试库按 worker 分片
+// （tests/worker-db.ts）：vitest isolate 默认下每测试文件独立分片库，跨文件
+// 互撞的根因已从基础设施层根治；进程复用形态下同进程文件串行共享，仍可能
+// 出现「上一文件泄漏的行与本文件 merge update 赛跑」（e2e-import-observe /
+// lake 等用同一 opencode fixture 场景，P2025 瞬时消失）——对这类保留重试
+// 一次即可通过，本助手降级为纵深防御。
 export async function withDbRaceRetry<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();

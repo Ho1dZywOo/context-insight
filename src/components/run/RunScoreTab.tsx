@@ -22,6 +22,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FileJsonIcon, Loader2Icon } from "lucide-react";
 import { toast } from "sonner";
+import { notifyError } from "@/components/NoticeHud";
 import { RunMemberPicker } from "@/components/run/RunMemberPicker";
 import { TrajectoryScoring } from "@/components/scoring/TrajectoryScoring";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
@@ -55,7 +56,7 @@ export function RunScoreTab({ runId, runName, members, member, onMemberChange, o
       const res = await fetch(`/api/observe/run/${encodeURIComponent(runId)}/score-export`);
       if (!res.ok) {
         const err = await res.json().catch(() => null);
-        toast.error("Export score failed", { description: err?.error ?? "Unknown error" });
+        notifyError("Export score failed", err?.error ?? "Unknown error");
         return;
       }
       const blob = new Blob([await res.text()], { type: "application/json" });
@@ -69,7 +70,7 @@ export function RunScoreTab({ runId, runName, members, member, onMemberChange, o
       fallbackDownload(blob, filename);
       toast.success("Score data exported", { description: `${filename} — 六维评分卡 + 维度定义快照（RSI 演进语料）` });
     } catch {
-      toast.error("Export score failed", { description: "Network error" });
+      notifyError("Export score failed", "Network error");
     } finally {
       setExporting(false);
     }

@@ -12,6 +12,7 @@
 import React from "react"
 import { createRoot } from "react-dom/client"
 import { Toaster } from "sonner"
+import { NoticeHudHost } from "@/components/NoticeHud"
 import RunDetailPage from "@/app/run/[runId]/page"
 import { RunOfflineHostCapsProvider } from "@/lib/run/host-caps"
 import { installOfflineKernel } from "@/export-view/offline-kernel"
@@ -69,6 +70,7 @@ function ExportRoot() {
         <RunDetailPage params={params} />
       </RunOfflineHostCapsProvider>
       <Toaster position="bottom-right" richColors closeButton />
+      <NoticeHudHost />
     </React.Suspense>
   )
 }

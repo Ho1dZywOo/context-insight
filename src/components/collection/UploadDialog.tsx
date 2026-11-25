@@ -35,7 +35,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { LakeTokenDialog } from '@/components/LakeTokenDialog'
-import { notifyUploadResult } from '@/components/collection/UploadResultHud'
+import { notifyError, notifyNotice } from '@/components/NoticeHud'
 import {
   findStoredAuthEntry,
   isCredentialErrorCode,
@@ -63,6 +63,30 @@ export interface UploadRunTarget {
 }
 
 export type UploadTarget = UploadSessionTarget | UploadRunTarget
+
+/** 上传结果通知（NoticeHud 语义映射）：成功（绿勾）/警示（琥珀，缺正文等
+ *  软告警）为瞬态确认，点击即收；失败走红叉持久报错卡——必须点「知道了」
+ *  确认才离场，上传失败的原因用户必须有机会读到。任何上传面（弹窗 / 列表行）
+ *  的结果都经本函数单点接线，调用方不再各自接反馈。 */
+type UploadHudTone = 'success' | 'warning' | 'error'
+
+interface NotifyUploadResultInput {
+  ok: boolean
+  title: string
+  /** 副文（白话详情）：错误原因 / 原生会话同步结果 / 缺正文告警摘要 */
+  description?: string | null
+  /** 显式覆盖色调（默认按 ok 推导：成功绿 / 失败红） */
+  tone?: UploadHudTone
+}
+
+function notifyUploadResult(input: NotifyUploadResultInput): void {
+  const tone = input.tone ?? (input.ok ? 'success' : 'error')
+  if (tone === 'error') {
+    notifyError(input.title, input.description ?? null)
+    return
+  }
+  notifyNotice({ tone, title: input.title, description: input.description ?? null })
+}
 
 /** 统一上传结果（会话/run 双通路同款）：warnings = 上传成功但缺正文等软提示 */
 export interface UploadOutcome {

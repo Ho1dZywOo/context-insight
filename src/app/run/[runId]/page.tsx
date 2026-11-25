@@ -46,6 +46,7 @@ import { VERSION_DISPLAY } from "@/lib/version";
 import { assembleEmbeddedHtml, captureStylesheets, downloadHtml, fallbackDownload, gatherRunExportData } from "@/lib/observe/export-html";
 import { useRunHostCaps } from "@/lib/run/host-caps";
 import { toast } from "sonner";
+import { notifyError } from "@/components/NoticeHud";
 import { cn } from "@/lib/utils";
 import type { RunMemberIdentity, RunMemberStats } from "@/lib/collection/types";
 import type { RunTimeSummary } from "@/lib/observe/run-time-summary";
@@ -354,7 +355,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
         }
       }
       if (errors.length > 0 && !auto) {
-        toast.error("刷新失败", { description: errors[0] + (errors.length > 1 ? `（共 ${errors.length} 个成员失败）` : "") });
+        notifyError("刷新失败", errors[0] + (errors.length > 1 ? `（共 ${errors.length} 个成员失败）` : ""));
       }
       if (ok > 0) {
         const msg = fullRebuild
@@ -554,14 +555,14 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
       const res = await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}/export-md`);
       if (!res.ok) {
         const err = await res.json();
-        toast.error("Export Markdown failed", { description: err.error ?? "Unknown error" });
+        notifyError("Export Markdown failed", err.error ?? "Unknown error");
         return;
       }
       const blob = new Blob([await res.text()], { type: "text/markdown" });
       fallbackDownload(blob, `session_${soloMember.taskId}.md`);
       toast.success("Markdown exported", { description: `session_${soloMember.taskId}.md` });
     } catch {
-      toast.error("Export Markdown failed", { description: "Network error" });
+      notifyError("Export Markdown failed", "Network error");
     } finally {
       setExportingMd(false);
     }
@@ -590,7 +591,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
       downloadHtml(html, filename);
       toast.success("HTML exported", { description: `${filename} — 嵌入式工作台（离线可交互）` });
     } catch (e) {
-      toast.error("Export HTML failed", { description: e instanceof Error ? e.message : "Unknown error" });
+      notifyError("Export HTML failed", e instanceof Error ? e.message : "Unknown error");
     } finally {
       setExportingHtml(false);
     }

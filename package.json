@@ -37,7 +37,7 @@
     "pretest:watch": "node scripts/ensure-native.mjs && node scripts/ensure-test-db.mjs",
     "pretest:cli": "node scripts/ensure-native.mjs && node scripts/ensure-test-db.mjs",
     "pretest:bench": "node scripts/ensure-native.mjs && node scripts/ensure-test-db.mjs",
-    "test": "vitest run && playwright test",
+    "test": "vitest run && playwright test && node scripts/ensure-test-db.mjs --prune-shards",
     "test:cov": "npm run pretest && vitest run tests/ut --coverage",
     "test:watch": "vitest",
     "cli": "tsx src/cli/index.ts",

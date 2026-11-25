@@ -16,14 +16,15 @@
 //   ② 会话上传失败 → HUD 报错 + 弹窗驻留明细
 //   ③ run 上传干净成功 → HUD 确认 + 即关
 //   ④ run 上传带缺正文告警 → HUD 警示 + 弹窗驻留完整清单
-//   ⑤ HUD 生命周期：到点自动退场 / 点击即收
+//   ⑤ HUD 生命周期：瞬态到点自动退场 / 点击即收；报错卡持久不自动消失、
+//      点卡片本体不关，必须点「知道了」确认，同文案报错合并 ×N 计数
 
 import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { UploadDialog } from '@/components/collection/UploadDialog'
-import { UploadHudHost, notifyUploadResult, dismissAllUploadHuds } from '@/components/collection/UploadResultHud'
+import { NoticeHudHost, notifyNotice, notifyError, dismissAllNotices } from '@/components/NoticeHud'
 import { BAY_NAME } from '@/lib/branding'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -65,7 +66,7 @@ afterAll(() => {
 })
 
 afterEach(() => {
-  act(() => { dismissAllUploadHuds() })
+  act(() => { dismissAllNotices() })
   if (root) { const r = root; act(() => { r.unmount() }); root = null }
   container?.remove(); container = null
   vi.useRealTimers()
@@ -80,7 +81,7 @@ async function renderDialog(props: Parameters<typeof UploadDialog>[0]): Promise<
   root = r
   await act(async () => {
     r.render(createElement('div', null,
-      createElement(UploadHudHost),
+      createElement(NoticeHudHost),
       createElement(UploadDialog, props),
     ))
   })
@@ -209,28 +210,54 @@ describe('上传结果 HUD（组件内单点，全上传面一致）', () => {
     expect(dialogEl?.textContent).toContain('ses-b')
   })
 
-  it('⑤ HUD 生命周期：到点自动退场 / 点击即收', async () => {
+  it('⑤ HUD 生命周期：瞬态到点退场/点击即收；报错持久须「知道了」确认', async () => {
     vi.useFakeTimers()
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
     const r = root!
     await act(async () => {
-      r.render(createElement(UploadHudHost))
+      r.render(createElement(NoticeHudHost))
     })
 
     // 成功色调默认驻留 3200ms：期内可见，到点 + 退场动画（180ms）后消失
-    act(() => { notifyUploadResult({ ok: true, title: 'T-success', description: 'D-success' }) })
+    act(() => { notifyNotice({ tone: 'success', title: 'T-success', description: 'D-success' }) })
     expect(container!.textContent).toContain('T-success')
     await act(async () => { vi.advanceTimersByTime(3300) })
     expect(container!.textContent).toContain('T-success') // 退场动画中仍占位
     await act(async () => { vi.advanceTimersByTime(200) })
     expect(container!.textContent).not.toContain('T-success')
 
-    // 点击即收：不等驻留时长
-    act(() => { notifyUploadResult({ ok: false, title: 'T-error', description: 'D-error' }) })
+    // 瞬态点击即收：不等驻留时长
+    act(() => { notifyNotice({ tone: 'success', title: 'T-click', description: null }) })
+    expect(container!.textContent).toContain('T-click')
+    await act(async () => { (container!.querySelector('[data-notice-tone="success"]') as HTMLElement).click() })
+    await act(async () => { vi.advanceTimersByTime(200) })
+    expect(container!.textContent).not.toContain('T-click')
+
+    // 瞬态同屏上限：连弹 5 张只留最近 3 张（更早的让位，不堆墙）
+    act(() => {
+      for (let i = 1; i <= 5; i++) notifyNotice({ tone: 'success', title: `T-cap-${i}`, description: null })
+    })
+    expect(container!.querySelectorAll('[data-notice-tone="success"]')).toHaveLength(3)
+    // 退场走两拍：3200ms 驻留到期 → closing；+200ms 动画结束移除
+    await act(async () => { vi.advanceTimersByTime(4000) })
+    await act(async () => { vi.advanceTimersByTime(200) })
+    expect(container!.querySelectorAll('[data-notice-tone="success"]')).toHaveLength(0)
+
+    // 报错卡持久：推进 1 分钟仍在——失败原因不许超时蒸发
+    act(() => { notifyError('T-error', 'D-error') })
     expect(container!.textContent).toContain('T-error')
-    await act(async () => { (container!.querySelector('.hud-card') as HTMLElement).click() })
+    await act(async () => { vi.advanceTimersByTime(60_000) })
+    expect(container!.textContent).toContain('T-error')
+    // 点卡片本体不关：唯一出口是「知道了」
+    await act(async () => { (container!.querySelector('[data-notice-tone="error"]') as HTMLElement).click() })
+    expect(container!.textContent).toContain('T-error')
+    // 同文案报错合并计数：再弹收敛为同一张卡 ×2
+    act(() => { notifyError('T-error', 'D-error') })
+    expect(container!.querySelectorAll('[data-notice-tone="error"]')).toHaveLength(1)
+    expect(container!.textContent).toContain('×2')
+    await act(async () => { (container!.querySelector('[data-notice-confirm]') as HTMLElement).click() })
     await act(async () => { vi.advanceTimersByTime(200) })
     expect(container!.textContent).not.toContain('T-error')
   })

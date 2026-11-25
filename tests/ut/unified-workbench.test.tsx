@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Home from '@/app/page';
 import { AssetList } from '@/components/collection/AssetList';
-import { UploadHudHost, dismissAllUploadHuds } from '@/components/collection/UploadResultHud';
+import { NoticeHudHost, dismissAllNotices } from '@/components/NoticeHud';
 import { parseAndIndex } from '@/lib/run/reader';
 import { saveRun, type RunImportMeta } from '@/lib/run/run-store';
 import { sessionDurationMs } from '@/lib/session-duration';
@@ -93,8 +93,8 @@ afterEach(() => {
   act(() => root?.unmount())
   root = null
   document.body.innerHTML = ''
-  // 上传结果 HUD 模块态清空（宿主随测试树卸载，残留通知不渗入后续用例）
-  act(() => { dismissAllUploadHuds() })
+  // 通知 HUD 模块态清空（宿主随测试树卸载，残留通知不渗入后续用例）
+  act(() => { dismissAllNotices() })
 })
 
 afterAll(() => {
@@ -118,8 +118,8 @@ async function renderHome(): Promise<void> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  // 上传结果 HUD 宿主随树挂载（生产由 app layout 常驻提供，此处对齐）
-  await act(async () => { root!.render(createElement('div', null, tree, createElement(UploadHudHost))) })
+  // 通知 HUD 宿主随树挂载（生产由 app layout 常驻提供，此处对齐）
+  await act(async () => { root!.render(createElement('div', null, tree, createElement(NoticeHudHost))) })
   await settle()
 }
 

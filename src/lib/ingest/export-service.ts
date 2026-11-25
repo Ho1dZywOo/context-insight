@@ -250,6 +250,12 @@ export async function exportSession(
   }
   const client = prisma ?? new PrismaClient();
 
+  // 提升到 try 外：catch 清理 tmp 残骸（原子改名保证正式条目从未诞生）需要
+  // 可见性；db 延迟开启（prisma 连不上时未开）
+  const outPath = outputPath ?? path.join(os.tmpdir(), `context_session_${taskId}.db`);
+  const tmpPath = `${outPath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  let db: InstanceType<typeof Database> | undefined;
+
   try {
     const where: Record<string, string> = { taskId };
     if (framework) where.framework = framework;
@@ -261,12 +267,12 @@ export async function exportSession(
       throw new Error(`Session not found: "${taskId}"`);
     }
 
-    const outPath = outputPath ?? path.join(os.tmpdir(), `context_session_${taskId}.db`);
-    if (fs.existsSync(outPath)) {
-      fs.unlinkSync(outPath);
-    }
+    // 写入临时文件、成功后原子改名：同路径重复导出（回收站覆盖归档）与下方
+    // 分块多事务写入都靠这层保证消费方（restore 导入）永远只见到完整快照——
+    // 中途任何失败留下的是 .tmp 残骸而非可被误恢复的半截条目
+    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
 
-    const db = new Database(outPath);
+    db = new Database(tmpPath);
     db.exec(DDL);
 
     const insertExportMeta = db.prepare(`
@@ -366,7 +372,25 @@ export async function exportSession(
     const sessionSkills = await client.sessionSkill.findMany({ where: { sessionId: session.id } });
     const bridges = await client.interactionBridge.findMany({ where: { sessionId: session.id } });
 
-    // Write all data in a single transaction
+    // 事件循环分块写入：better-sqlite3 全同步，几千轮大会话的导出（回收站
+    // 归档/删除级联）会连续占住 Node 事件循环数秒——期间整个服务器对其他
+    // 请求无响应（现场：主页删除大会话全站卡顿）。按块提交事务、块间
+    // setImmediate 让出：单块 ≤500 行毫秒级完成，导出全程服务器保持响应；
+    // 多事务的原子性由上面「临时文件 + 原子改名」兜底
+    const YIELD_ROWS = 500;
+    const breathe = () => new Promise<void>(resolve => setImmediate(resolve));
+    // 闭包捕获收窄：let 声明在闭包体内不保赋值后的收窄，经 const 固化
+    const conn = db;
+    const insertChunked = async <T>(rows: T[], run: (row: T) => void): Promise<void> => {
+      for (let i = 0; i < rows.length; i += YIELD_ROWS) {
+        const chunk = rows.slice(i, i + YIELD_ROWS);
+        conn.transaction(() => {
+          for (const row of chunk) run(row);
+        })();
+        await breathe();
+      }
+    };
+
     db.transaction(() => {
       insertExportMeta.run('producer', 'insight-export');
       insertExportMeta.run('schemaVersion', EXPORT_SCHEMA_VERSION);
@@ -385,77 +409,85 @@ export async function exportSession(
         session.user,
         toISO(session.createdAt), toISO(session.updatedAt),
       );
-
-      for (const t of turns) {
-        insertTurn.run(
-          t.id, t.sessionId, t.turnIndex, t.role, t.content, t.contentJson, t.contentSummary,
-          t.inputMessagesJson, t.inputMessagesCount, t.inputMessagesTokens, t.contextWindowPct,
-          t.agentName, t.subagentName, t.subagentSessionId,
-          t.totalTokens, t.inputTokens, t.outputTokens, t.reasoningTokens, t.cacheReadTokens, t.cacheWriteTokens,
-          toISO(t.createdAt_ts), toISO(t.completedAt), t.latencyMs, t.ttftMs,
-          t.model, t.modelId, t.providerId, t.temperature, t.maxTokens, t.finishReason,
-          t.isSubagent ? 1 : 0, t.parentExecutionId, toISO(t.createdAt),
-        );
-      }
-
-      for (const tc of toolCalls) {
-        insertToolCall.run(
-          tc.id, tc.turnId, tc.toolCallId, tc.toolName, tc.argsJson, tc.resultJson,
-          tc.state, tc.errorType, tc.errorMessage,
-          toISO(tc.startedAt), toISO(tc.completedAt), tc.durationMs, tc.dispatchBridgeId,
-          tc.isSkillRelated ? 1 : 0, toISO(tc.createdAt),
-        );
-      }
-
-      for (const se of skillEvents) {
-        insertSkillEvent.run(
-          se.id, se.turnId, se.skillName, se.skillVersion, se.eventType,
-          se.success ? 1 : 0, se.errorMessage, se.argsJson,
-          toISO(se.startedAt), toISO(se.completedAt), se.durationMs, toISO(se.createdAt),
-        );
-      }
-
-      for (const e of executions) {
-        insertExecution.run(
-          e.id, e.sessionId, e.agentName, e.agentSessionId,
-          e.isSubagent ? 1 : 0, e.subagentType, e.subagentName,
-          e.parentExecutionId, e.rootExecutionId, e.depth,
-          e.tokens, e.inputTokens, e.outputTokens, e.reasoningTokens,
-          e.cacheReadInputTokens, e.cacheCreationInputTokens, e.maxSingleCallTokens,
-          e.cost, e.latencyMs, e.toolCallCount, e.toolCallErrorCount,
-          e.llmCallCount, e.skillLoadCount, e.skillInvokeCount,
-          e.finalResult, e.model, toISO(e.createdAt),
-        );
-      }
-
-      for (const es of executionSkills) {
-        insertExecutionSkill.run(
-          es.id, es.executionId, es.skillName, es.skillVersion,
-          es.isPrimary ? 1 : 0, es.user, toISO(es.createdAt),
-        );
-      }
-
-      for (const ss of sessionSkills) {
-        insertSessionSkill.run(
-          ss.id, ss.sessionId, ss.skillName, ss.skillVersion,
-          ss.invocationCount, ss.user, toISO(ss.createdAt),
-        );
-      }
-
-      for (const b of bridges) {
-        insertBridge.run(
-          b.id, b.sessionId, b.dispatchExecutionId, b.dispatchTurnId, b.dispatchToolCallId,
-          b.dispatchContent, toISO(b.dispatchTimestamp),
-          b.responseExecutionId, b.responseTurnId, b.responseContent, toISO(b.responseTimestamp),
-          b.subagentSessionId, b.subagentType, b.subagentName, b.status,
-          b.subagentTokens, b.subagentLatencyMs, toISO(b.createdAt), toISO(b.updatedAt),
-        );
-      }
     })();
 
+    await insertChunked(turns, t =>
+      insertTurn.run(
+        t.id, t.sessionId, t.turnIndex, t.role, t.content, t.contentJson, t.contentSummary,
+        t.inputMessagesJson, t.inputMessagesCount, t.inputMessagesTokens, t.contextWindowPct,
+        t.agentName, t.subagentName, t.subagentSessionId,
+        t.totalTokens, t.inputTokens, t.outputTokens, t.reasoningTokens, t.cacheReadTokens, t.cacheWriteTokens,
+        toISO(t.createdAt_ts), toISO(t.completedAt), t.latencyMs, t.ttftMs,
+        t.model, t.modelId, t.providerId, t.temperature, t.maxTokens, t.finishReason,
+        t.isSubagent ? 1 : 0, t.parentExecutionId, toISO(t.createdAt),
+      ),
+    );
+
+    await insertChunked(toolCalls, tc =>
+      insertToolCall.run(
+        tc.id, tc.turnId, tc.toolCallId, tc.toolName, tc.argsJson, tc.resultJson,
+        tc.state, tc.errorType, tc.errorMessage,
+        toISO(tc.startedAt), toISO(tc.completedAt), tc.durationMs, tc.dispatchBridgeId,
+        tc.isSkillRelated ? 1 : 0, toISO(tc.createdAt),
+      ),
+    );
+
+    await insertChunked(skillEvents, se =>
+      insertSkillEvent.run(
+        se.id, se.turnId, se.skillName, se.skillVersion, se.eventType,
+        se.success ? 1 : 0, se.errorMessage, se.argsJson,
+        toISO(se.startedAt), toISO(se.completedAt), se.durationMs, toISO(se.createdAt),
+      ),
+    );
+
+    await insertChunked(executions, e =>
+      insertExecution.run(
+        e.id, e.sessionId, e.agentName, e.agentSessionId,
+        e.isSubagent ? 1 : 0, e.subagentType, e.subagentName,
+        e.parentExecutionId, e.rootExecutionId, e.depth,
+        e.tokens, e.inputTokens, e.outputTokens, e.reasoningTokens,
+        e.cacheReadInputTokens, e.cacheCreationInputTokens, e.maxSingleCallTokens,
+        e.cost, e.latencyMs, e.toolCallCount, e.toolCallErrorCount,
+        e.llmCallCount, e.skillLoadCount, e.skillInvokeCount,
+        e.finalResult, e.model, toISO(e.createdAt),
+      ),
+    );
+
+    await insertChunked(executionSkills, es =>
+      insertExecutionSkill.run(
+        es.id, es.executionId, es.skillName, es.skillVersion,
+        es.isPrimary ? 1 : 0, es.user, toISO(es.createdAt),
+      ),
+    );
+
+    await insertChunked(sessionSkills, ss =>
+      insertSessionSkill.run(
+        ss.id, ss.sessionId, ss.skillName, ss.skillVersion,
+        ss.invocationCount, ss.user, toISO(ss.createdAt),
+      ),
+    );
+
+    await insertChunked(bridges, b =>
+      insertBridge.run(
+        b.id, b.sessionId, b.dispatchExecutionId, b.dispatchTurnId, b.dispatchToolCallId,
+        b.dispatchContent, toISO(b.dispatchTimestamp),
+        b.responseExecutionId, b.responseTurnId, b.responseContent, toISO(b.responseTimestamp),
+        b.subagentSessionId, b.subagentType, b.subagentName, b.status,
+        b.subagentTokens, b.subagentLatencyMs, toISO(b.createdAt), toISO(b.updatedAt),
+      ),
+    );
     db.close();
+    // 目标已存在时先清再改名：rename 覆盖已存在目标在 Windows 下会 EPERM（回收站
+    // 「覆盖归档」反复写同一 taskId__framework.db 会命中），清掉后跨平台可覆盖
+    if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+    fs.renameSync(tmpPath, outPath);
     console.log(`[export] session ${taskId} → ${outPath} (${turns.length} turns, ${toolCalls.length} toolCalls, ${skillEvents.length} skillEvents, ${executions.length} executions, ${bridges.length} bridges)`);
     return outPath;
+  } catch (e) {
+    // 中途失败清 tmp 残骸（正式条目从未诞生——原子改名保证）；原样上抛
+    try { db?.close(); } catch { /* 已关或未开 */ }
+    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch { /* best-effort */ }
+    throw e;
   } finally {
     if (!prisma) await client.$disconnect();
   }

@@ -31,7 +31,12 @@ function isSafeEntryName(name: string): boolean {
   return /^[\w.-]+\.db$/.test(name) && !name.includes('..')
 }
 
-function entryFileName(taskId: string, framework: string | null): string {
+/**
+ * 回收站条目文件名（taskId__framework.db；安全字符替换防路径注入/穿越）。
+ * 确定性映射 = 公开：delete-session / run 删除路由据此把「删除了哪些条目」
+ * 回传前端做撤销（POST /api/recycle action=restore 按 name 恢复）。
+ */
+export function recycleEntryFileName(taskId: string, framework: string | null): string {
   const safe = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, '_')
   return `${safe(taskId)}__${safe(framework ?? 'none')}.db`
 }
@@ -68,7 +73,7 @@ export async function archiveSessionsToRecycle(prisma: PrismaClient, ids: string
     fs.mkdirSync(recycleRoot(), { recursive: true })
     for (const row of rows) {
       try {
-        await exportSession(row.taskId, entryPath(entryFileName(row.taskId, row.framework)), prisma, row.framework ?? undefined)
+        await exportSession(row.taskId, entryPath(recycleEntryFileName(row.taskId, row.framework)), prisma, row.framework ?? undefined)
         archived++
       } catch (e) {
         logWarn('recycle:archive', '快照失败（删除继续）', { taskId: row.taskId, error: e instanceof Error ? e.message : String(e) })

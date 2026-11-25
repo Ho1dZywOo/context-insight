@@ -16,6 +16,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
+import { notifyError } from '@/components/NoticeHud';
 import { formatDateTime } from '@/lib/collection/lake-view/format';
 
 export interface BundleItemView {
@@ -95,7 +96,7 @@ export function BundleTable({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setImportErrors(prev => new Map(prev).set(runId, msg));
-      toast.error('导入失败', { description: msg });
+      notifyError('导入失败', msg);
     } finally {
       setImporting(prev => { const s = new Set(prev); s.delete(runId); return s; });
       setProgress(prev => { const m = new Map(prev); m.delete(runId); return m; });

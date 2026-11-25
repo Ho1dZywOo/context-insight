@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react';
 import { formatDateTime, formatDuration, formatScore, formatTokens, formatDelta } from '@/lib/collection/lake-view/format';
 import { agentFrameworkOf, FRAMEWORK_LABELS, isProxyVersion } from '@/lib/shared/session-format';
 import { NotesDialog } from './NotesDialog';
-import { toast } from 'sonner';
+import { notifyError } from '@/components/NoticeHud';
 
 export type ImportState = 'idle' | 'importing' | 'error';
 
@@ -106,7 +106,7 @@ export function RunsTable({
       if (insightUrl) window.location.href = insightUrl;
     } else {
       setImportErrors(prev => new Map(prev).set(k, error));
-      toast.error('导入失败', { description: error });
+      notifyError('导入失败', error);
     }
   };
 

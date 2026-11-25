@@ -43,17 +43,34 @@ function extractInsertStatements(source: string): Array<{ table: string; columns
 
 function extractRunArgCounts(source: string): Record<string, number> {
   const result: Record<string, number> = {};
-  const regex = /(\w+)\.run\(\s*([\s\S]*?)\s*\);/g;
+  // 从源码静态解析每个 insertXxx.run(...) 的实参个数。不可以用「截到首个
+  // ");"」的正则——分块插入把 run(...) 作为闭包实参嵌在 insertChunked(...)
+  // 里，收尾是 "…),\n    );"，非贪婪匹配会多吃一个 run 自身的闭括号（+1
+  // 假差异）。改为括号配平扫描：从 ".run(" 起深度计数取实参区，直呼与闭包
+  // 两种书写形态一致成立（实参均为标识符/字面量/三元/普通函数调用，字符串
+  // 字面量不含括号或逗号，配平与逗号切分安全）
+  const regex = /(\w+)\.run\(/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(source)) !== null) {
     const varName = match[1];
-    if (varName.startsWith('insert')) {
-      const args = match[2]
-        .split(',')
-        .map(a => a.trim())
-        .filter(a => a.length > 0 && !a.startsWith('//'));
-      result[varName] = args.length;
+    if (!varName.startsWith('insert')) continue;
+    const open = match.index + match[0].length; // 已越过实参区开括号
+    let depth = 1;
+    let close = open;
+    for (; close < source.length; close++) {
+      const ch = source[close];
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0) break;
+      }
     }
+    const inner = source.slice(open, close);
+    const args = inner
+      .split(',')
+      .map(a => a.trim())
+      .filter(a => a.length > 0 && !a.startsWith('//'));
+    result[varName] = args.length;
   }
   return result;
 }
@@ -151,5 +168,17 @@ describe('regression guard: Session 30-vs-31 bug', () => {
     expect(sessionInsert!.columns.length).toBe(31);
     expect(sessionInsert!.placeholders).toBe(31);
     expect(runArgs['insertSession']).toBe(31);
+  });
+});
+
+describe('regression guard: rename 前先清已存在目标（Windows 覆盖归档）', () => {
+  const source = fs.readFileSync(EXPORT_SERVICE_PATH, 'utf-8');
+
+  it('outPath 已存在时须在 renameSync 前 unlink（rename 覆盖已存在目标在 Windows 下会 EPERM）', () => {
+    const unlink = source.indexOf('fs.existsSync(outPath)) fs.unlinkSync(outPath)');
+    const rename = source.indexOf('fs.renameSync(tmpPath, outPath)');
+    expect(rename).toBeGreaterThanOrEqual(0);
+    expect(unlink).toBeGreaterThanOrEqual(0);
+    expect(unlink).toBeLessThan(rename);
   });
 });

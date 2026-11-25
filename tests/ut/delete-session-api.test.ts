@@ -10,13 +10,14 @@ import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { prisma } from '../setup';
 import { DELETE } from '@/app/api/ingest/delete-session/route';
+import { recycleEntryFileName, listRecycleEntries, restoreRecycleEntry } from '@/lib/recycle';
 
 const createdSessionIds: string[] = [];
 
 // 本文件全部 seed 前缀：beforeAll/afterAll 按前缀自愈——vitest 中途被杀
 // （Ctrl+C/超时强杀）时 afterEach 不执行，seed 会泄漏进共享 test.db 并出现在
 // 下次跑测试的用例视野（batch-del-* 空会话事故）；前缀清理保证下次跑测试自动清掉残留
-const SEED_PREFIXES = ['batch-del-', 'collide-', 'partial-', 'dual-del-', 'cascade-single-', 'cascade-batch-'];
+const SEED_PREFIXES = ['batch-del-', 'collide-', 'partial-', 'dual-del-', 'cascade-single-', 'cascade-batch-', 'recycle-'];
 
 async function healSeededLeaks() {
   await prisma.session.deleteMany({
@@ -148,6 +149,52 @@ describe('delete-session API (batch)', () => {
   it('still rejects a missing taskId in the single-session path', async () => {
     const res = await DELETE(makeDeleteRequest({}));
     expect(res.status).toBe(400);
+  }, DB_IT_TIMEOUT_MS);
+});
+
+describe('delete-session API (recycle 撤销闭环: 条目名回传 + restore 回流)', () => {
+  it('单删回传确定性条目名且快照真实落盘，restore 后会话回流（前端撤销的服务端等价物）', async () => {
+    const stamp = `${Date.now()}`;
+    const taskId = `recycle-undo-${stamp}`;
+    const { session } = await seedSessionWithChildren(taskId, 'opencode');
+
+    const res = await DELETE(makeDeleteRequest({ taskId, framework: 'opencode' }));
+    const data = await res.json();
+    expect(res.status).toBe(200);
+    // 确定性映射：前端拿响应里的名字即可 POST /api/recycle restore 撤销
+    expect(data.recycle).toEqual([recycleEntryFileName(taskId, 'opencode')]);
+
+    // 快照真实落盘（回收站根随 CONTEXT_INSIGHT_HOME 落在测试 tmp home 下）
+    const entry = listRecycleEntries().find(e => e.name === data.recycle[0]);
+    expect(entry).toBeDefined();
+
+    // 撤销闭环：restore 回流为独立会话行（UI 侧行为由 e2e recycle-bin.spec 锁）
+    const restored = await restoreRecycleEntry(data.recycle[0], prisma);
+    expect(restored.imported).toBe(true);
+    expect(restored.taskId).toBe(taskId);
+
+    const back = await prisma.session.findFirst({ where: { taskId } });
+    expect(back).not.toBeNull();
+    if (back) createdSessionIds.push(back.id);
+  }, DB_IT_TIMEOUT_MS);
+
+  it('批量删除回传逐条目名（顺序与请求行对应，前端按名逐条撤销）', async () => {
+    const stamp = `${Date.now()}`;
+    const a = await seedSession(`recycle-batch-${stamp}-a`, 'opencode');
+    const b = await seedSession(`recycle-batch-${stamp}-b`, 'claude-code');
+
+    const res = await DELETE(makeDeleteRequest({
+      sessions: [
+        { taskId: a.taskId, framework: 'opencode' },
+        { taskId: b.taskId, framework: 'claude-code' },
+      ],
+    }));
+    const data = await res.json();
+    expect(res.status).toBe(200);
+    expect(data.recycle).toEqual([
+      recycleEntryFileName(a.taskId, 'opencode'),
+      recycleEntryFileName(b.taskId, 'claude-code'),
+    ]);
   }, DB_IT_TIMEOUT_MS);
 });
 

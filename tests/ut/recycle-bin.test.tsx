@@ -8,19 +8,19 @@
 
 // @vitest-environment happy-dom
 // 回收站面板 IT：挂载即取列表（GET /api/recycle）、恢复动作（POST restore +
-// 行移除 + 整页 reload 同步主列表——主列表 items 是客户端 state，
-// router.refresh() 只换 props 不重置 state，回流行不会浮现）、彻底删除两步
-// 确认（行内武装→确认）、清空两步确认。fetch/导航全 mock，组件层渲染。
+// 行移除 + 广播 assets-changed 事件软同步——主列表 items 是客户端 state，
+// router.refresh() 只换 props 不重置 state，回流行靠事件触发各持有方重取
+// 浮现，不再整页 reload）、彻底删除两步确认（行内武装→确认）、清空两步
+// 确认。恢复失败（imported:false / 网络层异常）走 NoticeHud 持久报错卡：
+// 必须点「知道了」确认才离场，不自动消失。fetch 全 mock，组件层渲染。
 
-import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { RecycleBin } from '../../src/components/RecycleBin'
-
-const { toastErrorSpy } = vi.hoisted(() => ({ toastErrorSpy: vi.fn() }))
-
-vi.mock('sonner', () => ({ toast: { error: toastErrorSpy, success: vi.fn(), warning: vi.fn() } }))
+import { NoticeHudHost, dismissAllNotices } from '../../src/components/NoticeHud'
+import { ASSETS_CHANGED_EVENT } from '../../src/lib/assets-events'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -31,7 +31,8 @@ const ENTRIES = [
 
 let entries = [...ENTRIES]
 // restore 服务端返回的 imported 标记（默认成功导入；imported:false 用例覆盖空会话/已存在）
-let restorePayload: { imported: boolean; query: string | null } = { imported: true, query: null }
+// 'throw' 哨兵 = 网络层异常（fetch reject）：post 返回 null，走报错卡兜底文案
+let restorePayload: { imported: boolean; query: string | null } | 'throw' = { imported: true, query: null }
 const calls: Array<{ url: string; body: Record<string, unknown> | null }> = []
 const fetchMock = vi.fn()
 
@@ -43,16 +44,18 @@ describe('回收站面板', () => {
   let container: HTMLDivElement | null = null
   let root: Root | null = null
   let origFetch: typeof fetch
-  // 恢复成功 → window.location.reload（整页同步主列表）；happy-dom 的
-  // location.reload 可被 spyOn，断言导航出口而不真跳页
-  let reloadMock: MockInstance
+  // 恢复成功 → 广播 assets-changed（软同步主列表等持有方，替代旧整页
+  // reload 出口）；捕获监听器断言事件派发
+  let assetsChangedEvents: Event[] = []
+  const assetsChangedCapture = (e: Event) => { assetsChangedEvents.push(e) }
 
   beforeEach(() => {
     entries = [...ENTRIES]
     restorePayload = { imported: true, query: null }
     calls.length = 0
-    reloadMock = vi.spyOn(window.location, 'reload').mockImplementation(() => {})
-    toastErrorSpy.mockClear()
+    assetsChangedEvents = []
+    window.addEventListener(ASSETS_CHANGED_EVENT, assetsChangedCapture)
+    act(() => { dismissAllNotices() })
     fetchMock.mockClear()
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -60,9 +63,12 @@ describe('回收站面板', () => {
       if (url === '/api/recycle' && init?.method === 'POST') {
         calls.push({ url: 'POST /api/recycle', body: body as Record<string, unknown> })
         if (body?.action === 'restore') {
+          // 'throw' 哨兵：模拟网络层异常（fetch reject）
+          if (restorePayload === 'throw') throw new Error('network down')
+          const payload = restorePayload
           // imported:true 才真正回流并移除快照（服务端语义）；imported:false 保留
-          if (restorePayload.imported) entries = entries.filter(e => e.name !== body.name)
-          return { ok: true, json: async () => ({ ok: true, imported: restorePayload.imported, query: restorePayload.query }) }
+          if (payload.imported) entries = entries.filter(e => e.name !== body.name)
+          return { ok: true, json: async () => ({ ok: true, imported: payload.imported, query: payload.query }) }
         }
         if (body?.action === 'purge') entries = entries.filter(e => e.name !== body.name)
         if (body?.action === 'empty') entries = []
@@ -79,14 +85,15 @@ describe('回收站面板', () => {
   })
 
   afterEach(() => {
+    act(() => { dismissAllNotices() })
     act(() => root?.unmount())
     container?.remove()
     ;(globalThis as { fetch: unknown }).fetch = origFetch
-    reloadMock.mockRestore()
+    window.removeEventListener(ASSETS_CHANGED_EVENT, assetsChangedCapture)
   })
 
   it('挂载即列回收条目（query 兜底 taskId、计数角标、删除时间）', async () => {
-    act(() => root!.render(createElement(RecycleBin)))
+    act(() => root!.render(createElement('div', null, createElement(RecycleBin), createElement(NoticeHudHost))))
     await settle()
     const rows = [...container!.querySelectorAll('[data-recycle-row]')]
     expect(rows.length).toBe(2)
@@ -98,46 +105,65 @@ describe('回收站面板', () => {
     expect(header.textContent!.match(/Recycle Bin2/)).toBeTruthy()
   })
 
-  it('恢复：POST restore + 行移除 + 整页 reload（主列表同步浮现）', async () => {
-    act(() => root!.render(createElement(RecycleBin)))
+  it('恢复：POST restore + 行移除 + 广播 assets-changed（主列表软同步浮现）', async () => {
+    act(() => root!.render(createElement('div', null, createElement(RecycleBin), createElement(NoticeHudHost))))
     await settle()
     const restoreBtn = [...container!.querySelectorAll('[data-recycle-restore]')][0] as HTMLButtonElement
     await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
     expect(calls.some(c => c.body?.action === 'restore' && c.body?.name === 'ses-a__dsh.db')).toBe(true)
-    expect(reloadMock).toHaveBeenCalled()
+    expect(assetsChangedEvents).toHaveLength(1)
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(1)
   })
 
-  it('恢复 imported:false（空会话）：保留条目 + 提示失败，不 refresh', async () => {
+  it('恢复 imported:false（空会话）：保留条目 + 提示失败，不广播', async () => {
     restorePayload = { imported: false, query: null }
-    act(() => root!.render(createElement(RecycleBin)))
+    act(() => root!.render(createElement('div', null, createElement(RecycleBin), createElement(NoticeHudHost))))
     await settle()
     const restoreBtn = [...container!.querySelectorAll('[data-recycle-restore]')][0] as HTMLButtonElement
     await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
     // 服务端 imported:false 不删快照、未回流——条目必须保留，不能静默移除
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
-    expect(reloadMock).not.toHaveBeenCalled()
-    expect(toastErrorSpy).toHaveBeenCalled()
-    expect(String(toastErrorSpy.mock.calls[0][0])).toContain('空会话无法恢复')
+    expect(assetsChangedEvents).toHaveLength(0)
+    // 持久报错卡（NoticeHud）：标题 + 原因在场
+    const card = container!.querySelector('[data-notice-tone="error"]')!
+    expect(card.textContent).toContain('恢复失败')
+    expect(card.textContent).toContain('空会话无法恢复')
   })
 
   it('恢复 imported:false（会话已存在）：保留条目 + 提示「会话已存在」', async () => {
     restorePayload = { imported: false, query: '登录 bug 修复' }
-    act(() => root!.render(createElement(RecycleBin)))
+    act(() => root!.render(createElement('div', null, createElement(RecycleBin), createElement(NoticeHudHost))))
     await settle()
     const restoreBtn = [...container!.querySelectorAll('[data-recycle-restore]')][0] as HTMLButtonElement
     await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
-    expect(reloadMock).not.toHaveBeenCalled()
-    expect(toastErrorSpy).toHaveBeenCalled()
-    expect(String(toastErrorSpy.mock.calls[0][0])).toContain('会话已存在')
+    expect(assetsChangedEvents).toHaveLength(0)
+    const card = container!.querySelector('[data-notice-tone="error"]')!
+    expect(card.textContent).toContain('会话已存在')
+  })
+
+  it('恢复网络层异常（fetch reject）：报错卡兜底文案，不静默吞掉', async () => {
+    restorePayload = 'throw'
+    act(() => root!.render(createElement('div', null, createElement(RecycleBin), createElement(NoticeHudHost))))
+    await settle()
+    const restoreBtn = [...container!.querySelectorAll('[data-recycle-restore]')][0] as HTMLButtonElement
+    await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await settle()
+    // post 返回 null（旧实现此分支被静默吞掉）：现在必须有持久报错卡兜底
+    const card = container!.querySelector('[data-notice-tone="error"]')!
+    expect(card.textContent).toContain('网络错误或服务异常')
+    expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
+    // 须点「知道了」确认才离场（退场动画 180ms 后移除）
+    await act(async () => { (container!.querySelector('[data-notice-confirm]') as HTMLElement).click() })
+    await settle(250)
+    expect(container!.querySelector('[data-notice-tone="error"]')).toBeNull()
   })
 
   it('彻底删除两步确认：首次点击武装、再次点击才 POST purge', async () => {
-    act(() => root!.render(createElement(RecycleBin)))
+    act(() => root!.render(createElement('div', null, createElement(RecycleBin), createElement(NoticeHudHost))))
     await settle()
     const purgeBtn = [...container!.querySelectorAll('[data-recycle-purge]')][0] as HTMLButtonElement
     await act(async () => { purgeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
@@ -151,7 +177,7 @@ describe('回收站面板', () => {
   })
 
   it('清空两步确认 + 空态文案', async () => {
-    act(() => root!.render(createElement(RecycleBin)))
+    act(() => root!.render(createElement('div', null, createElement(RecycleBin), createElement(NoticeHudHost))))
     await settle()
     const emptyBtn = container!.querySelector('[data-recycle-empty]') as HTMLButtonElement
     await act(async () => { emptyBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })

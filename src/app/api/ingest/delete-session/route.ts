@@ -11,7 +11,7 @@ import { prisma } from '@/lib/db';
 import { withRouteLog } from '@/lib/api-route';
 import { logInfo, logWarn } from '@/lib/logger';
 import { cascadeDeleteSessionRows } from '@/lib/ingest/session-cascade';
-import { archiveSessionsToRecycle } from '@/lib/recycle';
+import { archiveSessionsToRecycle, recycleEntryFileName } from '@/lib/recycle';
 import { invalidateObservationCaches } from '@/lib/observe/invalidation';
 
 // Delete a session and ALL its child rows. SQLite foreign-key cascade is not
@@ -28,7 +28,7 @@ export const DELETE = withRouteLog('ingest/delete-session', async (request: Next
   if (deleteAll) {
     const count = await prisma.session.count();
     // 回收站：全清前逐行归档快照（best-effort，与级联删除同一可逆语义）
-    const all = await prisma.session.findMany({ select: { id: true } });
+    const all = await prisma.session.findMany({ select: { id: true, taskId: true, framework: true } });
     await archiveSessionsToRecycle(prisma, all.map(s => s.id));
     // Explicit cascade: delete child rows in dependency order inside a
     // transaction. SQLite foreign-key cascade is not reliably enforced
@@ -46,11 +46,14 @@ export const DELETE = withRouteLog('ingest/delete-session', async (request: Next
     logInfo('route:ingest/delete-session', '全库清空', { deleteAll: true, deleted: count });
     // 观测缓存单点失效（作用域行 id + 湖列表/评分/活跃）：删除后 lake 视图与概览不再显示已删会话
     invalidateObservationCaches();
-    return NextResponse.json({ deleted: count });
+    // 回收站条目名回传（确定性映射，前端据此做删除后撤销：POST /api/recycle restore）
+    return NextResponse.json({ deleted: count, recycle: all.map(s => recycleEntryFileName(s.taskId, s.framework)) });
   }
 
   if (Array.isArray(batchSessions)) {
     let deleted = 0;
+    // 回收站条目名收集：前端批量删除后撤销（POST /api/recycle restore 逐条恢复）
+    const recycle: string[] = [];
     for (const entry of batchSessions) {
       if (!entry || typeof entry.taskId !== 'string') continue;
       const where: Record<string, string> = { taskId: entry.taskId };
@@ -58,12 +61,13 @@ export const DELETE = withRouteLog('ingest/delete-session', async (request: Next
       const found = await prisma.session.findMany({ where });
       for (const s of found) {
         await cascadeDeleteSession(s.id);
+        recycle.push(recycleEntryFileName(s.taskId, s.framework));
         deleted++;
       }
     }
     logInfo('route:ingest/delete-session', '批量删除完成', { batch: batchSessions.length, deleted });
     invalidateObservationCaches();
-    return NextResponse.json({ deleted, batch: batchSessions.length });
+    return NextResponse.json({ deleted, batch: batchSessions.length, recycle });
   }
 
   if (!taskId) {
@@ -97,5 +101,7 @@ export const DELETE = withRouteLog('ingest/delete-session', async (request: Next
   }
   logInfo('route:ingest/delete-session', '会话已删除', { taskId, framework: framework ?? '', deleted: sessions.length });
   invalidateObservationCaches();
-  return NextResponse.json({ deleted: sessions.length, taskId });
+  // 回收站条目名回传：前端删除后撤销（POST /api/recycle restore）——删除前
+  // 级联内部已 best-effort 归档，条目名确定性可映射
+  return NextResponse.json({ deleted: sessions.length, taskId, recycle: sessions.map(s => recycleEntryFileName(s.taskId, s.framework)) });
 });
