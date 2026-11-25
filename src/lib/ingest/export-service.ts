@@ -477,6 +477,9 @@ export async function exportSession(
       ),
     );
     db.close();
+    // 目标已存在时先清再改名：rename 覆盖已存在目标在 Windows 下会 EPERM（回收站
+    // 「覆盖归档」反复写同一 taskId__framework.db 会命中），清掉后跨平台可覆盖
+    if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
     fs.renameSync(tmpPath, outPath);
     console.log(`[export] session ${taskId} → ${outPath} (${turns.length} turns, ${toolCalls.length} toolCalls, ${skillEvents.length} skillEvents, ${executions.length} executions, ${bridges.length} bridges)`);
     return outPath;

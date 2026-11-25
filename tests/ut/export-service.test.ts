@@ -170,3 +170,15 @@ describe('regression guard: Session 30-vs-31 bug', () => {
     expect(runArgs['insertSession']).toBe(31);
   });
 });
+
+describe('regression guard: rename 前先清已存在目标（Windows 覆盖归档）', () => {
+  const source = fs.readFileSync(EXPORT_SERVICE_PATH, 'utf-8');
+
+  it('outPath 已存在时须在 renameSync 前 unlink（rename 覆盖已存在目标在 Windows 下会 EPERM）', () => {
+    const unlink = source.indexOf('fs.existsSync(outPath)) fs.unlinkSync(outPath)');
+    const rename = source.indexOf('fs.renameSync(tmpPath, outPath)');
+    expect(rename).toBeGreaterThanOrEqual(0);
+    expect(unlink).toBeGreaterThanOrEqual(0);
+    expect(unlink).toBeLessThan(rename);
+  });
+});

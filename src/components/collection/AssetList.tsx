@@ -433,14 +433,19 @@ export function AssetList({
         const data = await listRes.json()
         const runs = (data.items ?? []) as Array<{ runId: string }>
         if (runs.length === 0) break
+        // 整轮无一删除成功（run 仍留在列表里）就跳出：失败的 run 不随列表
+        // 收缩，继续循环只会对同一批 run 无限重试
+        let progressed = false
         for (const run of runs) {
           try {
             const res = await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}`, { method: 'DELETE' })
             const rd = res.ok ? await res.json().catch(() => ({})) : {}
             if (!res.ok) failed = true
+            else progressed = true
             if (Array.isArray(rd.recycle)) recycle.push(...rd.recycle)
           } catch { failed = true }
         }
+        if (!progressed) break
       }
       const res = await fetch('/api/ingest/delete-session', {
         method: 'DELETE',
