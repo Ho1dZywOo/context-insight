@@ -116,4 +116,52 @@ test.describe("回收站旅程", () => {
       await page.evaluate(() => (window as unknown as { __noReload: number | undefined }).__noReload),
     ).toBe(1);
   });
+
+  test("恢复失败：持久报错卡须点「知道了」确认，不自动消失", async ({ page }) => {
+    await importDisposableSession();
+
+    const home = new WorkbenchHomePO(page);
+    await home.goto();
+    const row = home.sessionRowByTaskId(AUTOREFRESH_SESSION_ID);
+    await expect(row).toBeVisible();
+
+    // 删除进回收站（同旅程一）
+    await row.getByTitle("Delete session", { exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "确认删除" }).click();
+    await expect(row).toHaveCount(0, { timeout: 15_000 });
+    const recycleRow = page.locator("[data-recycle-row]").filter({
+      has: page.locator(`p[title="${AUTOREFRESH_SESSION_ID}"]`),
+    });
+    await expect(recycleRow).toBeVisible({ timeout: 15_000 });
+
+    // 网络拦截：恢复请求 POST /api/recycle 强制失败（面板 GET 列表放行）——
+    // 模拟服务异常/断网下的恢复动作
+    await page.route("**/api/recycle", async (route) => {
+      if (route.request().method() === "POST") return route.abort();
+      return route.continue();
+    });
+
+    // 恢复失败：持久报错卡（NoticeHud，role=alert）在场并给出原因
+    await recycleRow.locator("[data-recycle-restore]").click();
+    const errorCard = page.locator('[data-notice-tone="error"]');
+    await expect(errorCard).toBeVisible({ timeout: 10_000 });
+    await expect(errorCard).toContainText("恢复失败");
+
+    // 不自动消失（报错语义回归锁）：静置 7s——旧 toast 报错 6s 即蒸发，
+    // 报错原因用户可能根本没看到；持久卡必须仍在场
+    await page.waitForTimeout(7_000);
+    await expect(errorCard).toBeVisible();
+
+    // 唯一离场出口：点「知道了」确认
+    await errorCard.locator("[data-notice-confirm]").click();
+    await expect(errorCard).toHaveCount(0, { timeout: 5_000 });
+
+    // 自净：解除拦截后重新恢复成功，会话回流为普通行（与播种态等价，幂等重跑安全）
+    await page.unroute("**/api/recycle");
+    await recycleRow.locator("[data-recycle-restore]").click();
+    await expect(recycleRow).toHaveCount(0, { timeout: 15_000 });
+    await expect(row).toBeVisible({ timeout: 15_000 });
+  });
 });

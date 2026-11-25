@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronDownIcon, RotateCcwIcon, TrashIcon, LoaderIcon } from 'lucide-react'
-import { toast } from 'sonner'
+import { notifyError } from '@/components/NoticeHud'
 import { AssetIcon, modelIconId } from '@/components/collection/AssetIcon'
 import { cn } from '@/lib/utils'
 import { notifyAssetsChanged, onAssetsChanged } from '@/lib/assets-events'
@@ -100,10 +100,15 @@ export function RecycleBin() {
         // 广播资产变更：主列表 fetchAssets 浮现回流行 + 指标卡软刷（替代整页
         // reload——items 是客户端 state，refresh 只换 props 不重置 state）
         notifyAssetsChanged()
-      } else if (data) {
-        // imported:false（空会话 0 轮 / 同 taskId 已存在走 merge/dedup）：快照
-        // 未回流也未删除——保留条目并如实提示，不静默抹掉列表条目
-        toast.error(data.query ? '恢复失败：会话已存在' : '恢复失败：空会话无法恢复')
+      } else {
+        // 恢复未回流：imported:false（空会话 0 轮 / 同 taskId 已存在走
+        // merge/dedup，快照未回流也未删除——保留条目不静默抹掉）或网络层
+        // 失败（data 为 null）。持久报错卡：必须点「知道了」确认才离场，
+        // 失败原因不再随 toast 超时蒸发
+        notifyError(
+          '恢复失败',
+          data ? (data.query ? '会话已存在，快照保留在回收站' : '空会话无法恢复，快照保留在回收站') : '网络错误或服务异常，请重试',
+        )
       }
     } finally {
       setBusy(null)

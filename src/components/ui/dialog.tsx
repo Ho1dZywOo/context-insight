@@ -67,7 +67,10 @@ function DialogContent({
           "fixed z-50 grid w-full gap-4 bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none",
           side === "right"
             ? "inset-y-0 right-0 h-full max-w-full rounded-none rounded-l-xl border-l data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-right data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-right"
-            : "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-xl max-w-[calc(100%-2rem)] sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            // 居中形态：视口高度上限 + 纵向滚动（内容超高不再把页脚按钮顶出
+            // 视口），页脚经 data-slot 粘滞在滚动区底部常驻可达（#167）；发丝
+            // 线按压确认区与内容分隔，圆角由 overflow 裁切
+            : "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-xl max-h-[calc(100dvh-4rem)] overflow-y-auto max-w-[calc(100%-2rem)] sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 [&_[data-slot=dialog-footer]]:sticky [&_[data-slot=dialog-footer]]:bottom-0",
           className,
         )}
         {...props}

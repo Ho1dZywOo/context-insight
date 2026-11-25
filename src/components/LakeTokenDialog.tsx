@@ -282,7 +282,7 @@ export function LakeTokenDialog({ open, onOpenChange, reason = 'no-credentials',
               )}
             </div>
 
-            <div className="flex justify-end gap-2 border-t bg-muted/40 p-4">
+            <div className="sticky bottom-0 flex justify-end gap-2 border-t bg-muted/40 p-4">
               <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => onOpenChange(false)} disabled={busy}>
                 取消
               </Button>

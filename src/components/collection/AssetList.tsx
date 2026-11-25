@@ -31,6 +31,7 @@ import {
   type UploadTarget,
 } from '@/components/collection/UploadDialog';
 import { toast } from 'sonner';
+import { notifyError } from '@/components/NoticeHud';
 import { notifyAssetsChanged, onAssetsChanged } from '@/lib/assets-events';
 import {
   Dialog,
@@ -363,7 +364,10 @@ export function AssetList({
 
   function failDeletion(tid: string, keys: string[], message: string) {
     unhideKeys(keys)
-    toast.error(message, { id: tid, duration: 6_000 })
+    // 收掉 loading toast，改走持久报错卡：失败原因必须经「知道了」确认，
+    // 不再 6s 超时蒸发
+    toast.dismiss(tid)
+    notifyError('删除失败', message)
     // 失败也广播：部分成功时列表/面板靠重取对齐服务端真值
     notifyAssetsChanged()
   }
@@ -407,7 +411,10 @@ export function AssetList({
       toast.success(`已恢复 ${restored} 项`, { id: tid, duration: 3_000 })
       notifyAssetsChanged()
     } else {
-      toast.error('恢复失败，快照仍在回收站，可到面板手动恢复', { id: tid, duration: 6_000 })
+      // 撤销失败：收掉 loading，走持久报错卡（须确认）——快照仍在回收站，
+      // 用户还有面板手动恢复这条后路，提示不能自动消失
+      toast.dismiss(tid)
+      notifyError('恢复失败', '快照仍在回收站，可到面板手动恢复')
     }
   }
 
