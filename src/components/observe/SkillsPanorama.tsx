@@ -27,7 +27,8 @@ import {
 } from "@/components/observe/perf-shared";
 import { useSkillContent } from "@/components/observe/use-skill-content";
 import { SkillCoverageCard } from "@/components/observe/SkillCoverageCard";
-import { SkillReadChip, SkillReadNote } from "@/components/observe/ReadNotice";
+import { SkillReadChip, SkillReadNote, TruncationAdviceView } from "@/components/observe/ReadNotice";
+import { toolOutputTruncationAdvice } from "@/lib/tool-output-truncation";
 import { skillReadMarkOf } from "@/lib/skill-content";
 import type { ReadCoverage } from "@/lib/skill-evidence";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
@@ -598,6 +599,16 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
     }
     return c;
   }, [selAgg, markOf]);
+  // 明细卡的处置建议：卡内被截断的调用涉及哪些运行环境，有可调开关的才给。
+  // 每张卡一条常驻——逐次调用行只陈述事实，不逐行重复建议
+  const truncationAdvice = useMemo(() => {
+    for (const ev of selAgg?.events ?? []) {
+      if (markOf.get(ev.id)?.kind !== "truncated") continue;
+      const advice = ev.outputTruncation ? toolOutputTruncationAdvice(ev.outputTruncation.harness) : null;
+      if (advice) return advice;
+    }
+    return null;
+  }, [selAgg, markOf]);
   const selDispatchAgg = dim === "dispatch" ? dispatchAggs.find(a => a.name === selected) ?? null : null;
   const selMemberTaskId = dim === "skills"
     ? selAgg?.events.find(e => e.member?.taskId)?.member?.taskId ?? null
@@ -861,6 +872,8 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                         </button>
                       </div>
                     </div>
+
+                    {truncationAdvice && <TruncationAdviceView advice={truncationAdvice} collapsible className="mt-1.5 shrink-0" />}
 
                     {/* SKILL.md 全文（成员会话注入内容） */}
                     {(sc.content.has(selAgg.name) || sc.error.has(selAgg.name)) && (

@@ -13,6 +13,7 @@ import { CheckCircle2Icon, AlertCircleIcon, BookOpenIcon, Loader2Icon } from "lu
 import { useSkillContentAudit, type SkillContentAuditItem } from "@/components/observe/use-skill-content-audit"
 import type { ViewUrlFor } from "@/lib/observe/member-url"
 import { describeLineEvidence } from "@/lib/skill-evidence"
+import { CODEX_LIMIT_ADVICE } from "@/lib/tool-output-truncation"
 
 interface SkillContentAuditProps {
   taskId: string
@@ -98,7 +99,7 @@ export function SkillContentAudit({ taskId, skillNames, onView, urlFor }: SkillC
             const channel = item.source === "skill-tool" ? "Skill 工具注入"
               : item.source === "command" ? "命令注入"
                 : item.source === "shell" ? "Shell 读取" : "Read 读取"
-            const notice = describeLineEvidence(item.evidence, item.fullRead, item.source === "shell")
+            const notice = describeLineEvidence(item.evidence, item.fullRead, item.source === "shell" ? CODEX_LIMIT_ADVICE : "")
             const injected = item.source === "skill-tool" || item.source === "command"
             const tip = st === "full"
               ? `全文 · ${channel}（${injected ? "框架注入完整 SKILL.md" : "会话内读到的行拼齐了整个文件"}）· ${item.length} 字符 / ${item.lines} 行`

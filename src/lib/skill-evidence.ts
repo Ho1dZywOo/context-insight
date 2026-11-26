@@ -167,9 +167,6 @@ export function formatRanges(ranges: LineGap[]): string {
   return ranges.map(g => (g.from === g.to ? `${g.from}` : `${g.from}–${g.to}`)).join('、');
 }
 
-/** 未读到文件尾部时是否提示可调输出上限（仅 codex 终端截断形态适用）。 */
-export const OUTPUT_LIMIT_HINT = 'codex 可在 ~/.codex/config.toml 顶层配置 tool_output_token_limit 提高单次工具输出上限';
-
 export type EvidenceRow =
   | { kind: 'line'; n: number; text: string }
   | { kind: 'gap'; from: number; to: number; tail: boolean };
@@ -205,11 +202,12 @@ export interface LineEvidenceNotice {
 }
 
 /** 证据 → 用户可读的覆盖面说明（Skills 面板与对账报告共用同一口径）。
- *  outputLimitHint：读取来自 shell 且被截断时附带 codex 输出上限配置提示。 */
+ *  advice：读取被截断时附在句尾的处置说明（口径见 tool-output-truncation 的
+ *  toolOutputTruncationAdvice；本模块零依赖，只接收文本）。 */
 export function describeLineEvidence(
   evidence: LineEvidence | null | undefined,
   fullRead: boolean,
-  outputLimitHint = false,
+  advice = '',
 ): LineEvidenceNotice {
   if (!evidence || fullRead) {
     return { partial: false, summary: evidence && evidence.lineNumbers.length > 0 ? `已读 ${evidence.lineNumbers.length} 行` : '', detail: '' };
@@ -222,7 +220,7 @@ export function describeLineEvidence(
   if (evidence.truncated) reasons.push('读取该文件的工具输出被截断');
   if (evidence.gaps.length > 0) reasons.push(`第 ${formatRanges(evidence.gaps)} 行未读到`);
   if (evidence.conflictLines.length > 0) reasons.push(`第 ${formatRanges(toRanges(evidence.conflictLines))} 行多次读取内容不一致，已弃用`);
-  const hint = outputLimitHint && evidence.truncated ? `${OUTPUT_LIMIT_HINT}。` : '';
+  const hint = advice && evidence.truncated ? `${advice}。` : '';
   return {
     partial: true,
     summary,

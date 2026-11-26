@@ -21,6 +21,7 @@ import { SkillContentAudit } from "@/components/observe/SkillContentAudit"
 import { BookOpenIcon } from "lucide-react"
 import { useSkillContent } from "@/components/observe/use-skill-content"
 import { describeLineEvidence, formatRanges, layOutWithGaps } from "@/lib/skill-evidence"
+import { CODEX_LIMIT_ADVICE } from "@/lib/tool-output-truncation"
 import {
   Table,
   TableHeader,
@@ -624,7 +625,7 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                 const skillContentNotice = describeLineEvidence(
                   skillContentData?.evidence,
                   Boolean(skillContentData?.fullRead),
-                  skillContentData?.source === "shell",
+                  skillContentData?.source === "shell" ? CODEX_LIMIT_ADVICE : "",
                 )
                 if (skillContentData || skillContentError) {
                   rows.push(

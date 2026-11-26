@@ -38,7 +38,8 @@ import { buildTurnErrorDigest } from '@/lib/tool-call-errors';
 import { OverviewPanels, type OverviewTurn } from '@/components/observe/OverviewPanels';
 import { SkillsPanorama, type SkillsPanoramaData } from '@/components/observe/SkillsPanorama';
 import { ToolCallList } from '@/components/observe/ToolCallList';
-import { describeToolOutputTruncation, toolOutputTruncationOf, type ToolOutputTruncation } from '@/lib/tool-output-truncation';
+import { CODEX_LIMIT_ADVICE, describeToolOutputTruncation, toolOutputTruncationAdvice, toolOutputTruncationOf, type ToolOutputTruncation } from '@/lib/tool-output-truncation';
+import { describeLineEvidence, type LineEvidence } from '@/lib/skill-evidence';
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -413,16 +414,21 @@ describe('工具行：按行范围只读了一段 SKILL.md 的「部分读取」
 
   /** 指针移入并停住（mouseenter + mousemove，与真实序列一致），等过静止延时提示出现；超时返回 null。
    *  页面上同时只应有一个提示——多于一个说明有残留 */
-  async function hoverFor(chip: HTMLElement, timeoutMs = 2500): Promise<string | null> {
+  async function hoverTip(chip: HTMLElement, timeoutMs = 2500): Promise<HTMLElement | null> {
     chip.dispatchEvent(new MouseEvent('mouseenter', { relatedTarget: document.body }));
     chip.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 10, clientY: 10 }));
     for (let waited = 0; waited < timeoutMs; waited += 50) {
       await act(async () => { await new Promise(r => setTimeout(r, 50)); });
       const tips = document.querySelectorAll<HTMLElement>('[data-slot="tooltip-content"]');
       if (tips.length > 1) throw new Error(`页面上同时出现了 ${tips.length} 个悬停提示`);
-      if (tips[0]?.textContent) return tips[0].textContent;
+      if (tips[0]) return tips[0];
     }
     return null;
+  }
+  /** 悬停提示里的事实句（处置建议另算，见 TruncationAdviceView） */
+  async function hoverFor(chip: HTMLElement): Promise<string | null> {
+    const tip = await hoverTip(chip);
+    return tip?.querySelector('[data-slot="fact"]')?.textContent ?? null;
   }
 
   it('有界读（nl | sed、Read offset+limit）带中性「部分读取」，悬停写 agent 实际读到的行；读完 / 证明不了 / 无从判定的行不标', async () => {
@@ -491,6 +497,49 @@ describe('工具行：按行范围只读了一段 SKILL.md 的「部分读取」
     expect(marksOf(cut.blocks)).toBe('truncated,-');
     expect(await hoverFor(chipOf(cut.blocks[0]!)!)).toBe('输出被截断，SKILL.md 共 10 行，agent 读到第 1–3、10 行。');
     cut.unmount();
+  });
+  it('处置建议：codex 截断的标记悬停附带处置步骤与可复制的配置行；opencode 截断、部分读取不带', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    // codex 截断（过滤管道，行号归因不了）：事实句之下是建议——做什么 / 写在哪 / 配置行 / 生效边界
+    const codex = await renderSeed(10);
+    const tip = (await hoverTip(chipOf(codex.blocks[0]!)!))!;
+    expect(tip.querySelector('[data-slot="fact"]')!.textContent).toBe('输出被截断，原始 2707 tokens、共 96 行，agent 未看到全文。');
+    const advice = tip.querySelector<HTMLElement>('[data-slot="truncation-advice"]')!;
+    expect(advice.dataset.harness).toBe('codex');
+    expect(advice.querySelector('[data-slot="truncation-advice-snippet"]')!.textContent).toBe('tool_output_token_limit = 100000');
+    const text = advice.textContent ?? '';
+    for (const must of ['调大 codex 的单次工具输出上限', '~/.codex/config.toml', '~/.codex/<name>.config.toml', '文件顶层', '默认只保留约 10KB', '配置后约 40KB', 'max_output_tokens']) {
+      expect(text, must).toContain(must);
+    }
+    await act(async () => { advice.querySelector<HTMLElement>('[role="button"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText.mock.calls[0]![0]).toBe('tool_output_token_limit = 100000');
+    codex.unmount();
+
+    // 部分读取：只有读到的行，没有建议
+    const partial = await renderSeed(2);
+    expect((await hoverTip(chipOf(partial.blocks[0]!)!))!.querySelector('[data-slot="truncation-advice"]')).toBeNull();
+    partial.unmount();
+
+    // opencode 截断：全量另有落盘，运行环境没有对应的可调开关 → 不编建议
+    const opencode = caseOf('opencode-tail');
+    const oc = await (async () => {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      const toolCalls = [{ id: 'row-oc', toolCallId: 'tot-tc-oc', toolName: opencode.toolName, argsJson: null, resultJson: opencode.result, state: opencode.state, errorType: null, errorMessage: null, durationMs: 5, isSkillRelated: false }];
+      await act(async () => { root.render(createElement(ToolCallList, { toolCalls })); });
+      const blocks = Array.from(container.firstElementChild!.children) as HTMLElement[];
+      return { blocks, unmount: () => { act(() => { root.unmount(); }); } };
+    })();
+    const ocTip = (await hoverTip(chipOf(oc.blocks[0]!)!))!;
+    expect(ocTip.querySelector('[data-slot="fact"]')!.textContent).toBe('输出被截断，仅显示第 19–34 行（共 34 行），agent 未看到全文。');
+    expect(ocTip.querySelector('[data-slot="truncation-advice"]')).toBeNull();
+    expect(toolOutputTruncationAdvice('opencode')).toBeNull();
+    oc.unmount();
+    expect(writeText).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -633,5 +682,43 @@ describe('技能读取的逐次调用行：截断与部分读取', () => {
     const marks = Array.from(container.querySelectorAll<HTMLElement>('[data-skill-read-mark]')).map(r => r.dataset.skillReadMark);
     expect(marks).toEqual([...MARKED['tot-skill-demo']]);
     act(() => { container.remove(); });
+  });
+
+  it('明细卡：卡内有被截断的调用时给一条折叠的处置建议（默认一行，不逐行重复）；没有截断的技能不给', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const container = renderPanorama();
+    selectSkill(container, 'tot-skill-demo');
+    const advices = Array.from(container.querySelectorAll<HTMLElement>('[data-slot="truncation-advice"]'));
+    expect(advices.length).toBe(1);
+    expect(advices[0]!.querySelector('[data-slot="truncation-advice-snippet"]')!.textContent).toBe('tool_output_token_limit = 100000');
+    const bar = advices[0]!;
+    expect(bar.querySelector('[data-slot="truncation-advice-toggle"]')!.getAttribute('aria-expanded')).toBe('false');
+    expect(bar.querySelector('[data-slot="truncation-advice-detail"]'), '默认折叠：不与逐次调用行抢版面').toBeNull();
+    expect(bar.textContent).toContain('调大 codex 的单次工具输出上限');
+    const copyButton = bar.querySelector('[role="button"][aria-expanded] [role="button"]')!;
+    await act(async () => { copyButton.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(writeText.mock.calls.at(-1)![0]).toBe('tool_output_token_limit = 100000');
+    expect(bar.querySelector('[data-slot="truncation-advice-toggle"]')!.getAttribute('aria-expanded'), '点复制不触发展开').toBe('false');
+    await act(async () => { bar.querySelector<HTMLElement>('[data-slot="truncation-advice-toggle"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const detailText = bar.querySelector('[data-slot="truncation-advice-detail"]')!.textContent ?? '';
+    for (const must of ['文件顶层', '~/.codex/config.toml', '配置后约 40KB']) expect(detailText, must).toContain(must);
+    expect(bar.querySelectorAll('[data-slot="truncation-advice-snippet"]').length).toBe(1);
+
+    selectSkill(container, 'tot-skill-lone');
+    expect(container.querySelectorAll('[data-slot="truncation-advice"]').length).toBe(0);
+    act(() => { container.remove(); });
+  });
+
+  it('处置建议只有一份口径：声明证据的覆盖面说明与标记悬停引用同一句', () => {
+    const truncated: LineEvidence = { lineNumbers: [1, 2, 3], fileLines: 10, gaps: [{ from: 4, to: 10 }], truncated: true, conflictLines: [], readCount: 1 };
+    const withAdvice = describeLineEvidence(truncated, false, CODEX_LIMIT_ADVICE);
+    expect(withAdvice.partial).toBe(true);
+    expect(withAdvice.summary).toBe('已读 3/10 行');
+    expect(withAdvice.detail.endsWith(`${CODEX_LIMIT_ADVICE}。`)).toBe(true);
+    // 不附建议时说明句仍然自洽；读取没被截断时即使传了建议也不附
+    expect(describeLineEvidence(truncated, false).detail).not.toContain('tool_output_token_limit');
+    const ranged: LineEvidence = { ...truncated, truncated: false };
+    expect(describeLineEvidence(ranged, false, CODEX_LIMIT_ADVICE).detail).not.toContain('tool_output_token_limit');
   });
 });

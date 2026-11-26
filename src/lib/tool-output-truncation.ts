@@ -11,7 +11,9 @@
 //   · 模型输出截断（finishReason = length / max_tokens）→ tool-call-errors 的
 //     modelOutputTruncated，是生成侧信号；
 //   · 展示省略（界面只渲染结果前若干字符）→ 用户没看全、agent 看全了。
-// 本模块只回答「这一次工具调用，agent 是否拿到了全文」，不补内容、不给处置建议。
+// 本模块只回答「这一次工具调用，agent 是否拿到了全文」，不补内容。处置建议与
+// 事实分列（TruncationAdvice）：事实句永远单独成立，建议只在运行环境确有可调
+// 开关时才给，口径只有这一份。
 //
 // 认可的两种形态（现场实测，均要求出现在 harness 写入它的固定位置）：
 //   · codex：`Warning: truncated output (original token count: N)` 打在输出首行，
@@ -78,7 +80,7 @@ export function toolOutputTruncationOf(resultJson: string | null | undefined): T
   return null;
 }
 
-/** 用户可读的一句事实：被截断的规模，不含处置建议 */
+/** 用户可读的一句事实：被截断的规模。处置建议另走 toolOutputTruncationAdvice，不混进事实句 */
 export function describeToolOutputTruncation(t: ToolOutputTruncation): string {
   if (t.harness === 'opencode') {
     return `输出被截断，仅显示第 ${t.shownLines!.from}–${t.shownLines!.to} 行（共 ${t.totalLines} 行）`;
@@ -91,6 +93,47 @@ export function describeToolOutputTruncation(t: ToolOutputTruncation): string {
 export function toolOutputTruncationFact(t: ToolOutputTruncation): string {
   return `${describeToolOutputTruncation(t)}，agent 未看到全文。`;
 }
+
+/** 处置建议：用户能做的那个动作。codex 0.169.0 实测（临时 CODEX_HOME 对照七例）：
+ *  实际保留 = min(tool_output_token_limit, 调用请求的 max_output_tokens[默认 10000])
+ *  × 4 字节；不配置时 codex 没有内置元数据的模型回落到固定 10,000 字节。该键是
+ *  配置文件的顶层键，写在基础 config.toml 或启用的 profile 文件里等效。 */
+export interface TruncationAdvice {
+  harness: 'codex';
+  /** 做什么 */
+  action: string;
+  /** 可直接粘贴的配置行 */
+  snippet: string;
+  /** 写在哪些文件（任选其一） */
+  files: string[];
+  /** 在文件里的位置 */
+  placement: string;
+  /** 生效边界：调了之后上限是多少、还差什么 */
+  caveat: string;
+  /** 一句话形态：嵌进别的说明句时用 */
+  sentence: string;
+}
+
+const CODEX_ADVICE: TruncationAdvice = {
+  harness: 'codex',
+  action: '调大 codex 的单次工具输出上限',
+  snippet: 'tool_output_token_limit = 100000',
+  files: ['~/.codex/config.toml', '~/.codex/<name>.config.toml（启用 profile 时）'],
+  placement: '写在文件顶层，不要放进任何 [xxx] 段',
+  caveat: '实际保留 = min(该值, 调用请求的 max_output_tokens，默认 10000) × 4 字节：'
+    + 'codex 没有内置元数据的模型默认只保留约 10KB，配置后约 40KB；'
+    + '更大的输出还需 agent 在工具调用里把 max_output_tokens 一并调大。重新启动 codex 后生效。',
+  sentence: '调大 codex 单次工具输出上限：在 ~/.codex/config.toml 或启用的 profile 文件'
+    + '（~/.codex/<name>.config.toml）顶层设置 tool_output_token_limit',
+};
+
+/** 截断的处置建议；运行环境没有可调开关的形态（opencode 的落盘行）返回 null */
+export function toolOutputTruncationAdvice(harness: ToolOutputTruncation['harness']): TruncationAdvice | null {
+  return harness === 'codex' ? CODEX_ADVICE : null;
+}
+
+/** codex 建议的一句话形态：只收文本的说明句（如声明证据的覆盖面说明）由此附上 */
+export const CODEX_LIMIT_ADVICE = CODEX_ADVICE.sentence;
 
 /** 结果原文里 harness 写入的截断痕迹的分段——展示层据此把截断位置从正文里标
  *  出来：codex 的横幅与中缝丢弃标记、opencode 的落盘行。仅在

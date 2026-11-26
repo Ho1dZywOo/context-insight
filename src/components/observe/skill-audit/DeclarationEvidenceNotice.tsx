@@ -9,6 +9,7 @@
 import { AlertCircleIcon } from "lucide-react"
 import type { AuditDeclarationEvidence } from "@/lib/sift-audit-types"
 import { describeLineEvidence } from "@/lib/skill-evidence"
+import { CODEX_LIMIT_ADVICE } from "@/lib/tool-output-truncation"
 
 /** 对账报告顶部的「声明不完整」常驻提示：本次对账只基于会话中确实读到的声明行，
  *  缺口处的指令没有参与对账，结论不覆盖它们。声明完整时（无 _evidence）不渲染。 */
@@ -22,7 +23,7 @@ export function DeclarationEvidenceNotice({ items }: { items: AuditDeclarationEv
       </div>
       <ul className="mt-1 space-y-1 text-xs leading-relaxed">
         {items.map((it, i) => {
-          const notice = describeLineEvidence(it.evidence, false, true)
+          const notice = describeLineEvidence(it.evidence, false, CODEX_LIMIT_ADVICE)
           return (
             <li key={`${it.layer ?? ""}:${it.source}:${i}`}>
               <span className="font-medium">{it.layer ? `${it.layer}（${it.source}）` : it.source}</span>
