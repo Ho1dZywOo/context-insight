@@ -202,4 +202,4 @@ jobs:
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
           DIST_TAG: ${{ inputs.dist_tag }}
-        run: node scripts/release/verify-registry.mjs --tag "$DIST_TAG" --version "$VERSION" --wait-seconds 300 --poll-seconds 15
+        run: node scripts/release/verify-registry.mjs --tag "$DIST_TAG" --version "$VERSION" --wait-seconds 300 --poll-seconds 30

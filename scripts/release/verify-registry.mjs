@@ -34,7 +34,7 @@ if (!tag || !version) {
 }
 
 const waitSeconds = Number(readArg('--wait-seconds') ?? '0')
-const pollSeconds = Number(readArg('--poll-seconds') ?? '15')
+const pollSeconds = Number(readArg('--poll-seconds') ?? '30')
 if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || !Number.isFinite(pollSeconds) || pollSeconds <= 0) {
   console.error(usage)
   process.exit(2)

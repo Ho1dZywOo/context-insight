@@ -146,7 +146,7 @@ describe("release registry verification workflow", () => {
     const verifyStep = publishWorkflow.indexOf("name: Verify selected dist-tag")
     expect(publishStep).toBeGreaterThan(-1)
     expect(verifyStep).toBeGreaterThan(publishStep)
-    expect(publishWorkflow).toContain("--wait-seconds 300 --poll-seconds 15")
+    expect(publishWorkflow).toContain("--wait-seconds 300 --poll-seconds 30")
     expect(publishWorkflow).not.toContain("dist-tag add")
 
     const publishJob = publishWorkflow.slice(publishWorkflow.indexOf("\n  publish:"))
@@ -160,7 +160,7 @@ describe("release registry verification workflow", () => {
     expect(promoteStep).toBeGreaterThan(-1)
     expect(verifyStep).toBeGreaterThan(promoteStep)
     expect(promoteWorkflow).toContain(
-      '--tag latest --version "$VERSION" --wait-seconds 300 --poll-seconds 15',
+      '--tag latest --version "$VERSION" --wait-seconds 300 --poll-seconds 30',
     )
   })
 
