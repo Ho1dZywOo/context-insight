@@ -299,11 +299,20 @@ export function mergeSkillReads(cands: SkillMdRead[]): SkillContentResult | null
   }
   if (!best) return null;
   const { merged, reads } = best;
-  const readContrib = reads.filter(r => r.source === 'read').length;
+  // 按读到的「行」判多数，不按读取「次数」判：1 次 Read 只读 3 行 vs 1 次 shell
+  // cat 读 168 行时，次数 1:1 会把来源误判成 read。逐行以最后一个贡献者（ts 序）定归属。
+  const lineSource = new Map<number, 'read' | 'shell'>();
+  for (const r of [...reads].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))) {
+    const src: 'read' | 'shell' = r.source === 'read' ? 'read' : 'shell';
+    for (const n of r.lineMap?.keys() ?? []) {
+      if (merged.lines.has(n)) lineSource.set(n, src);
+    }
+  }
+  const readContrib = [...lineSource.values()].filter(s => s === 'read').length;
   const content = merged.evidence.lineNumbers.map(n => merged.lines.get(n)!).join('\n');
   return {
     content,
-    source: readContrib >= reads.length - readContrib ? 'read' : 'shell',
+    source: readContrib >= merged.lines.size - readContrib ? 'read' : 'shell',
     length: content.length,
     fullRead: merged.complete,
     maxLine: merged.maxLine,
