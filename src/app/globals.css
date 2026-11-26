@@ -569,6 +569,77 @@
   }
 }
 
+/* 需确认卡（居中 Alert，iOS 提示画风）：卡片自略大处缩放落位（先快后缓曲线），
+   遮罩淡入；离场反向收拢。只动 opacity/transform；reduced-motion 下退化为
+   纯淡入淡出 */
+@keyframes ack-in {
+  from {
+    opacity: 0;
+    transform: scale(1.1);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ack-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+
+@keyframes ack-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ack-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.notice-ack-enter {
+  animation: ack-in 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.notice-ack-exit {
+  animation: ack-out 160ms ease-in both;
+}
+
+.notice-ack-backdrop-enter {
+  animation: ack-fade-in 200ms ease-out both;
+}
+
+.notice-ack-backdrop-exit {
+  animation: ack-fade-out 160ms ease-in both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice-ack-enter,
+  .notice-ack-backdrop-enter {
+    animation: ack-fade-in 120ms ease-out both;
+  }
+
+  .notice-ack-exit,
+  .notice-ack-backdrop-exit {
+    animation: ack-fade-out 120ms ease-in both;
+  }
+}
+
 /* 加载呼吸占位（全站加载语言，承总览 pending 脉冲）：软明暗呼吸 + 轻收缩
    （纯 opacity/transform，不触发布局），数据落地零跳变；卡片间以相位差
    错开形成波动感 */

@@ -127,7 +127,7 @@ describe('回收站面板', () => {
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
     expect(assetsChangedEvents).toHaveLength(0)
     // 持久报错卡（NoticeHud）：标题 + 原因在场
-    const card = container!.querySelector('[data-notice-tone="error"]')!
+    const card = document.querySelector('[data-notice-tone="error"]')!
     expect(card.textContent).toContain('恢复失败')
     expect(card.textContent).toContain('空会话无法恢复')
   })
@@ -141,7 +141,7 @@ describe('回收站面板', () => {
     await settle()
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
     expect(assetsChangedEvents).toHaveLength(0)
-    const card = container!.querySelector('[data-notice-tone="error"]')!
+    const card = document.querySelector('[data-notice-tone="error"]')!
     expect(card.textContent).toContain('会话已存在')
   })
 
@@ -153,13 +153,13 @@ describe('回收站面板', () => {
     await act(async () => { restoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await settle()
     // post 返回 null（旧实现此分支被静默吞掉）：现在必须有持久报错卡兜底
-    const card = container!.querySelector('[data-notice-tone="error"]')!
+    const card = document.querySelector('[data-notice-tone="error"]')!
     expect(card.textContent).toContain('网络错误或服务异常')
     expect([...container!.querySelectorAll('[data-recycle-row]')].length).toBe(2)
     // 须点「知道了」确认才离场（退场动画 180ms 后移除）
-    await act(async () => { (container!.querySelector('[data-notice-confirm]') as HTMLElement).click() })
+    await act(async () => { (document.querySelector('[data-notice-confirm]') as HTMLElement).click() })
     await settle(250)
-    expect(container!.querySelector('[data-notice-tone="error"]')).toBeNull()
+    expect(document.querySelector('[data-notice-tone="error"]')).toBeNull()
   })
 
   it('彻底删除两步确认：首次点击武装、再次点击才 POST purge', async () => {

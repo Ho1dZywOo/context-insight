@@ -165,4 +165,5 @@ proxy（cpx 捕获）是 insight 的扩展来源，不是核心管线的一部�
 - **UI primitives**: All from `@base-ui/react` (not radix-ui) via shadcn v4 + Tailwind v4
 - **Charts**: Pure SVG, no chart libraries — match TraceView DAG style
 - **Dialogs**: Use `src/components/ui/dialog.tsx` (built on @base-ui/react), never browser `confirm()`
+- **Notices**: `src/components/NoticeHud` — 两种形态按「要不要用户确认」二分：瞬态（success / 缺省 warning）= 顶部横幅，自动退场；需确认（error 恒是；带必须读到的明细的警示标 `ack`）= 居中 Alert，只有「知道了」能关。变长的结果内容（报错原文 / 清单）走确认卡的 `detail`（块内滚动、可复制），不进弹窗、面板——表单面版面固定，不靠自身出滚动条收纳结果明细
 - **Search history**: sessionStorage only, never persisted
