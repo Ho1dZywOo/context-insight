@@ -257,7 +257,8 @@ export function skillMdReadsOfTurn(turn: SkillInjectionTurn): SkillMdRead[] {
 }
 
 function tsOf(tc: SkillToolCall): number | null {
-  return tc.startedAt ? tc.startedAt.getTime() : null;
+  const ts = tc.startedAt ? tc.startedAt.getTime() : NaN;
+  return Number.isFinite(ts) ? ts : null;
 }
 
 function extractOffsetOf(argsJson: string | null): number | undefined {
@@ -363,7 +364,8 @@ export function selectSkillContent(
 }
 
 // ── 逐次调用级：一次技能调用 agent 拿到了多少 SKILL.md ──────────────────────────
-// Skills 页的「逐次调用」一行对应一个技能事件 (turnId, skillName)。两个正交事实，
+// 两个展示面共用一套归因与结论：Skills 页的「逐次调用」一行 = 一个技能事件
+// (turnId, skillName)；turn 详情 Tool Calls 的一行 = 一个工具调用。两个正交事实，
 // 各自有单点，这里只做对位与合成：
 //   · 工具输出截断 —— tool-output-truncation（运行环境砍了输出）。哪个调用读了
 //     哪个技能，与摄取侧创建 SkillEvent 用同一检测（detectSkillInvocations），
@@ -416,6 +418,57 @@ function latestFileLines(reads: SkillMdRead[]): number | null {
   return best?.fileLines ?? null;
 }
 
+/** 一组工具调用的技能读取归因：引擎只跑一遍，事件级与调用级共用 */
+export interface SkillReadAttribution {
+  /** 与入参 calls 下标对齐：该调用读到的 SKILL.md（不是技能读取 = 空数组） */
+  reads: SkillMdRead[][];
+  /** 同一份文件（字面相同或互为路径后缀）在入参范围内时间序最晚的可判定总行数 */
+  fileLinesOf: (filePath: string) => number | null;
+}
+
+export function attributeSkillReads(calls: SkillToolCall[]): SkillReadAttribution {
+  const fileGroups: Array<{ path: string; reads: SkillMdRead[] }> = [];
+  const reads = calls.map(tc => {
+    const own = skillMdReadsOfToolCall({
+      toolName: tc.toolName,
+      argsJson: tc.argsJson,
+      resultJson: tc.resultJson,
+      startedAt: tc.startedAt ?? null,
+    });
+    for (const read of own) {
+      if (!read.filePath) continue;
+      const group = fileGroups.find(g => sameDeclarationFile(g.path, read.filePath!));
+      if (group) group.reads.push(read);
+      else fileGroups.push({ path: read.filePath, reads: [read] });
+    }
+    return own;
+  });
+  return {
+    reads,
+    fileLinesOf: filePath => {
+      const group = fileGroups.find(g => sameDeclarationFile(g.path, filePath));
+      return group ? latestFileLines(group.reads) : null;
+    },
+  };
+}
+
+/** 一组读取（一次调用 / 一个技能事件）的覆盖面：注入快照即全文；否则这组读取
+ *  自己判出的文件总行数优先，判不出才借同一份文件其他读取的。 */
+export function coverageOfReads(
+  reads: SkillMdRead[],
+  sharedFileLines: (filePath: string) => number | null,
+): ReadCoverage | null {
+  if (reads.some(r => r.source === 'skill-tool' || r.source === 'command')) {
+    return { kind: 'full', lines: [], fileLines: null };
+  }
+  const path = reads.find(r => r.filePath)?.filePath;
+  return coverageOfLines(
+    reads.flatMap(r => [...(r.lineMap?.keys() ?? [])]),
+    latestFileLines(reads) ?? (path == null ? null : sharedFileLines(path)),
+    reads.some(r => r.ranged === true),
+  );
+}
+
 /** 技能事件 → 这次调用的读取覆盖面。只给确有读取证据的事件产出（无从判定
  *  的事件不出现在结果里）。events = 需要判定的技能事件（非 dispatch）。 */
 export function skillReadCoveragesOf(
@@ -423,47 +476,37 @@ export function skillReadCoveragesOf(
   events: Iterable<{ turnId: string; skillName: string }>,
 ): Map<string, ReadCoverage> {
   const eventKeys = new Set([...events].map(e => skillReadEventKey(e.turnId, e.skillName)));
+  const attribution = attributeSkillReads(calls);
   const readsByKey = new Map<string, SkillMdRead[]>();
-  // 同一份文件的读取（字面相同或互为路径后缀）：文件总行数在组内共享
-  const fileGroups: Array<{ path: string; reads: SkillMdRead[] }> = [];
-  for (const tc of calls) {
-    const reads = skillMdReadsOfToolCall({
-      toolName: tc.toolName,
-      argsJson: tc.argsJson,
-      resultJson: tc.resultJson,
-      startedAt: tc.startedAt ?? null,
-    });
-    for (const read of reads) {
-      if (read.filePath) {
-        const group = fileGroups.find(g => sameDeclarationFile(g.path, read.filePath!));
-        if (group) group.reads.push(read);
-        else fileGroups.push({ path: read.filePath, reads: [read] });
-      }
+  calls.forEach((tc, i) => {
+    for (const read of attribution.reads[i]) {
       const key = skillReadEventKey(tc.turnId, read.skillName);
       if (!eventKeys.has(key)) continue;
       const list = readsByKey.get(key);
       if (list) list.push(read);
       else readsByKey.set(key, [read]);
     }
-  }
+  });
 
   const out = new Map<string, ReadCoverage>();
   for (const [key, reads] of readsByKey) {
-    // 注入快照（Skill 工具 / 斜杠命令）即调用时刻的权威全文
-    if (reads.some(r => r.source === 'skill-tool' || r.source === 'command')) {
-      out.set(key, { kind: 'full', lines: [], fileLines: null });
-      continue;
-    }
-    const path = reads.find(r => r.filePath)?.filePath;
-    const sameFile = path == null ? [] : (fileGroups.find(g => sameDeclarationFile(g.path, path))?.reads ?? []);
-    const coverage = coverageOfLines(
-      reads.flatMap(r => [...(r.lineMap?.keys() ?? [])]),
-      latestFileLines(reads) ?? latestFileLines(sameFile),
-      reads.some(r => r.ranged === true),
-    );
+    const coverage = coverageOfReads(reads, attribution.fileLinesOf);
     if (coverage != null) out.set(key, coverage);
   }
   return out;
+}
+
+/** 单个工具调用的读取标记（turn 详情 Tool Calls 行）：这次调用自己读到了多少
+ *  SKILL.md，与技能事件行同一套合成规则——总行数在本组调用范围内共享。返回值
+ *  与入参下标对齐；输出被截断的调用恒有标记（拿全文的极端情形退回输出规模）。 */
+export function skillReadMarksOfCalls(calls: SkillToolCall[]): Array<SkillReadMark | null> {
+  const attribution = attributeSkillReads(calls);
+  return calls.map((tc, i) => {
+    const truncation = toolOutputTruncationOf(tc.resultJson);
+    const coverage = coverageOfReads(attribution.reads[i], attribution.fileLinesOf);
+    return skillReadMarkOf(truncation, coverage)
+      ?? (truncation != null ? { kind: 'truncated' as const, fact: toolOutputTruncationFact(truncation) } : null);
+  });
 }
 
 /** 逐次调用行的展示结论：标什么、说明写什么 */

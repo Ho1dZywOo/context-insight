@@ -33,6 +33,7 @@ import { GET as runTurnsGET } from '@/app/api/observe/run/[runId]/turns/route';
 import { GET as runSkillsGET } from '@/app/api/observe/run/[runId]/skills/route';
 import { collectScopeTurns, type MergedTurnItem } from '@/lib/observe/collectors/turns';
 import { resolveRunScope } from '@/lib/run/observe/scope';
+import { GET as turnDetailGET } from '@/lib/observe/session-handlers/turn-detail';
 import { buildTurnErrorDigest } from '@/lib/tool-call-errors';
 import { OverviewPanels, type OverviewTurn } from '@/components/observe/OverviewPanels';
 import { SkillsPanorama, type SkillsPanoramaData } from '@/components/observe/SkillsPanorama';
@@ -105,6 +106,11 @@ const SEEDS: Seed[] = [
   // 截断但行号归因不了（过滤管道）：退回输出规模的说法
   { skill: 'tot-skill-shell', toolName: 'exec_command', args: { cmd: `cat /root/.codex/skills/tot-skill-shell/SKILL.md | sed -n '1,80p'` }, result: caseOf('codex-native').result },
   { skill: 'tot-skill-read', toolName: 'Read', args: { file_path: '/root/.claude/skills/tot-skill-read/SKILL.md' }, result: caseOf('opencode-tail').result },
+  // 同轮有界读 + 整文件读：事件级合并后拿到全文；调用级各有各的结论（有界读借同轮的总行数）
+  {
+    skill: 'tot-skill-demo', ...SH(`nl -ba ${DEMO_PATH} | sed -n '2,4p'`), result: numbered(DEMO_FILE, 2, 4),
+    more: [['exec_command', { cmd: `cat ${DEMO_PATH}` }, slice(DEMO_FILE, 1, 10)]],
+  },
 ];
 const SKILL_NAMES = [...new Set(SEEDS.map(s => s.skill))];
 /** 带标记的种子（与下方断言一一对应）：skill → 期望标记种类 */
@@ -379,6 +385,112 @@ describe('工具输出截断：观测面与调用级提示', () => {
     expect(seamsOf(blocks[cases.findIndex(c => c.key === 'codex-proxy-shell')]).some(s => s.includes('Warning: truncated output'))).toBe(true);
     // opencode：末尾的落盘行被衬出
     expect(seamsOf(blocks[cases.findIndex(c => c.key === 'opencode-tail')]).some(s => s.includes('full output saved to'))).toBe(true);
+  });
+});
+
+describe('工具行：按行范围只读了一段 SKILL.md 的「部分读取」', () => {
+  /** 数据走 turn 详情 API 的同一条路径（TurnDetail → ToolCallList 的数据源） */
+  async function renderSeed(i: number) {
+    const turnId = ctx.turnIds[`skill:${SEEDS[i]!.skill}#${i}`];
+    const res = await turnDetailGET(
+      new NextRequest(`http://localhost/api/observe/turn/${turnId}`),
+      { params: Promise.resolve({ turnId }) },
+    );
+    expect(res.status).toBe(200);
+    const { toolCalls } = await res.json();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(ToolCallList, { toolCalls })); });
+    const blocks = Array.from(container.firstElementChild!.children) as HTMLElement[];
+    expect(blocks.length, `seed ${i}`).toBe(toolCalls.length);
+    // 悬停提示挂在 body 的传送门里：清理必须卸载根节点，否则上一次的提示会残留
+    const unmount = () => { act(() => { root.unmount(); }); };
+    return { blocks, unmount };
+  }
+  const chipOf = (block: HTMLElement) => block.querySelector<HTMLElement>('[data-slot="fact-chip"]');
+  const marksOf = (blocks: HTMLElement[]) => blocks.map(b => b.dataset.toolReadMark ?? '-').join(',');
+
+  /** 指针移入并停住（mouseenter + mousemove，与真实序列一致），等过静止延时提示出现；超时返回 null。
+   *  页面上同时只应有一个提示——多于一个说明有残留 */
+  async function hoverFor(chip: HTMLElement, timeoutMs = 2500): Promise<string | null> {
+    chip.dispatchEvent(new MouseEvent('mouseenter', { relatedTarget: document.body }));
+    chip.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 10, clientY: 10 }));
+    for (let waited = 0; waited < timeoutMs; waited += 50) {
+      await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+      const tips = document.querySelectorAll<HTMLElement>('[data-slot="tooltip-content"]');
+      if (tips.length > 1) throw new Error(`页面上同时出现了 ${tips.length} 个悬停提示`);
+      if (tips[0]?.textContent) return tips[0].textContent;
+    }
+    return null;
+  }
+
+  it('有界读（nl | sed、Read offset+limit）带中性「部分读取」，悬停写 agent 实际读到的行；读完 / 证明不了 / 无从判定的行不标', async () => {
+    const expected: Record<number, string> = {
+      1: '-,truncated', // 整文件 cat 不标；同轮里读别的技能且被截断的调用照旧标截断
+      2: 'partial',
+      3: '-',          // 范围宽过文件 = 读完了
+      4: '-',          // cat 后跟 echo：行号全、总行数借不到也没限范围 → 证明不了
+      5: '-',          // tail：无从判定
+      6: 'partial',
+      8: 'partial',
+      9: '-',          // 没限范围的 cat
+    };
+    for (const [i, want] of Object.entries(expected)) {
+      const { blocks, unmount } = await renderSeed(Number(i));
+      expect(marksOf(blocks), `seed ${i}`).toBe(want);
+      for (const [j, block] of blocks.entries()) {
+        const chip = chipOf(block);
+        if (block.dataset.toolReadMark == null) {
+          expect(chip, `seed ${i} call ${j}`).toBeNull();
+          continue;
+        }
+        const partial = block.dataset.toolReadMark === 'partial';
+        expect(chip!.getAttribute('data-tone'), `seed ${i} call ${j}`).toBe(partial ? 'neutral' : 'amber');
+        expect(chip!.textContent?.trim(), `seed ${i} call ${j}`).toBe(partial ? '部分读取' : '工具输出截断');
+      }
+      unmount();
+    }
+  });
+
+  it('悬停只写本组调用能证的：本轮没有整文件读取时只写读到的行，不编总行数', async () => {
+    for (const [i, fact] of [
+      [2, 'agent 只读取了 SKILL.md 的第 3–5 行。'],
+      [6, 'agent 只读取了 SKILL.md 的第 6–7 行。'],
+      [8, 'agent 只读取了 SKILL.md 的第 7–9 行。'],
+    ] as const) {
+      const { blocks, unmount } = await renderSeed(i);
+      expect(await hoverFor(chipOf(blocks[0]!)!), `seed ${i}`).toBe(fact);
+      unmount();
+    }
+  });
+
+  it('截断的调用：标记照旧是琥珀「工具输出截断」，能定行号时悬停写 agent 实际读到的行，否则写输出规模', async () => {
+    const cut = await renderSeed(0);
+    expect(marksOf(cut.blocks)).toBe('truncated');
+    expect(await hoverFor(chipOf(cut.blocks[0]!)!)).toBe('输出被截断，agent 读到 SKILL.md 的第 2–4、10 行。');
+    cut.unmount();
+
+    // 截断但行号归因不了（过滤管道）：退回输出规模的说法
+    const pipe = await renderSeed(10);
+    expect(marksOf(pipe.blocks)).toBe('truncated');
+    expect(await hoverFor(chipOf(pipe.blocks[0]!)!)).toBe('输出被截断，原始 2707 tokens、共 96 行，agent 未看到全文。');
+    pipe.unmount();
+  });
+
+  it('同一轮里的两次调用各有各的结论：有界读借同轮整文件读取的总行数，整文件读取自己不标', async () => {
+    const both = await renderSeed(12);
+    expect(marksOf(both.blocks)).toBe('partial,-');
+    expect(await hoverFor(chipOf(both.blocks[0]!)!)).toBe('agent 只读取了第 2–4 行（SKILL.md 共 10 行）。');
+    both.unmount();
+
+    // 被截断的 cat + 整文件 cat：工具行的单位是一次调用，被截断的那次照旧标截断
+    // 被截断的 cat + 整文件 cat：工具行的单位是一次调用，被截断的那次照旧标截断。
+    // 尾部抵达流尾 → 自己判出共 10 行；紧贴截断缝的第 9 行按残行丢弃
+    const cut = await renderSeed(7);
+    expect(marksOf(cut.blocks)).toBe('truncated,-');
+    expect(await hoverFor(chipOf(cut.blocks[0]!)!)).toBe('输出被截断，SKILL.md 共 10 行，agent 读到第 1–3、10 行。');
+    cut.unmount();
   });
 });
 

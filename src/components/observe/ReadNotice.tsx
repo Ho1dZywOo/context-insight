@@ -9,12 +9,12 @@
 // 读取事实提示（单一视觉源）：行内标记（FactChip）+ 说明行（FactNote）两个基元，
 // 按色调承载两类事实，判定与文案一律来自 lib（展示层不持词表副本）：
 //   琥珀 amber   —— 工具输出截断：运行环境砍了输出，agent 未看到全文。
-//                  OutputTruncationChip 用于工具行（Turns）；SkillReadChip /
-//                  SkillReadNote 用于 Skills 逐次调用行（能定行号时说明行写
-//                  agent 实际读到的行）。
 //   中性 neutral —— 部分读取：命令自带行范围（sed -n / head / offset+limit），
 //                  agent 有意只读了一段。输出没有丢，不是数据完整性问题，所以
 //                  不用琥珀、更不用红。
+// SkillReadChip / SkillReadNote 两个展示面共用：Skills 逐次调用行（一个技能事件）
+// 是标记 + 说明行，悬停给输出规模；turn 详情 Tool Calls 的工具行（一次工具调用）
+// 只有标记，悬停直接给结论——能定行号写 agent 实际读到的行，否则写输出规模。
 // 截断类文案一律带「工具输出」四字：与模型输出截断（红）一眼可分。只陈述事实
 // （谁截的、截了多少、读到了哪），不给处置建议。动效只走 CSS：入场淡入 + 轻微
 // 回弹缩放（GPU 合成，无布局），系统开启「减弱动态效果」时退化为静态出现。
@@ -91,30 +91,24 @@ export function FactNote({ tone, icon, className, children }: NoteProps) {
   )
 }
 
-/** 工具行上的截断标记（Turns）：悬停看这一次被截的规模 */
-export function OutputTruncationChip({ truncation }: { truncation: ToolOutputTruncation }) {
-  return (
-    <FactChip tone="amber" icon={<ScissorsIcon className="size-3 shrink-0" aria-hidden="true" />} tooltip={toolOutputTruncationFact(truncation)}>
-      工具输出截断
-    </FactChip>
-  )
-}
-
-/** Skills 逐次调用行的读取标记（行内）与说明行（行下方）：外观单点。结论
- *  （标不标、标什么、写什么）由 skillReadMarkOf 给出，这里只负责呈现。 */
+/** 读取标记（行内）与说明行（行下方）：外观单点。结论（标不标、标什么、写什么）
+ *  由 skillReadMarkOf 给出，这里只负责呈现。 */
 interface SkillReadMarkProps {
   mark: SkillReadMarkKind
-  /** 该次调用的截断事实（mark = truncated 时在，供悬停看工具输出尺度） */
+  /** 该次调用的截断事实（mark = truncated 时在） */
   truncation?: ToolOutputTruncation | null
 }
 
-export function SkillReadChip({ mark, truncation }: SkillReadMarkProps) {
+/** 标记的悬停文案：旁边有说明行（alongsideNote）时结论已在行下方，悬停给互补的
+ *  输出规模；单独摆放（工具行）时悬停是结论唯一的落点。 */
+export function SkillReadChip({ mark, truncation, alongsideNote = false }: SkillReadMarkProps & { alongsideNote?: boolean }) {
   if (mark.kind === "truncated") {
+    const scale = truncation ? toolOutputTruncationFact(truncation) : null
     return (
       <FactChip
         tone="amber"
         icon={<ScissorsIcon className="size-3 shrink-0" aria-hidden="true" />}
-        tooltip={truncation ? toolOutputTruncationFact(truncation) : mark.fact}
+        tooltip={alongsideNote && scale ? scale : mark.fact}
       >
         工具输出截断
       </FactChip>

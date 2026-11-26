@@ -896,7 +896,7 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                               />
                               <span className="w-11 shrink-0 text-muted-foreground">{ev.eventType}</span>
                               <span className="min-w-0 flex-1 truncate text-foreground/85" title={ev.member?.taskId}>{ev.member?.label ?? "—"}</span>
-                              {mark && <SkillReadChip mark={mark} truncation={ev.outputTruncation} />}
+                              {mark && <SkillReadChip mark={mark} truncation={ev.outputTruncation} alongsideNote />}
                               <span className="shrink-0 text-muted-foreground tabular-nums" title="调用 turn 的 token">{fmtTok(ev.turnTokens.totalTokens)} tok</span>
                               {ev.turnId ? (
                                 <button
