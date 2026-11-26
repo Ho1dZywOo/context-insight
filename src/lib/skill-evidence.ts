@@ -55,7 +55,7 @@ export interface MergedLineRead {
   evidence: LineEvidence;
 }
 
-function toRanges(nums: number[]): LineGap[] {
+export function toRanges(nums: number[]): LineGap[] {
   const sorted = [...nums].sort((a, b) => a - b);
   const out: LineGap[] = [];
   for (const n of sorted) {
@@ -124,6 +124,31 @@ export function mergeLineMappedReads(reads: LineMappedRead[]): MergedLineRead | 
 /** 注入通道（Skill 工具 / 斜杠命令）的全文快照：行号语义不存在，覆盖面即全文。 */
 export function injectedEvidence(): LineEvidence {
   return { lineNumbers: [], fileLines: null, gaps: [], truncated: false, conflictLines: [], readCount: 1 };
+}
+
+/** 一次调用读到了多少声明文件（逐次调用级；技能级合并见 mergeLineMappedReads）。
+ *  只在可证时下结论——三种结论互斥：
+ *   full      拿到了文件全文（文件总行数可知且每行都读到；或注入快照）；
+ *   partial   确定只拿到一部分：文件总行数可知而有缺口，或读取命令自带行范围
+ *             （没读到文件尾是命令有意为之）；
+ *   unproven  既不能证明读完、也不能证明没读完（行号可定，但文件总行数未知、
+ *             命令又未限范围——如 cat 之后还跟着别的输出段）。 */
+export type ReadCoverage =
+  | { kind: 'full'; lines: LineGap[]; fileLines: number | null }
+  | { kind: 'partial'; lines: LineGap[]; fileLines: number | null }
+  | { kind: 'unproven'; lines: LineGap[]; fileLines: null };
+
+/** 读到的文件行号 → 覆盖面结论。fileLines 已知时越界行号（其他输出段被误归因）
+ *  不计入；无任何有效行号 = 无从判定 → null。 */
+export function coverageOfLines(lineNumbers: Iterable<number>, fileLines: number | null, ranged: boolean): ReadCoverage | null {
+  const nums = [...new Set(
+    [...lineNumbers].filter(n => Number.isInteger(n) && n >= 1 && (fileLines == null || n <= fileLines)),
+  )].sort((a, b) => a - b);
+  if (nums.length === 0) return null;
+  const lines = toRanges(nums);
+  if (fileLines != null && nums.length >= fileLines) return { kind: 'full', lines, fileLines };
+  if (fileLines != null || ranged) return { kind: 'partial', lines, fileLines };
+  return { kind: 'unproven', lines, fileLines: null };
 }
 
 /** 两个路径是否指向同一份声明文件：字面相同，或一方是另一方的路径后缀

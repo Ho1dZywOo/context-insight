@@ -87,6 +87,11 @@ export function describeToolOutputTruncation(t: ToolOutputTruncation): string {
   return `输出被截断，原始 ${t.originalTokens} tokens${lines}`;
 }
 
+/** 截断的完整事实句（展示层共用）：规模 + agent 未看到全文 */
+export function toolOutputTruncationFact(t: ToolOutputTruncation): string {
+  return `${describeToolOutputTruncation(t)}，agent 未看到全文。`;
+}
+
 /** 结果原文里 harness 写入的截断痕迹的分段——展示层据此把截断位置从正文里标
  *  出来：codex 的横幅与中缝丢弃标记、opencode 的落盘行。仅在
  *  toolOutputTruncationOf 判定成立的结果上调用（引用误报已在判定处排除）。 */

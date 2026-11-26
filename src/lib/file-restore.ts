@@ -65,21 +65,32 @@ const NUMBERED_COLON = /^\s*(\d+): (.*)$/;
 const CONTENT_OPEN = /<content>\s*$/;
 const CONTENT_CLOSE = /<\/content>/;
 
-export function parseReadLines(resultJson: string | null, offset?: number): Map<number, string> {
-  const out = new Map<number, string>();
-  if (!resultJson) return out;
-
-  const raw = typeof resultJson === 'string' ? resultJson : String(resultJson);
+/** 剥掉 opencode / Claude 信封（<path>/<type>/<content> 不得混进恢复的文件正文），
+ *  只留 <content> 与 </content> 之间的行 */
+function envelopeLinesOf(raw: string): string[] {
   let lines = raw.split('\n');
-
-  // Strip the opencode/Claude envelope: lines between <content> and </content>.
-  // Envelope (<path>/<type>/<content>) must be excluded so it doesn't pollute
-  // the restored file; the real content lives inside the <content> block.
   const openIdx = lines.findIndex(l => CONTENT_OPEN.test(l) || l.trim() === '<content>');
   if (openIdx >= 0) {
     const closeIdx = lines.findIndex(l => CONTENT_CLOSE.test(l));
     lines = lines.slice(openIdx + 1, closeIdx < 0 ? undefined : closeIdx);
   }
+  return lines;
+}
+
+/** 读取结果里的行是否自带文件行号（claude `N\t` / opencode `N: `）。不带时行号是
+ *  按调用参数 offset 推算的——输出一旦被运行环境截断（保留下来的未必是文件开头），
+ *  推算的行号就不是文件行号，不能当行级证据用。 */
+export function readResultHasLineNumbers(resultJson: string | null): boolean {
+  if (!resultJson) return false;
+  return envelopeLinesOf(resultJson).some(l => NUMBERED_TAB.test(l) || NUMBERED_COLON.test(l));
+}
+
+export function parseReadLines(resultJson: string | null, offset?: number): Map<number, string> {
+  const out = new Map<number, string>();
+  if (!resultJson) return out;
+
+  const raw = typeof resultJson === 'string' ? resultJson : String(resultJson);
+  const lines = envelopeLinesOf(raw);
   if (lines.length === 0) return out;
 
   // Numbered parse: claude uses `N\tcontent`, opencode uses `N: content`.

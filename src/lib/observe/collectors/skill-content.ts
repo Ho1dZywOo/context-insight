@@ -13,9 +13,19 @@
 // （斜杠命令会话原文恢复恒空）。候选面收单点后三处同宽，恢复层通道判定
 // 单点在 skill-content.ts。
 
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { SHELL_TOOL_DB_NAMES } from '@/lib/tool-conventions';
 import type { SkillToolCall } from '@/lib/skill-content';
+
+/** 技能读取候选面的查询条件（单点）：技能相关工具行 + Read/read 通道读
+ *  SKILL.md + shell 读类命令（exec_command cat …/SKILL.md——codex 主通道；
+ *  摄取侧已给源工具行打 isSkillRelated，此分支兜历史未打标数据）。 */
+export const SKILL_READ_CANDIDATE_OR: Prisma.ToolCallWhereInput[] = [
+  { isSkillRelated: true },
+  { AND: [{ toolName: 'Read' }, { argsJson: { contains: 'SKILL.md' } }] },
+  { AND: [{ toolName: 'read' }, { argsJson: { contains: 'SKILL.md' } }] },
+  { AND: [{ toolName: { in: [...SHELL_TOOL_DB_NAMES] } }, { argsJson: { contains: 'SKILL.md' } }] },
+];
 
 export interface SkillContentCandidates {
   toolCalls: SkillToolCall[];
@@ -31,14 +41,7 @@ export async function collectSkillContentCandidates(
     prisma.toolCall.findMany({
       where: {
         turn: { sessionId },
-        OR: [
-          { isSkillRelated: true },
-          { AND: [{ toolName: 'Read' }, { argsJson: { contains: 'SKILL.md' } }] },
-          { AND: [{ toolName: 'read' }, { argsJson: { contains: 'SKILL.md' } }] },
-          // shell 读类命令（exec_command cat …/SKILL.md——codex 主通道）；
-          // 摄取侧已给源工具行打 isSkillRelated，此分支兜历史未打标数据
-          { AND: [{ toolName: { in: [...SHELL_TOOL_DB_NAMES] } }, { argsJson: { contains: 'SKILL.md' } }] },
-        ],
+        OR: SKILL_READ_CANDIDATE_OR,
       },
       select: { toolName: true, argsJson: true, resultJson: true, startedAt: true },
       orderBy: { createdAt: 'asc' },

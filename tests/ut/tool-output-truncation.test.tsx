@@ -10,6 +10,15 @@
 //   技能，与摄取侧创建事件用同一检测），截断调用读的是别的技能时不串台；
 // ④Skills 全景：选中技能的逐次调用行下方给出截断说明（规模 + agent 未看到全文），
 //   完整读取的调用零噪音。
+// 技能读取的逐次调用行（截断 + 部分读取）另见文末同名 describe。
+
+// 技能读取的逐次调用行 IT（数据驱动种子见 SEEDS）——锁三件事：
+// ①run skills API：事件带截断事实 outputTruncation 与读取覆盖面 readCoverage
+//   （full / partial / unproven 三态，只在可证时下结论）；
+// ②标记合成：输出被截断 → 琥珀「工具输出截断」（行号可定时说明行写 agent 实际读到
+//   的行，否则写输出规模）；命令自带行范围没读全 → 中性「部分读取」；读完 / 证明
+//   不了 / 无从判定 → 零标记（含「范围宽过文件」「同轮补齐」两个易误报形态）；
+// ③明细卡标题行的次数汇总与逐次调用行的标记数一致。
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
@@ -51,14 +60,55 @@ const COMBINED = ['codex-native', 'opencode-tail'] as const;
 /** 全会话有错误摘要的轮：marker-without-banner（失败调用）+ 组合轮（一次失败） */
 const ERROR_TURN_COUNT = 2;
 
-/** 技能读取轮：每轮一个 use 事件 + 一次读取调用。clean 轮里另有一次被截断、
- *  但读的是别的技能（无事件）的调用——不得把截断串到 tot-skill-clean 上 */
-const SKILL_TURNS = [
-  { skill: 'tot-skill-shell', toolName: 'exec_command', args: { cmd: 'cat /root/.codex/skills/tot-skill-shell/SKILL.md' }, key: 'codex-native' },
-  { skill: 'tot-skill-read', toolName: 'Read', args: { file_path: '/root/.claude/skills/tot-skill-read/SKILL.md' }, key: 'opencode-tail' },
-  { skill: 'tot-skill-clean', toolName: 'Read', args: { file_path: '/root/.claude/skills/tot-skill-clean/SKILL.md' }, key: null },
-] as const;
-const SKILL_NAMES = [...SKILL_TURNS.map(s => s.skill)];
+// 技能读取轮：每轮一个 use 事件 + 读取调用。事件带两个正交事实——outputTruncation
+// （输出被截断）与 readCoverage（这次读到文件的哪些行，full/partial/unproven）；
+// 逐次调用行的标记由二者合成（skillReadMarkOf）。demo 是一份 10 行的 SKILL.md，
+// 多种读法各占一轮：总行数在自己判不出时借用同文件其他读取的。
+const DEMO_FILE = Array.from({ length: 10 }, (_, i) => `- 第 ${i + 1} 行`);
+const LONE_FILE = Array.from({ length: 12 }, (_, i) => `- lone 第 ${i + 1} 行`);
+const DEMO_PATH = '/w/.agents/skills/tot-skill-demo/SKILL.md';
+const LONE_PATH = '/w/.agents/skills/tot-skill-lone/SKILL.md';
+const slice = (file: string[], a: number, b: number) => file.slice(a - 1, b).join('\n') + '\n';
+const numbered = (file: string[], a: number, b: number) =>
+  file.slice(a - 1, b).map((l, i) => `${String(a + i).padStart(4, ' ')}\t${l}`).join('\n') + '\n';
+/** codex 截断形态：banner + 头段 + 中缝丢弃标记 + 尾段（totalLines = 截断前的流总行数） */
+const codexCut = (totalLines: number, head: string, tail: string) =>
+  `Warning: truncated output (original token count: 900)\nTotal output lines: ${totalLines}\n\n${head}…300 tokens truncated…${tail}`;
+const SH = (cmd: string) => ({ toolName: 'exec_command', args: { cmd } });
+
+interface Seed {
+  skill: string;
+  toolName: string;
+  args: Record<string, string | number>;
+  result: string;
+  /** 同轮的后续调用（与首个调用同属一个事件）：[toolName, args, result] */
+  more?: Array<[string, Record<string, string | number>, string]>;
+}
+const SEEDS: Seed[] = [
+  // 截断 + 行号可定：说明行写 agent 实际读到的行（尾部两行 9–10 压在范围上界 → 自己判不出总行数，借同文件的）
+  { skill: 'tot-skill-demo', ...SH(`nl -ba ${DEMO_PATH} | sed -n '2,10p'`), result: codexCut(9, numbered(DEMO_FILE, 2, 4), numbered(DEMO_FILE, 9, 10)) },
+  { skill: 'tot-skill-demo', ...SH(`cat ${DEMO_PATH}`), result: slice(DEMO_FILE, 1, 10) },
+  { skill: 'tot-skill-demo', ...SH(`nl -ba ${DEMO_PATH} | sed -n '3,5p'`), result: numbered(DEMO_FILE, 3, 5) },
+  { skill: 'tot-skill-demo', ...SH(`sed -n '1,300p' ${DEMO_PATH}`), result: slice(DEMO_FILE, 1, 10) },
+  { skill: 'tot-skill-demo', ...SH(`cat ${DEMO_PATH}; echo '--- end ---'`), result: `${slice(DEMO_FILE, 1, 10)}--- end ---\n` },
+  { skill: 'tot-skill-demo', ...SH(`tail -3 ${DEMO_PATH}`), result: slice(DEMO_FILE, 8, 10) },
+  { skill: 'tot-skill-demo', toolName: 'Read', args: { file_path: DEMO_PATH, offset: 6, limit: 2 }, result: DEMO_FILE.slice(5, 7).map((l, i) => `${6 + i}\t${l}`).join('\n') },
+  // 同轮两次读取：被截断的那次缺的部分由后一次整文件读取补齐 → 这次调用拿到了全文，不标
+  {
+    skill: 'tot-skill-demo', ...SH(`cat ${DEMO_PATH}`), result: codexCut(10, slice(DEMO_FILE, 1, 3), slice(DEMO_FILE, 9, 10)),
+    more: [['exec_command', { cmd: `cat ${DEMO_PATH}` }, slice(DEMO_FILE, 1, 10)]],
+  },
+  // 没有同文件的其他读取：总行数未知，只写读到的行
+  { skill: 'tot-skill-lone', ...SH(`sed -n '7,9p' ${LONE_PATH}`), result: slice(LONE_FILE, 7, 9) },
+  // cat 之后跟着别的输出、总行数判不出、命令又没限范围：证明不了 → 不标（API 给 unproven）
+  { skill: 'tot-skill-lone', ...SH(`cat ${LONE_PATH}; echo '--- end ---'`), result: `${slice(LONE_FILE, 1, 12)}--- end ---\n` },
+  // 截断但行号归因不了（过滤管道）：退回输出规模的说法
+  { skill: 'tot-skill-shell', toolName: 'exec_command', args: { cmd: `cat /root/.codex/skills/tot-skill-shell/SKILL.md | sed -n '1,80p'` }, result: caseOf('codex-native').result },
+  { skill: 'tot-skill-read', toolName: 'Read', args: { file_path: '/root/.claude/skills/tot-skill-read/SKILL.md' }, result: caseOf('opencode-tail').result },
+];
+const SKILL_NAMES = [...new Set(SEEDS.map(s => s.skill))];
+/** 带标记的种子（与下方断言一一对应）：skill → 期望标记种类 */
+const MARKED = { 'tot-skill-demo': ['truncated', 'partial', 'partial'], 'tot-skill-lone': ['partial'] } as const;
 
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-tool-output-truncation-'));
 const ORIG_HOME = process.env.CONTEXT_INSIGHT_HOME;
@@ -84,8 +134,8 @@ beforeAll(async () => {
     });
     return t;
   };
-  const mkCall = async (turnId: string, toolCallId: string, toolName: string, state: string, resultJson: string | null, argsJson: string | null = null) => {
-    await prisma.toolCall.create({ data: { turnId, toolCallId, toolName, state, resultJson, argsJson } });
+  const mkCall = async (turnId: string, toolCallId: string, toolName: string, state: string, resultJson: string | null, argsJson: string | null = null, startedAt?: Date) => {
+    await prisma.toolCall.create({ data: { turnId, toolCallId, toolName, state, resultJson, argsJson, ...(startedAt ? { startedAt } : {}) } });
   };
   for (const c of cases) {
     const t = await mkTurn();
@@ -107,16 +157,22 @@ beforeAll(async () => {
   await prisma.sessionSkill.createMany({
     data: SKILL_NAMES.map(skillName => ({ sessionId: s.id, skillName, skillVersion: 1, invocationCount: 1 })),
   });
-  for (const [i, st] of SKILL_TURNS.entries()) {
+  const skillBase = Date.parse('2026-11-20T02:05:00Z');
+  for (const [i, seed] of SEEDS.entries()) {
     const t = await mkTurn();
-    ctx.turnIds[`skill:${st.skill}`] = t.id;
+    ctx.turnIds[`skill:${seed.skill}#${i}`] = t.id;
     await prisma.skillEvent.create({
-      data: { turnId: t.id, skillName: st.skill, skillVersion: 1, eventType: 'use', success: true },
+      data: { turnId: t.id, skillName: seed.skill, skillVersion: 1, eventType: 'use', success: true },
     });
-    await mkCall(t.id, `tot-tc-skill-${i}`, st.toolName, 'completed', st.key ? caseOf(st.key).result : 'plain skill body', JSON.stringify(st.args));
+    const at = new Date(skillBase + i * 1000);
+    await mkCall(t.id, `tot-tc-skill-${i}`, seed.toolName, 'completed', seed.result, JSON.stringify(seed.args), at);
+    for (const [j, [toolName, args, result]] of (seed.more ?? []).entries()) {
+      await mkCall(t.id, `tot-tc-skill-${i}-${j}`, toolName, 'completed', result, JSON.stringify(args), new Date(at.getTime() + 500));
+    }
   }
+  // 同轮里被截断的调用读的是别的技能（无事件）：不得把截断串到这一轮的事件上
   await mkCall(
-    ctx.turnIds['skill:tot-skill-clean'], 'tot-tc-skill-foreign', 'exec_command', 'completed',
+    ctx.turnIds['skill:tot-skill-demo#1'], 'tot-tc-skill-foreign', 'exec_command', 'completed',
     caseOf('codex-native').result,
     JSON.stringify({ cmd: 'cat /root/.codex/skills/tot-skill-other/SKILL.md' }),
   );
@@ -208,8 +264,8 @@ describe('工具输出截断不是错误：run turns API 轮级摘要', () => {
     expect(combined.total).toBe(1);
     expect(combined.failed).toBe(1);
     expect(combined.details).toEqual([{ toolName: 'Bash', type: 'failed' }]);
-    for (const skillName of SKILL_NAMES) {
-      expect(byTurnId.get(ctx.turnIds[`skill:${skillName}`])!.errorDigest, skillName).toBeUndefined();
+    for (const seed of SEEDS) {
+      expect(byTurnId.get(ctx.turnIds[`skill:${seed.skill}#${SEEDS.indexOf(seed)}`])!.errorDigest, seed.skill).toBeUndefined();
     }
     expect(byTurnId.get(ctx.cleanTurnId)!.errorDigest).toBeUndefined();
   });
@@ -269,9 +325,10 @@ describe('工具输出截断：观测面与调用级提示', () => {
       .map(toOverviewTurn);
     expect(onlyTruncated.length).toBe(truncatedKeys.length);
     const container = renderOverview(onlyTruncated);
-    expect(container.querySelector('[data-slot="output-truncation-chip"]')).toBeNull();
-    expect(container.querySelector('[data-slot="output-truncation-note"]')).toBeNull();
+    expect(container.querySelector('[data-slot="fact-chip"]')).toBeNull();
+    expect(container.querySelector('[data-slot="fact-note"]')).toBeNull();
     expect(container.textContent).not.toContain('工具输出截断');
+    expect(container.textContent).not.toContain('部分读取');
     expect(container.textContent).not.toContain('Error Turns');
     expect(container.textContent).not.toContain('🔧');
   });
@@ -304,7 +361,7 @@ describe('工具输出截断：观测面与调用级提示', () => {
     expect(blocks.length).toBe(cases.length);
     const seamsOf = (block: HTMLElement) => Array.from(block.querySelectorAll('[data-slot="output-seam"]')).map(el => el.textContent ?? '');
     cases.forEach((c, i) => {
-      const chips = blocks[i].querySelectorAll('[data-slot="output-truncation-chip"]');
+      const chips = blocks[i].querySelectorAll('[data-slot="fact-chip"][data-tone="amber"]');
       if (c.expect == null) {
         expect(chips.length, c.key).toBe(0);
         expect(seamsOf(blocks[i]).length, c.key).toBe(0);
@@ -325,19 +382,51 @@ describe('工具输出截断：观测面与调用级提示', () => {
   });
 });
 
-describe('工具输出截断：Skills 逐次调用行', () => {
+describe('技能读取的逐次调用行：截断与部分读取', () => {
   let data: SkillsPanoramaData;
   beforeAll(async () => {
     data = await getSkills();
   });
 
-  it('run skills API：被截断的读取带上截断事实，完整读取为 null', () => {
-    const eventOf = (skillName: string) => data.events.find(e => e.skillName === skillName)!;
-    for (const st of SKILL_TURNS) {
-      expect(eventOf(st.skill).outputTruncation, st.skill).toEqual(st.key ? caseOf(st.key).expect : null);
-    }
+  /** 种子序号 → 该轮的事件（事件按 turnId 对位） */
+  const eventOf = (i: number) => data.events.find(e => e.turnId === ctx.turnIds[`skill:${SEEDS[i]!.skill}#${i}`])!;
+  const turnIdOf = (i: number) => ctx.turnIds[`skill:${SEEDS[i]!.skill}#${i}`];
+
+  it('run skills API：截断事实与读取覆盖面各归各位；没有事件的技能不凭空产生事件', () => {
+    expect(eventOf(0).outputTruncation, '截断的编号读').toMatchObject({ harness: 'codex', totalLines: 9 });
+    expect(eventOf(1).outputTruncation, '整文件读取').toBeNull();
     // 没有事件的技能不凭空产生事件
     expect(data.events.some(e => e.skillName === 'tot-skill-other')).toBe(false);
+    expect(eventOf(10).outputTruncation, '过滤管道截断').toMatchObject({ harness: 'codex', totalLines: 96 });
+    expect(eventOf(11).outputTruncation, 'Read 截断').toMatchObject({ harness: 'opencode', shownLines: { from: 19, to: 34 } });
+  });
+
+  it('run skills API：读取覆盖面三态——全文 / 部分 / 证明不了；总行数自己判不出时借同文件的', () => {
+    const cov = (i: number) => eventOf(i).readCoverage;
+    // 截断的编号读：尾部压在范围上界，自己判不出总行数 → 借同文件整文件读取的 10 行
+    // 紧贴截断缝的尾段首行按残行保守丢弃 → 尾部只剩第 10 行
+    expect(cov(0)).toEqual({ kind: 'partial', lines: [{ from: 2, to: 4 }, { from: 10, to: 10 }], fileLines: 10 });
+    // 整文件 cat：总行数自证
+    expect(cov(1)).toEqual({ kind: 'full', lines: [{ from: 1, to: 10 }], fileLines: 10 });
+    // 有界读：总行数借同文件的
+    expect(cov(2)).toEqual({ kind: 'partial', lines: [{ from: 3, to: 5 }], fileLines: 10 });
+    // 范围宽过文件（1,300 读 10 行文件）= 读完了，不是部分读取
+    expect(cov(3)).toEqual({ kind: 'full', lines: [{ from: 1, to: 10 }], fileLines: 10 });
+    // cat 后跟 echo：行号可定，总行数借同文件的 → 全文
+    expect(cov(4)).toEqual({ kind: 'full', lines: [{ from: 1, to: 10 }], fileLines: 10 });
+    // tail：没有文件行号语义 → 无从判定
+    expect(cov(5)).toBeNull();
+    // Read 工具 offset/limit
+    expect(cov(6)).toEqual({ kind: 'partial', lines: [{ from: 6, to: 7 }], fileLines: 10 });
+    // 同轮：截断的 cat + 整文件 cat → 这次调用拿到了全文
+    expect(cov(7)).toEqual({ kind: 'full', lines: [{ from: 1, to: 10 }], fileLines: 10 });
+    // 没有同文件的其他读取：总行数未知，但命令限了范围 → 确定是部分
+    expect(cov(8)).toEqual({ kind: 'partial', lines: [{ from: 7, to: 9 }], fileLines: null });
+    // cat 后跟别的输出：总行数未知、命令没限范围 → 证明不了
+    expect(cov(10)).toBeNull();
+    expect(cov(11)).toBeNull();
+    const loneCat = data.events.find(e => e.skillName === 'tot-skill-lone' && e.eventType === 'use' && e.turnId !== turnIdOf(8))!;
+    expect(loneCat.readCoverage).toEqual({ kind: 'unproven', lines: [{ from: 1, to: 12 }], fileLines: null });
   });
 
   function renderPanorama(): HTMLElement {
@@ -351,32 +440,86 @@ describe('工具输出截断：Skills 逐次调用行', () => {
     act(() => { row!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); });
   }
 
-  it('截断的调用：行内带标记，行下方说明这一次读取被截、agent 未看到全文', () => {
+  /** 逐次调用行：turnId → 行元素（行上带跳转按钮 data-skill-jump、事件锚点 data-skill-event） */
+  function rowOf(container: HTMLElement, turnId: string): HTMLElement {
+    const row = container.querySelector(`[data-skill-jump="${turnId}"]`)!.closest('[data-skill-event]') as HTMLElement | null;
+    expect(row, turnId).toBeTruthy();
+    return row!;
+  }
+
+  it('截断且行号可定：琥珀「工具输出截断」+ 说明行写 agent 实际读到的行；悬停另给输出规模', () => {
+    const container = renderPanorama();
+    selectSkill(container, 'tot-skill-demo');
+    const row = rowOf(container, turnIdOf(0));
+    expect(row.dataset.skillReadMark).toBe('truncated');
+    const chip = row.querySelector('[data-slot="fact-chip"]')!;
+    expect(chip.getAttribute('data-tone')).toBe('amber');
+    expect(chip.textContent?.trim()).toBe('工具输出截断');
+    expect(row.querySelector('[data-slot="fact-note"]')!.textContent).toBe('输出被截断，SKILL.md 共 10 行，agent 读到第 2–4、10 行。');
+    act(() => { container.remove(); });
+  });
+
+  it('命令自带行范围没读全：中性「部分读取」+ 说明行写读到的行与文件总行数', () => {
+    const container = renderPanorama();
+    selectSkill(container, 'tot-skill-demo');
+    for (const [i, ranges] of [[2, '3–5'], [6, '6–7']] as const) {
+      const row = rowOf(container, turnIdOf(i));
+      expect(row.dataset.skillReadMark, `seed ${i}`).toBe('partial');
+      const chip = row.querySelector('[data-slot="fact-chip"]')!;
+      expect(chip.getAttribute('data-tone'), `seed ${i}`).toBe('neutral');
+      expect(chip.textContent?.trim(), `seed ${i}`).toBe('部分读取');
+      expect(row.querySelector('[data-slot="fact-note"]')!.textContent, `seed ${i}`).toBe(`agent 只读取了第 ${ranges} 行（SKILL.md 共 10 行）。`);
+    }
+    act(() => { container.remove(); });
+  });
+
+  it('总行数未知的有界读：只写读到的行，不编总行数', () => {
+    const container = renderPanorama();
+    selectSkill(container, 'tot-skill-lone');
+    const row = rowOf(container, turnIdOf(8));
+    expect(row.dataset.skillReadMark).toBe('partial');
+    expect(row.querySelector('[data-slot="fact-note"]')!.textContent).toBe('agent 只读取了 SKILL.md 的第 7–9 行。');
+    act(() => { container.remove(); });
+  });
+
+  it('读完 / 证明不了 / 无从判定：零标记零说明——含「范围宽过文件」与「同轮补齐」两个易误报形态', () => {
+    const container = renderPanorama();
+    selectSkill(container, 'tot-skill-demo');
+    // 1 整文件 cat；3 范围宽过文件；4 cat 后跟 echo；5 tail；7 同轮截断 + 整文件
+    for (const i of [1, 3, 4, 5, 7]) {
+      const row = rowOf(container, turnIdOf(i));
+      expect(row.dataset.skillReadMark, `seed ${i}`).toBeUndefined();
+      expect(row.querySelector('[data-slot="fact-chip"]'), `seed ${i}`).toBeNull();
+      expect(row.querySelector('[data-slot="fact-note"]'), `seed ${i}`).toBeNull();
+    }
+    act(() => { container.remove(); });
+    const lone = renderPanorama();
+    selectSkill(lone, 'tot-skill-lone');
+    const unproven = Array.from(lone.querySelectorAll('[data-skill-read-mark]')) as HTMLElement[];
+    expect(unproven.map(r => r.dataset.skillReadMark)).toEqual(['partial']);
+    act(() => { lone.remove(); });
+  });
+
+  it('截断但行号归因不了：退回输出规模的说法（两种运行环境）', () => {
     const container = renderPanorama();
     selectSkill(container, 'tot-skill-shell');
-    const blocks = Array.from(container.querySelectorAll('[data-skill-truncation]')) as HTMLElement[];
-    expect(blocks.length).toBe(1);
-    expect(blocks[0].textContent).toContain('use');
-    const chip = blocks[0].querySelector('[data-slot="output-truncation-chip"]')!;
-    expect(chip.textContent?.trim()).toBe('工具输出截断');
-    const note = blocks[0].querySelector('[data-slot="output-truncation-note"]')!;
-    expect(note.textContent).toBe('输出被截断，原始 2707 tokens、共 96 行，agent 未看到全文。');
+    expect(rowOf(container, turnIdOf(10)).querySelector('[data-slot="fact-note"]')!.textContent)
+      .toBe('输出被截断，原始 2707 tokens、共 96 行，agent 未看到全文。');
     act(() => { container.remove(); });
+    const read = renderPanorama();
+    selectSkill(read, 'tot-skill-read');
+    expect(rowOf(read, turnIdOf(11)).querySelector('[data-slot="fact-note"]')!.textContent)
+      .toBe('输出被截断，仅显示第 19–34 行（共 34 行），agent 未看到全文。');
+    act(() => { read.remove(); });
   });
 
-  it('opencode 形态：说明写出实际看到的行范围', () => {
+  it('明细卡标题行汇总次数：截断与部分读取分列，与逐次调用行的标记数一致', () => {
     const container = renderPanorama();
-    selectSkill(container, 'tot-skill-read');
-    const note = container.querySelector('[data-skill-truncation] [data-slot="output-truncation-note"]')!;
-    expect(note.textContent).toBe('输出被截断，仅显示第 19–34 行（共 34 行），agent 未看到全文。');
+    selectSkill(container, 'tot-skill-demo');
+    const counts = Array.from(container.querySelectorAll('[data-slot="skill-read-count"]')).map(el => el.textContent?.trim());
+    expect(counts).toEqual(['1 次输出截断', '2 次部分读取']);
+    const marks = Array.from(container.querySelectorAll<HTMLElement>('[data-skill-read-mark]')).map(r => r.dataset.skillReadMark);
+    expect(marks).toEqual([...MARKED['tot-skill-demo']]);
     act(() => { container.remove(); });
-  });
-
-  it('完整读取：无标记无说明；同轮里被截断的调用读的是别的技能，不串台', () => {
-    const container = renderPanorama();
-    selectSkill(container, 'tot-skill-clean');
-    expect(container.querySelector('[data-skill-truncation]')).toBeNull();
-    expect(container.querySelector('[data-slot="output-truncation-chip"]')).toBeNull();
-    expect(container.querySelector('[data-slot="output-truncation-note"]')).toBeNull();
   });
 });

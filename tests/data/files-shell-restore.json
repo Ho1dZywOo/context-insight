@@ -3,7 +3,8 @@
   "files": {
     "skill/SKILL.md": ["S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08", "S09", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S19", "S20"],
     "skill/flows.md": ["F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08"],
-    "skill/req.txt": ["R1", "R2", "R3", "R4", "R5"]
+    "skill/req.txt": ["R1", "R2", "R3", "R4", "R5"],
+    "skill/guide.md": ["G01", "G02", "G03", "G04", "G05", "G06", "G07", "G08", "G09", "G10"]
   },
   "calls": [
     {
@@ -53,11 +54,18 @@
       "tool": "Read",
       "args": { "file_path": "skill/SKILL.md", "offset": 5, "limit": 4 },
       "result": "5\tS05\n6\tS06\n7\tS07\n8\tS08"
+    },
+    {
+      "id": "sr-tail-unverified",
+      "tool": "exec_command",
+      "cmd": "cat skill/guide.md; printf '%s\\n' '--- tree ---'; find skill -type f | sort",
+      "result": "Warning: truncated output (original token count: 666)\nTotal output lines: 14\n\nG01\nG02\nG03…100 chars truncated…skill/guide.md\nskill/req.txt\nskill/SKILL.md\n"
     }
   ],
   "expect": {
     "skill/SKILL.md": { "covered": [[1, 12], [18, 20]], "maxLine": 20, "opsUsed": 5, "source": "read" },
     "skill/flows.md": { "covered": [[1, 8]], "maxLine": 8, "opsUsed": 1, "source": "read" },
-    "skill/req.txt": { "covered": [[1, 5]], "maxLine": 5, "opsUsed": 1, "source": "read" }
+    "skill/req.txt": { "covered": [[1, 5]], "maxLine": 5, "opsUsed": 1, "source": "read" },
+    "skill/guide.md": { "covered": [[1, 2]], "maxLine": 2, "opsUsed": 1, "source": "read" }
   }
 }

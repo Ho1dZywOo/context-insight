@@ -52,6 +52,9 @@ export interface ShellRestoreEntry {
   fileLines: number | null;
   /** 工具输出被 harness 截断（banner 命中）。 */
   truncated: boolean;
+  /** 该文件的转储命令自带行范围（sed a,bp / head -n K / 编号转储后接裁行）：
+   *  读到的行没有抵达文件尾是命令有意为之，不是「文件到此为止」。 */
+  rangeLimited: boolean;
 }
 
 interface PositionedLine {
@@ -305,6 +308,12 @@ function parseNumbered(seg: string): DumpSpec | null {
   return { cmd: 'numbered', file: files[0]!, count, start: range.a, lineRange: range };
 }
 
+/** dump 段是否自带行范围（见 ShellRestoreEntry.rangeLimited） */
+function specRangeLimited(spec: DumpSpec): boolean {
+  if (spec.cmd === 'sed' || spec.cmd === 'head') return true;
+  return spec.cmd === 'numbered' && (spec.count != null || spec.lineRange!.b !== Number.MAX_SAFE_INTEGER);
+}
+
 /** 编号转储的输出行：`<右对齐行号>\t<原文>`（nl / cat -n 同形）。原文含制表符不受影响。 */
 const NUMBERED_LINE_RE = /^ *(\d+)\t(.*)$/;
 
@@ -462,7 +471,7 @@ function attributeCommand(cmd: string, stream: PositionedStream): ShellRestoreEn
 
   const lines = stream.lines;
   const cursor: Cursor = { idx: 0, lost: false };
-  const entries = new Map<string, { lines: Map<number, string>; fileLines: number | null }>();
+  const entries = new Map<string, { lines: Map<number, string>; fileLines: number | null; rangeLimited: boolean }>();
   // 前一个 dump 的区域预期终点（位置空间，开区间；Infinity = 该段输出被截断缝
   // 切开、终点不可知）。丢弃段横跨两段 dump 边界时，后段的起点无法从保留行
   // 推导——用它判定并跳过归因。编号转储自定位，不受此门控。
@@ -471,7 +480,7 @@ function attributeCommand(cmd: string, stream: PositionedStream): ShellRestoreEn
   const accOf = (file: string) => {
     let acc = entries.get(file);
     if (!acc) {
-      acc = { lines: new Map(), fileLines: null };
+      acc = { lines: new Map(), fileLines: null, rangeLimited: false };
       entries.set(file, acc);
     }
     return acc;
@@ -483,12 +492,14 @@ function attributeCommand(cmd: string, stream: PositionedStream): ShellRestoreEn
     || (stream.totalLines != null && lines[lines.length - 1]!.pos === stream.totalLines);
 
   /** 把 dump 区域 [startIdx, endIdx) 归因到文件行；regionStartPos = 区域在
-   *  位置空间的应有起点（调用方算好：丢弃段跨界时调不动它，由门控跳过） */
-  function emit(spec: DumpSpec, startIdx: number, endIdx: number, regionStartPos: number): void {
+   *  位置空间的应有起点（调用方算好：丢弃段跨界时调不动它，由门控跳过）；
+   *  tailTrusted = false 时截断缝之后的保留行不归因（见调用处） */
+  function emit(spec: DumpSpec, startIdx: number, endIdx: number, regionStartPos: number, tailTrusted = true): void {
     if (startIdx >= endIdx || startIdx >= lines.length) return;
     const fileMap = accOf(spec.file).lines;
     for (let i = startIdx; i < endIdx && i < lines.length; i++) {
       const l = lines[i];
+      if (!tailTrusted && l.half === 'tail') continue;
       const fileLine = spec.start + (l.pos - regionStartPos);
       if (fileLine < spec.start) continue; // 防御：位置倒挂不采
       // 区域终点误越界（锚定到同名内容/丢弃重排）时不越出 dump 的文件域
@@ -496,6 +507,7 @@ function attributeCommand(cmd: string, stream: PositionedStream): ShellRestoreEn
       if (l.partial) continue; // 残行：位置保留（周围行定位），内容丢弃
       if (!fileMap.has(fileLine)) fileMap.set(fileLine, l.text); // 先到先得：同一命令内重复 dump 不互相覆盖
     }
+    if (endIdx > startIdx) accOf(spec.file).rangeLimited ||= specRangeLimited(spec);
   }
 
   /** 游标处起取一段编号行：连续、行号严格递增、全部落在段范围内。skipPartial =
@@ -532,6 +544,7 @@ function attributeCommand(cmd: string, stream: PositionedStream): ShellRestoreEn
       const p = parseNumberedLine(lines[i].text)!;
       if (!fileMap.has(p.n)) fileMap.set(p.n, p.text);
     }
+    accOf(spec.file).rangeLimited ||= specRangeLimited(spec);
   }
 
   for (let si = 0; si < segs.length; si++) {
@@ -655,7 +668,12 @@ function attributeCommand(cmd: string, stream: PositionedStream): ShellRestoreEn
     // 行数上限校验（cat 无上限）：区域超限 = 流被污染（锚定位到了同名
     // 内容或命令结构误判），拒绝归因
     if (seg.spec.count != null && endIdx - startIdx > seg.spec.count) continue;
-    emit(seg.spec, startIdx, endIdx, regionStartPos);
+    // 截断缝之后的保留行（尾段）行号可信的前提：区域终点经锚点定位，或本段
+    // 之后没有别的输出段（流的尾部只可能是本文件）。二者皆非（锚点被缝切掉、
+    // 后随输出段的输出留在尾段）时，尾段行号只是按总行数倒推、未经校验——
+    // 后随文件的内容会被记成本文件的行。尾段不归因（宁缺毋假），头段不受影响
+    const tailTrusted = boundedByAnchor || isLastOutputSeg(si);
+    emit(seg.spec, startIdx, endIdx, regionStartPos, tailTrusted);
     if (!boundedByAnchor) {
       cursor.idx = endIdx;
       // count 封顶段的预期终点（含被丢弃部分）——后段用它判跨段丢弃
@@ -681,7 +699,7 @@ function attributeCommand(cmd: string, stream: PositionedStream): ShellRestoreEn
   }
 
   if (entries.size === 0) return null;
-  return [...entries].map(([filePath, e]) => ({ filePath, lines: e.lines, fileLines: e.fileLines, truncated: stream.truncated }));
+  return [...entries].map(([filePath, e]) => ({ filePath, lines: e.lines, fileLines: e.fileLines, truncated: stream.truncated, rangeLimited: e.rangeLimited }));
 }
 
 /** argsJson → 参与归因的命令文本序列（command/cmd 键 + codex input 内嵌
@@ -723,6 +741,7 @@ export function restoreShellReads(argsJson: string | null, resultJson: string | 
         if (!m.lines.has(n)) m.lines.set(n, text); // 单工具调用内先到先得
       }
       if (m.fileLines == null) m.fileLines = e.fileLines;
+      m.rangeLimited ||= e.rangeLimited;
     }
   }
   return [...merged.values()];
