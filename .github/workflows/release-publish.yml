@@ -197,3 +197,9 @@ jobs:
         run: |
           npm publish "./release-artifacts/context-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
           npm publish "./release-artifacts/cannbot-insight-${VERSION}.tgz" --tag "$DIST_TAG" --access public --provenance
+
+      - name: Verify selected dist-tag
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: node scripts/release/verify-registry.mjs --tag "$DIST_TAG" --version "$VERSION" --wait-seconds 300 --poll-seconds 15

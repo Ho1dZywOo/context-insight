@@ -136,3 +136,43 @@ describe("npm publish readiness (npm pack --dry-run)", () => {
     expect(r.stdout.trim()).toBe(`${BRAND_NAME} v${VERSION}`)
   }, 120_000)
 })
+
+describe("release registry verification workflow", () => {
+  const publishWorkflow = fs.readFileSync(path.join(PKG_DIR, ".github/workflows/release-publish.yml"), "utf8")
+  const promoteWorkflow = fs.readFileSync(path.join(PKG_DIR, ".github/workflows/release-promote.yml"), "utf8")
+
+  it("publish 在发布后验证所选 tag，且不直接移动 latest", () => {
+    const publishStep = publishWorkflow.indexOf("name: Publish packages to selected dist-tag")
+    const verifyStep = publishWorkflow.indexOf("name: Verify selected dist-tag")
+    expect(publishStep).toBeGreaterThan(-1)
+    expect(verifyStep).toBeGreaterThan(publishStep)
+    expect(publishWorkflow).toContain("--wait-seconds 300 --poll-seconds 15")
+    expect(publishWorkflow).not.toContain("dist-tag add")
+
+    const publishJob = publishWorkflow.slice(publishWorkflow.indexOf("\n  publish:"))
+    expect(publishJob).toContain("if: inputs.mode == 'publish'")
+    expect(publishJob).toContain("name: Verify selected dist-tag")
+  })
+
+  it("promote 在移动 latest 后做有界轮询验证", () => {
+    const promoteStep = promoteWorkflow.indexOf("name: Promote packages to latest")
+    const verifyStep = promoteWorkflow.indexOf("name: Verify registry state")
+    expect(promoteStep).toBeGreaterThan(-1)
+    expect(verifyStep).toBeGreaterThan(promoteStep)
+    expect(promoteWorkflow).toContain(
+      '--tag latest --version "$VERSION" --wait-seconds 300 --poll-seconds 15',
+    )
+  })
+
+  it("registry 验证脚本支持有界轮询而不是固定等待", () => {
+    const result = spawnSync(process.execPath, ["scripts/release/verify-registry.mjs", "--help"], {
+      cwd: PKG_DIR,
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    expect(result.status).toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toContain("--wait-seconds")
+    expect(`${result.stdout}${result.stderr}`).toContain("--poll-seconds")
+  })
+
+})
