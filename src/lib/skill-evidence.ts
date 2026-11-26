@@ -167,29 +167,109 @@ export function formatRanges(ranges: LineGap[]): string {
   return ranges.map(g => (g.from === g.to ? `${g.from}` : `${g.from}–${g.to}`)).join('、');
 }
 
-export type EvidenceRow =
-  | { kind: 'line'; n: number; text: string }
-  | { kind: 'gap'; from: number; to: number; tail: boolean };
+/** 一段缺失的文件行（闭区间）。kind：没读到 / 多次读取内容不一致而整体弃用；
+ *  tail：一直缺到文件末尾（文件总行数可知时才有定论）。 */
+export interface SourceGap extends LineGap {
+  kind: 'unread' | 'conflict';
+  tail: boolean;
+}
 
-/** 声明文本 + 行级证据 → 带缺口间隔行的展示行序（缺口按行号位置插在对应行之前；
- *  文件尾部未读的缺口标 tail）。文本行与 lineNumbers 逐行对齐。 */
-export function layOutWithGaps(content: string, evidence: LineEvidence | null | undefined): EvidenceRow[] {
+/** 声明文本的展示行序：正文行（n = 文件行号，行号不可定时为 null）、缺失行段、
+ *  文件尾部是否还有内容未知（文件总行数判不出时收在末尾）。 */
+export type SourceRow =
+  | { kind: 'line'; n: number | null; text: string }
+  | { kind: 'gap'; gap: SourceGap }
+  | { kind: 'tail-unknown'; after: number };
+
+/** 证据里的缺失行段，按行号升序；同一段里成因不同的行拆开（冲突弃用的行与
+ *  未读到的行分开说）。 */
+export function sourceGapsOf(evidence: Pick<LineEvidence, 'gaps' | 'fileLines' | 'conflictLines'>): SourceGap[] {
+  const conflicts = new Set(evidence.conflictLines);
+  const out: SourceGap[] = [];
+  for (const g of [...evidence.gaps].sort((a, b) => a.from - b.from)) {
+    let from = g.from;
+    let kind: SourceGap['kind'] = conflicts.has(g.from) ? 'conflict' : 'unread';
+    const flush = (to: number) => out.push({ from, to, kind, tail: evidence.fileLines != null && to >= evidence.fileLines });
+    for (let n = g.from + 1; n <= g.to; n++) {
+      const k: SourceGap['kind'] = conflicts.has(n) ? 'conflict' : 'unread';
+      if (k === kind) continue;
+      flush(n - 1);
+      from = n;
+      kind = k;
+    }
+    flush(g.to);
+  }
+  return out;
+}
+
+/** 正文行号与证据是否逐行对齐（对齐才能指出缺在哪一行；兜底通道与注入快照不对齐）。 */
+export function sourceLinesAligned(content: string, evidence: LineEvidence | null | undefined): boolean {
+  return (evidence?.lineNumbers.length ?? 0) === (content.length > 0 ? content.split('\n').length : 0) && (evidence?.lineNumbers.length ?? 0) > 0;
+}
+
+/** 声明文本 + 行级证据 → 展示行序：缺失行段按行号位置插在对应行之前（到文件
+ *  末尾的段标 tail）。行号不可对齐时只有正文行（n = null），不插任何段——
+ *  缺在哪判不出就不标。 */
+export function layOutSource(content: string, evidence: LineEvidence | null | undefined): SourceRow[] {
   const texts = content.length > 0 ? content.split('\n') : [];
-  const nums = evidence?.lineNumbers ?? [];
-  if (nums.length !== texts.length) return texts.map((text, i) => ({ kind: 'line', n: i + 1, text }));
-  const gaps = [...(evidence?.gaps ?? [])].sort((a, b) => a.from - b.from);
-  const rows: EvidenceRow[] = [];
+  if (!sourceLinesAligned(content, evidence)) return texts.map((text) => ({ kind: 'line', n: null, text }));
+  const gaps = sourceGapsOf(evidence!);
+  const rows: SourceRow[] = [];
   let gi = 0;
   texts.forEach((text, i) => {
-    const n = nums[i]!;
-    while (gi < gaps.length && gaps[gi]!.from < n) {
-      rows.push({ kind: 'gap', from: gaps[gi]!.from, to: gaps[gi]!.to, tail: false });
-      gi++;
-    }
+    const n = evidence!.lineNumbers[i]!;
+    while (gi < gaps.length && gaps[gi]!.from < n) rows.push({ kind: 'gap', gap: gaps[gi++]! });
     rows.push({ kind: 'line', n, text });
   });
-  for (; gi < gaps.length; gi++) rows.push({ kind: 'gap', from: gaps[gi]!.from, to: gaps[gi]!.to, tail: true });
+  for (; gi < gaps.length; gi++) rows.push({ kind: 'gap', gap: gaps[gi]! });
+  if (evidence!.fileLines == null) rows.push({ kind: 'tail-unknown', after: evidence!.lineNumbers[texts.length - 1]! });
   return rows;
+}
+
+export function formatGap(gap: LineGap & Partial<Pick<SourceGap, 'kind'>>): string {
+  const where = `第 ${formatRanges([gap])} 行`;
+  return gap.kind === 'conflict' ? `${where}多次读取内容不一致，已弃用` : `${where}未读到`;
+}
+
+export interface MissingLinesNotice {
+  /** 文本不是完整声明（有缺失、读取被截断、或文件尾部未知）。 */
+  partial: boolean;
+  /** 正文行号与证据逐行对齐，缺失行能定位到行号。 */
+  located: boolean;
+  /** 一句话覆盖面，如「已读 146/168 行」。 */
+  summary: string;
+  /** 缺失的行段（located = false 时为空）。 */
+  gaps: SourceGap[];
+  /** 缺失行数（gaps 的行数合计）。 */
+  missing: number;
+  /** 文件总行数判不出：最后一个读到的行之后是否还有内容未知。 */
+  tailUnknown: boolean;
+  truncated: boolean;
+}
+
+/** 证据 → 「缺了哪些行」的结构化结论（恢复正文的展示面共用；文案不在展示层拼）。 */
+export function describeMissingLines(
+  content: string,
+  evidence: LineEvidence | null | undefined,
+  fullRead: boolean,
+): MissingLinesNotice {
+  const located = sourceLinesAligned(content, evidence);
+  const none = { partial: false, located, summary: '', gaps: [], missing: 0, tailUnknown: false, truncated: false };
+  if (!evidence) return none;
+  const covered = evidence.lineNumbers.length;
+  // 注入快照没有文件行号语义（lineNumbers 为空）：不报行数，覆盖面即全文
+  const summary = covered === 0 ? '' : evidence.fileLines != null ? `已读 ${covered}/${evidence.fileLines} 行` : `已读 ${covered} 行`;
+  const gaps = located ? sourceGapsOf(evidence) : [];
+  const missing = gaps.reduce((sum, g) => sum + g.to - g.from + 1, 0);
+  return {
+    partial: !fullRead,
+    located,
+    summary,
+    gaps,
+    missing,
+    tailUnknown: located && !fullRead && evidence.fileLines == null,
+    truncated: !fullRead && evidence.truncated,
+  };
 }
 
 export interface LineEvidenceNotice {

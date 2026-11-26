@@ -14,6 +14,7 @@ import { useSkillContentAudit, type SkillContentAuditItem } from "@/components/o
 import type { ViewUrlFor } from "@/lib/observe/member-url"
 import { describeLineEvidence } from "@/lib/skill-evidence"
 import { CODEX_LIMIT_ADVICE } from "@/lib/tool-output-truncation"
+import { skillSourceLabel } from "@/components/observe/SkillSourceView"
 
 interface SkillContentAuditProps {
   taskId: string
@@ -96,9 +97,7 @@ export function SkillContentAudit({ taskId, skillNames, onView, urlFor }: SkillC
               : st === "partial"
                 ? "border-orange-500/40 bg-orange-500/10 text-orange-700 dark:text-orange-300 hover:bg-orange-500/20"
                 : "border-zinc-400/40 bg-zinc-400/10 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-400/20"
-            const channel = item.source === "skill-tool" ? "Skill 工具注入"
-              : item.source === "command" ? "命令注入"
-                : item.source === "shell" ? "Shell 读取" : "Read 读取"
+            const channel = skillSourceLabel(item.source)
             const notice = describeLineEvidence(item.evidence, item.fullRead, item.source === "shell" ? CODEX_LIMIT_ADVICE : "")
             const injected = item.source === "skill-tool" || item.source === "command"
             const tip = st === "full"

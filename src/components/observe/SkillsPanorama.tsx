@@ -27,6 +27,7 @@ import {
 } from "@/components/observe/perf-shared";
 import { useSkillContent } from "@/components/observe/use-skill-content";
 import { SkillCoverageCard } from "@/components/observe/SkillCoverageCard";
+import { SkillSourceView } from "@/components/observe/SkillSourceView";
 import { SkillReadChip, SkillReadNote, TruncationAdviceView } from "@/components/observe/ReadNotice";
 import { toolOutputTruncationAdvice } from "@/lib/tool-output-truncation";
 import { skillReadMarkOf } from "@/lib/skill-content";
@@ -844,7 +845,7 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                           <span
                             role="button"
                             tabIndex={0}
-                            title="查看 SKILL.md 全文（按首个归因成员的会话注入内容）"
+                            title="查看 SKILL.md 恢复出的内容（按首个归因成员的会话读取）；没恢复全时标出缺了哪些行"
                             className={cn(
                               "inline-flex cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-semibold transition-colors",
                               sc.content.has(selAgg.name) || sc.error.has(selAgg.name)
@@ -875,21 +876,27 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
 
                     {truncationAdvice && <TruncationAdviceView advice={truncationAdvice} collapsible className="mt-1.5 shrink-0" />}
 
-                    {/* SKILL.md 全文（成员会话注入内容） */}
-                    {(sc.content.has(selAgg.name) || sc.error.has(selAgg.name)) && (
-                      <div className="mt-2 shrink-0 rounded-lg border border-emerald-600/20 bg-emerald-600/[0.04] p-2.5">
-                        {sc.error.get(selAgg.name) ? (
-                          <p className="text-xs text-destructive">Error: {sc.error.get(selAgg.name)}</p>
-                        ) : (
-                          <>
-                            <p className="mb-1 text-[11px] text-muted-foreground">
-                              SKILL.md · 来源 {sc.content.get(selAgg.name)?.source === "skill-tool" ? "Skill 工具注入" : sc.content.get(selAgg.name)?.source === "command" ? "命令注入" : sc.content.get(selAgg.name)?.source === "shell" ? "Shell 读取" : "Read 读取"} · {sc.content.get(selAgg.name)?.length} 字符
-                            </p>
-                            <pre className="max-h-60 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap break-words">{sc.content.get(selAgg.name)?.content}</pre>
-                          </>
-                        )}
-                      </div>
-                    )}
+                    {/* SKILL.md 恢复出的内容。处置建议不在这里再给一份：上方已有每卡一条的
+                        折叠条；没恢复全时结论条多占的高度由正文区让出，卡片总高不变 */}
+                    {(sc.content.has(selAgg.name) || sc.error.has(selAgg.name)) && (() => {
+                      const loaded = sc.content.get(selAgg.name);
+                      const partial = loaded != null && !loaded.fullRead;
+                      return (
+                        <div className="mt-2 shrink-0 rounded-lg border border-emerald-600/20 bg-emerald-600/[0.04] p-2.5">
+                          {sc.error.get(selAgg.name) ? (
+                            <p className="text-xs text-destructive">Error: {sc.error.get(selAgg.name)}</p>
+                          ) : (
+                            <SkillSourceView
+                              content={loaded?.content ?? ""}
+                              evidence={loaded?.evidence}
+                              fullRead={Boolean(loaded?.fullRead)}
+                              source={loaded?.source}
+                              bodyClassName={partial ? "max-h-[9.5rem]" : "max-h-60"}
+                            />
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* 逐次调用：成员归因在这里披露（一行一个，不堆徽标） */}
                     <div className="mt-2 min-h-0 flex-1 divide-y divide-foreground/[0.05] overflow-y-auto">
