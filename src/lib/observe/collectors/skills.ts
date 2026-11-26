@@ -17,6 +17,14 @@ import type { PrismaClient } from '@prisma/client';
 import type { ObserveScope } from '@/lib/observe/scope';
 import { memberByRowId, memberByTaskId } from '@/lib/observe/scope';
 import { isSoloRunId } from '@/lib/run/identity';
+import { TOOL_OUTPUT_TRUNCATION_QUERY_OR, type ToolOutputTruncation } from '@/lib/tool-output-truncation';
+import { SKILL_READ_CANDIDATE_OR } from '@/lib/observe/collectors/skill-content';
+import {
+  skillReadCoveragesOf,
+  skillReadEventKey,
+  skillReadTruncationsOf,
+} from '@/lib/skill-content';
+import type { ReadCoverage } from '@/lib/skill-evidence';
 
 export interface MergedSkillItem {
   skillName: string;
@@ -51,6 +59,11 @@ export interface MergedSkillEventItem {
     cacheWriteTokens: number;
   };
   member: { taskId: string; label: string | null } | null;
+  /** 这一次读取的工具输出被运行环境截断（agent 未看到全文）；完整读取 = null */
+  outputTruncation: ToolOutputTruncation | null;
+  /** 这一次调用读到了多少 SKILL.md（full / partial / unproven，见 skill-evidence）；
+   *  无读取证据可判 = null */
+  readCoverage: ReadCoverage | null;
 }
 
 export interface CollectSkillsOptions {
@@ -158,6 +171,23 @@ export async function collectScopeSkills(
   }
   const skills = [...byName.values()].sort((a, b) => b.invocationCount - a.invocationCount || a.skillName.localeCompare(b.skillName));
 
+  // 逐次调用行的两个事实（语义单点 skill-content.ts 的逐次调用级一节）：技能读取候选面
+  // （SKILL_READ_CANDIDATE_OR，与原文恢复同宽）∪ 命中截断超集的调用 →
+  // 哪一次被截断（outputTruncation）+ 这一次读到文件的哪些行（readCoverage）
+  const readEvents = turnRows.flatMap(t => t.skillEvents
+    .filter(se => se.eventType !== 'dispatch')
+    .map(se => ({ turnId: t.id, skillName: se.skillName })));
+  const readCalls = await prisma.toolCall.findMany({
+    where: {
+      turn: { sessionId: { in: memberRowIds } },
+      OR: [...SKILL_READ_CANDIDATE_OR, ...TOOL_OUTPUT_TRUNCATION_QUERY_OR],
+    },
+    select: { turnId: true, toolCallId: true, toolName: true, argsJson: true, resultJson: true, startedAt: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  const truncByEventKey = skillReadTruncationsOf(readCalls);
+  const coverageByEventKey = skillReadCoveragesOf(readCalls, readEvents);
+
   const events: MergedSkillEventItem[] = [];
   const dispatches: MergedDispatchItem[] = [];
   const dispatchedSids = new Set<string>();
@@ -220,6 +250,8 @@ export async function collectScopeSkills(
           cacheWriteTokens: t.cacheWriteTokens,
         },
         member: member ? { taskId: member.taskId, label: member.label } : null,
+        outputTruncation: truncByEventKey.get(skillReadEventKey(t.id, se.skillName)) ?? null,
+        readCoverage: coverageByEventKey.get(skillReadEventKey(t.id, se.skillName)) ?? null,
       });
     }
   }

@@ -11,14 +11,19 @@
 // 区别只在头行的 ⚡ 前缀与 skill 名。状态 = 字色（不再药丸徽标）；Args /
 // Result 走发丝分节 + 长内容夹断（ExpandableText，与整页「一条滚动条」
 // 哲学一致——旧 max-h + overflow 滚动条退役）。三角唯一触发点契约保持。
-import { useState, useEffect, useRef } from "react"
+// 行内读取事实标记（ReadNotice）从原始参数 / 结果现算：工具输出截断（琥珀）、
+// 按行范围只读了 SKILL.md 的一段（中性「部分读取」）。
+import { Fragment, useState, useEffect, useMemo, useRef } from "react"
 import { ZapIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { CopyButton } from "./CopyButton"
 import { ExpandableText } from "./ExpandableText"
+import { OutputSeam, SkillReadChip } from "./ReadNotice"
 import { BLOCK, BLOCK_ROW, BLOCK_SUB, BLOCK_TRI } from "./detail-blocks"
 import { highlightKeyword, type TurnHighlight } from "@/lib/shared/highlight"
 import { toolCallErrorKind } from "@/lib/tool-call-errors"
+import { skillReadMarksOfCalls } from "@/lib/skill-content"
+import { splitOutputSeams, toolOutputTruncationOf } from "@/lib/tool-output-truncation"
 
 interface ToolCallItem {
   id: string
@@ -31,6 +36,8 @@ interface ToolCallItem {
   errorMessage: string | null
   durationMs: number
   isSkillRelated: boolean
+  /** 开始时刻（turn 详情 API 的 JSON 载荷为 ISO 字符串） */
+  startedAt?: string | null
 }
 
 interface ToolCallListProps {
@@ -70,6 +77,16 @@ function truncateJson(json: string | null, maxLen: number): string | null {
   return json.substring(0, maxLen) + `... (${json.length} chars total)`
 }
 
+/** 结果正文渲染：被判截断的结果把 harness 写入的截断痕迹衬出来（横幅在正文
+ *  开头、丢弃标记在接缝处），其余段落照常走搜索高亮 */
+function renderResultText(text: string, highlight: TurnHighlight | null | undefined, truncated: boolean) {
+  const terms = highlight?.terms ?? highlight?.keyword
+  if (!truncated) return highlightKeyword(text, terms)
+  return splitOutputSeams(text).map((seg, i) => seg.seam
+    ? <OutputSeam key={i}>{seg.text}</OutputSeam>
+    : <Fragment key={i}>{highlightKeyword(seg.text, terms)}</Fragment>)
+}
+
 function extractSkillLabel(argsJson: string | null): string | null {
   if (!argsJson) return null
   try {
@@ -83,6 +100,25 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [prevKw, setPrevKw] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  // 工具输出截断判定（原文 → 语义单点）：按调用记忆一次，展开/收起重渲染不重算
+  const truncationById = useMemo(
+    () => new Map(toolCalls.map(tc => [tc.id, toolOutputTruncationOf(tc.resultJson)])),
+    [toolCalls],
+  )
+  // 读取事实（原文 → 语义单点 skill-content 的调用级入口）：这次调用读到了多少
+  // SKILL.md——输出被截断标琥珀，命令自带行范围没读全标「部分读取」，读完 /
+  // 证明不了不标。与截断判定同模式：从原始参数 / 结果现算，collector / 离线内核 /
+  // 客户端三条数据路径天然同口径；文件总行数在本组调用范围内共享
+  const markById = useMemo(() => {
+    // 只投影引擎需要的字段：载荷经 JSON 往返后时间是字符串，引擎要 Date
+    const marks = skillReadMarksOfCalls(toolCalls.map(tc => ({
+      toolName: tc.toolName,
+      argsJson: tc.argsJson,
+      resultJson: tc.resultJson,
+      startedAt: tc.startedAt ? new Date(tc.startedAt) : null,
+    })))
+    return new Map(toolCalls.map((tc, i) => [tc.id, marks[i] ?? null]))
+  }, [toolCalls])
 
   const skillCalls = toolCalls.filter(tc => tc.isSkillRelated)
   const nonSkillCalls = toolCalls.filter(tc => !tc.isSkillRelated)
@@ -162,14 +198,17 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
         const isExpanded = expandedIds.has(tc.id)
         const displayState = toolCallDisplayState(tc.state, tc.errorType, tc.resultJson)
         const skillLabel = tc.isSkillRelated ? extractSkillLabel(tc.argsJson) : null
+        const truncation = truncationById.get(tc.id) ?? null
+        const mark = markById.get(tc.id) ?? null
 
         return (
-          <div key={tc.id} className={BLOCK}>
+          <div key={tc.id} className={BLOCK} data-tool-read-mark={mark?.kind}>
             <div className={cn(BLOCK_ROW, "text-sm")}>
               {tc.isSkillRelated && <ZapIcon className="size-3.5 shrink-0 text-amber-500" aria-hidden="true" />}
               <span className="font-medium truncate">{skillLabel ?? tc.toolName}</span>
               {skillLabel && <span className="text-xs text-muted-foreground shrink-0">{tc.toolName}</span>}
               <span className={cn("text-xs shrink-0", STATUS_TEXT[displayState.variant])}>{displayState.label}</span>
+              {mark && <SkillReadChip mark={mark} truncation={truncation} />}
               {tc.durationMs > 0 && (
                 <span className="text-xs text-muted-foreground tabular-nums shrink-0">{formatDuration(tc.durationMs)}</span>
               )}
@@ -220,7 +259,7 @@ export function ToolCallList({ toolCalls, highlight }: ToolCallListProps) {
                     </div>
                     <ExpandableText clampPx={200}>
                       <pre className="text-xs font-mono whitespace-pre-wrap break-words">
-                        {highlightKeyword(highlight?.keyword ? tc.resultJson : (truncateJson(tc.resultJson, 2000) ?? tc.resultJson), highlight?.terms ?? highlight?.keyword)}
+                        {renderResultText(highlight?.keyword ? tc.resultJson : (truncateJson(tc.resultJson, 2000) ?? tc.resultJson), highlight, truncation != null)}
                       </pre>
                     </ExpandableText>
                   </div>

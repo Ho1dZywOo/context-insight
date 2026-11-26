@@ -27,7 +27,13 @@ import {
 } from "@/components/observe/perf-shared";
 import { useSkillContent } from "@/components/observe/use-skill-content";
 import { SkillCoverageCard } from "@/components/observe/SkillCoverageCard";
+import { SkillSourceView } from "@/components/observe/SkillSourceView";
+import { SkillReadChip, SkillReadNote, TruncationAdviceView } from "@/components/observe/ReadNotice";
+import { toolOutputTruncationAdvice } from "@/lib/tool-output-truncation";
+import { skillReadMarkOf } from "@/lib/skill-content";
+import type { ReadCoverage } from "@/lib/skill-evidence";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
+import type { ToolOutputTruncation } from "@/lib/tool-output-truncation";
 import type { MouseEvent as ReactMouseEvent } from "react";
 
 export interface SkillsSkillItem {
@@ -63,6 +69,10 @@ export interface SkillsEventItem {
     cacheWriteTokens: number;
   };
   member: { taskId: string; label: string | null } | null;
+  /** 这一次读取的工具输出被运行环境截断（agent 未看到全文）；完整读取与旧载荷缺省为 null */
+  outputTruncation?: ToolOutputTruncation | null;
+  /** 这一次调用读到了多少 SKILL.md（full / partial / unproven）；无从判定与旧载荷缺省为 null */
+  readCoverage?: ReadCoverage | null;
 }
 
 export interface SkillsDispatchItem {
@@ -575,6 +585,31 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
     return taskId ? runMemberUrlFor(runId, taskId) : undefined;
   }, [runId, aggs, dispatchAggs, selected, dim]);
   const selAgg = dim === "skills" ? aggs.find(a => a.name === selected) ?? null : null;
+  // 逐次调用的读取结论（截断 / 部分读取 / 不标）：算一次，行内标记、说明行、
+  // 标题行计数共用同一份
+  const markOf = useMemo(
+    () => new Map(data.events.map(e => [e.id, skillReadMarkOf(e.outputTruncation, e.readCoverage)] as const)),
+    [data.events],
+  );
+  const markCounts = useMemo(() => {
+    const c = { truncated: 0, partial: 0 };
+    for (const ev of selAgg?.events ?? []) {
+      const mark = markOf.get(ev.id);
+      if (mark?.kind === "truncated") c.truncated += 1;
+      else if (mark?.kind === "partial") c.partial += 1;
+    }
+    return c;
+  }, [selAgg, markOf]);
+  // 明细卡的处置建议：卡内被截断的调用涉及哪些运行环境，有可调开关的才给。
+  // 每张卡一条常驻——逐次调用行只陈述事实，不逐行重复建议
+  const truncationAdvice = useMemo(() => {
+    for (const ev of selAgg?.events ?? []) {
+      if (markOf.get(ev.id)?.kind !== "truncated") continue;
+      const advice = ev.outputTruncation ? toolOutputTruncationAdvice(ev.outputTruncation.harness) : null;
+      if (advice) return advice;
+    }
+    return null;
+  }, [selAgg, markOf]);
   const selDispatchAgg = dim === "dispatch" ? dispatchAggs.find(a => a.name === selected) ?? null : null;
   const selMemberTaskId = dim === "skills"
     ? selAgg?.events.find(e => e.member?.taskId)?.member?.taskId ?? null
@@ -787,6 +822,22 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                           {selAgg.events.length > 0
                             ? `${selAgg.events.length} 次调用 · ${selAgg.memberCount} 成员 · Σ ${fmtTok(selAgg.totalTokens)} tok`
                             : `${selAgg.invocationCount} 次调用（会话聚合，无事件级记录）`}
+                          {markCounts.truncated > 0 && (
+                            <>
+                              {" · "}
+                              <span data-slot="skill-read-count" data-kind="truncated" className="text-amber-700 dark:text-amber-400">
+                                {markCounts.truncated} 次输出截断
+                              </span>
+                            </>
+                          )}
+                          {markCounts.partial > 0 && (
+                            <>
+                              {" · "}
+                              <span data-slot="skill-read-count" data-kind="partial">
+                                {markCounts.partial} 次部分读取
+                              </span>
+                            </>
+                          )}
                         </p>
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
@@ -794,7 +845,7 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                           <span
                             role="button"
                             tabIndex={0}
-                            title="查看 SKILL.md 全文（按首个归因成员的会话注入内容）"
+                            title="查看 SKILL.md 恢复出的内容（按首个归因成员的会话读取）；没恢复全时标出缺了哪些行"
                             className={cn(
                               "inline-flex cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-semibold transition-colors",
                               sc.content.has(selAgg.name) || sc.error.has(selAgg.name)
@@ -823,51 +874,68 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                       </div>
                     </div>
 
-                    {/* SKILL.md 全文（成员会话注入内容） */}
-                    {(sc.content.has(selAgg.name) || sc.error.has(selAgg.name)) && (
-                      <div className="mt-2 shrink-0 rounded-lg border border-emerald-600/20 bg-emerald-600/[0.04] p-2.5">
-                        {sc.error.get(selAgg.name) ? (
-                          <p className="text-xs text-destructive">Error: {sc.error.get(selAgg.name)}</p>
-                        ) : (
-                          <>
-                            <p className="mb-1 text-[11px] text-muted-foreground">
-                              SKILL.md · 来源 {sc.content.get(selAgg.name)?.source === "skill-tool" ? "Skill 工具注入" : sc.content.get(selAgg.name)?.source === "command" ? "命令注入" : sc.content.get(selAgg.name)?.source === "shell" ? "Shell 读取" : "Read 读取"} · {sc.content.get(selAgg.name)?.length} 字符
-                            </p>
-                            <pre className="max-h-60 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap break-words">{sc.content.get(selAgg.name)?.content}</pre>
-                          </>
-                        )}
-                      </div>
-                    )}
+                    {truncationAdvice && <TruncationAdviceView advice={truncationAdvice} collapsible className="mt-1.5 shrink-0" />}
+
+                    {/* SKILL.md 恢复出的内容。处置建议不在这里再给一份：上方已有每卡一条的
+                        折叠条；没恢复全时结论条多占的高度由正文区让出，卡片总高不变 */}
+                    {(sc.content.has(selAgg.name) || sc.error.has(selAgg.name)) && (() => {
+                      const loaded = sc.content.get(selAgg.name);
+                      const partial = loaded != null && !loaded.fullRead;
+                      return (
+                        <div className="mt-2 shrink-0 rounded-lg border border-emerald-600/20 bg-emerald-600/[0.04] p-2.5">
+                          {sc.error.get(selAgg.name) ? (
+                            <p className="text-xs text-destructive">Error: {sc.error.get(selAgg.name)}</p>
+                          ) : (
+                            <SkillSourceView
+                              content={loaded?.content ?? ""}
+                              evidence={loaded?.evidence}
+                              fullRead={Boolean(loaded?.fullRead)}
+                              source={loaded?.source}
+                              bodyClassName={partial ? "max-h-[9.5rem]" : "max-h-60"}
+                            />
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* 逐次调用：成员归因在这里披露（一行一个，不堆徽标） */}
                     <div className="mt-2 min-h-0 flex-1 divide-y divide-foreground/[0.05] overflow-y-auto">
-                      {selAgg.events.map(ev => (
-                        <div key={ev.id} className="flex items-center gap-2 py-1.5 text-xs">
-                          <span className="w-14 shrink-0 text-muted-foreground tabular-nums" title={ev.turnCreatedAt ?? "时间戳缺失"}>
-                            {ev.turnCreatedAt ? fmtClock(ev.turnCreatedAt) : `#${ev.turnIndex}`}
-                          </span>
-                          <span
-                            className={cn("size-1.5 shrink-0 rounded-full", ev.success ? "bg-emerald-600" : "bg-red-500")}
-                            title={ev.success ? "成功" : `失败：${ev.errorMessage ?? "未知错误"}`}
-                          />
-                          <span className="w-11 shrink-0 text-muted-foreground">{ev.eventType}</span>
-                          <span className="min-w-0 flex-1 truncate text-foreground/85" title={ev.member?.taskId}>{ev.member?.label ?? "—"}</span>
-                          <span className="shrink-0 text-muted-foreground tabular-nums" title="调用 turn 的 token">{fmtTok(ev.turnTokens.totalTokens)} tok</span>
-                          {ev.turnId ? (
-                            <button
-                              type="button"
-                              data-skill-jump={ev.turnId}
-                              title="跳转 turn 现场"
-                              onClick={() => onOpenTurn(ev.turnId!)}
-                              className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
-                            >
-                              <ArrowUpRightIcon className="size-3.5" />
-                            </button>
-                          ) : (
-                            <span className="inline-flex size-5 shrink-0" />
-                          )}
-                        </div>
-                      ))}
+                      {selAgg.events.map(ev => {
+                        // 读取结论单点 skillReadMarkOf：拿到全文 / 证明不了 → 不标；
+                        // 输出被截断 → 琥珀；命令自带行范围没读全 → 中性「部分读取」
+                        const mark = markOf.get(ev.id) ?? null;
+                        return (
+                          <div key={ev.id} className="py-1.5 text-xs" data-skill-event={ev.id} data-skill-read-mark={mark?.kind}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-14 shrink-0 text-muted-foreground tabular-nums" title={ev.turnCreatedAt ?? "时间戳缺失"}>
+                                {ev.turnCreatedAt ? fmtClock(ev.turnCreatedAt) : `#${ev.turnIndex}`}
+                              </span>
+                              <span
+                                className={cn("size-1.5 shrink-0 rounded-full", ev.success ? "bg-emerald-600" : "bg-red-500")}
+                                title={ev.success ? "成功" : `失败：${ev.errorMessage ?? "未知错误"}`}
+                              />
+                              <span className="w-11 shrink-0 text-muted-foreground">{ev.eventType}</span>
+                              <span className="min-w-0 flex-1 truncate text-foreground/85" title={ev.member?.taskId}>{ev.member?.label ?? "—"}</span>
+                              {mark && <SkillReadChip mark={mark} truncation={ev.outputTruncation} alongsideNote />}
+                              <span className="shrink-0 text-muted-foreground tabular-nums" title="调用 turn 的 token">{fmtTok(ev.turnTokens.totalTokens)} tok</span>
+                              {ev.turnId ? (
+                                <button
+                                  type="button"
+                                  data-skill-jump={ev.turnId}
+                                  title="跳转 turn 现场"
+                                  onClick={() => onOpenTurn(ev.turnId!)}
+                                  className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+                                >
+                                  <ArrowUpRightIcon className="size-3.5" />
+                                </button>
+                              ) : (
+                                <span className="inline-flex size-5 shrink-0" />
+                              )}
+                            </div>
+                            {mark && <SkillReadNote mark={mark} className="mt-0.5 pl-16" />}
+                          </div>
+                        );
+                      })}
                       {selAgg.events.length === 0 && (
                         <p className="py-3 text-center text-xs text-muted-foreground">该技能无事件级调用记录（仅会话聚合）。</p>
                       )}

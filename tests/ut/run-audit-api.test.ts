@@ -23,6 +23,8 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
+const FULL_EVIDENCE = { lineNumbers: [], fileLines: null, gaps: [], truncated: false, conflictLines: [], readCount: 1 }
+const recoveredDecl = (content: string) => ({ content, source: "skill-tool", length: content.length, fullRead: true, maxLine: null, evidence: FULL_EVIDENCE })
 const FAKE_REPORT = {
   skill_name: "rop-skill-x",
   transcripts: ["成员A.json", "成员B.json"],
@@ -42,8 +44,8 @@ const fakePrisma = {
 }
 vi.mock("@/lib/db", () => ({ prisma: fakePrisma }))
 
-const { recoverSkillBodyMock, llmExtractMock, buildRecordsMock, recoverAgentSystemMock, scanRootMock } = vi.hoisted(() => ({
-  recoverSkillBodyMock: vi.fn(),
+const { recoverDeclMock, llmExtractMock, buildRecordsMock, recoverAgentSystemMock, scanRootMock } = vi.hoisted(() => ({
+  recoverDeclMock: vi.fn(),
   llmExtractMock: vi.fn(),
   buildRecordsMock: vi.fn(),
   recoverAgentSystemMock: vi.fn(),
@@ -53,7 +55,7 @@ vi.mock("@/lib/sift-audit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/sift-audit")>()
   return {
     ...actual,
-    recoverSkillBody: recoverSkillBodyMock,
+    recoverSkillDeclaration: recoverDeclMock,
     buildStructuredRecords: buildRecordsMock,
   }
 })
@@ -191,7 +193,7 @@ beforeEach(() => {
         : null,
   )
   fakePrisma.interactionBridge.findMany.mockReset().mockResolvedValue([])
-  recoverSkillBodyMock.mockReset()
+  recoverDeclMock.mockReset()
   llmExtractMock.mockReset()
   buildRecordsMock.mockReset().mockImplementation(async (id: string) => [{ type: "user", text: `records-of-${id}`, ts: 0, parent_tool_use_id: null, agent: null }])
   recoverAgentSystemMock.mockReset().mockReturnValue(null)
@@ -200,7 +202,7 @@ beforeEach(() => {
 
 describe("run 级对账端点（多 --transcript 编排）", () => {
   it("skill 域 happy：全体成员各一个 transcript 文件 + 一次 spawn + result 事件带 _members", async () => {
-    recoverSkillBodyMock.mockImplementation(async (id: string) => (id === "cuid_a" ? "RECOVERED BODY X" : null))
+    recoverDeclMock.mockImplementation(async (id: string) => (id === "cuid_a" ? recoveredDecl("RECOVERED BODY X") : null))
     spawnMock.mockImplementation(happySpawn())
 
     const res = await callRoute({ kind: "skill", name: "rop-skill-x" })
@@ -210,6 +212,7 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
       stage: string
       report: { skill_name: string }
       _members?: Record<string, { taskId: string; label: string }>
+      _evidence?: unknown[]
     }>
     const last = events.at(-1)!
     expect(last.stage).toBe("result")
@@ -218,6 +221,8 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
       "成员A.json": { taskId: "ses_a", label: "成员A", framework: "opencode" },
       "成员B.json": { taskId: "ses_b", label: "成员B", framework: "opencode" },
     })
+    // 声明完整：不带证据项
+    expect(last._evidence).toBeUndefined()
 
     const [, args] = spawnMock.mock.calls[0]
     expect(args[0]).toBe("audit")
@@ -233,6 +238,25 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
     // 切段与定位开关
     expect(args[args.indexOf("--kind") + 1]).toBe("skill")
     expect(args).toContain("--turn-refs")
+  })
+
+  it("skill 域声明不完整（会话内读取被截断）→ result 事件回传 _evidence（缺口只走提示，不进物化正文）", async () => {
+    const evidence = {
+      lineNumbers: [1, 3], fileLines: 3, gaps: [{ from: 2, to: 2 }],
+      truncated: true, conflictLines: [], readCount: 1,
+    }
+    recoverDeclMock.mockImplementation(async (id: string) => (
+      id === "cuid_a" ? { ...recoveredDecl("L1\nL3"), fullRead: false, evidence } : null
+    ))
+    spawnMock.mockImplementation(happySpawn())
+
+    const res = await callRoute({ kind: "skill", name: "rop-skill-x" })
+    expect(res.status).toBe(200)
+    const events = (await readNdjson(res)) as Array<{ stage: string; _evidence?: Array<{ source: string; evidence: unknown }> }>
+    expect(events.at(-1)!._evidence).toEqual([{ source: "rop-skill-x", evidence }])
+    // 物化的声明文件只有已读行，没有任何缺口标记（sift 把正文整体交 LLM 抽指令）
+    expect(written.declaration).toContain("L1\nL3")
+    expect(written.declaration).not.toContain("未读到")
   })
 
   it("skill 域 --run 原生对账：源 bundle 在盘 → spawn 带 --run 无 --transcript，_members 由 report.run.units 权威映射", async () => {
@@ -260,7 +284,7 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
           },
         },
       })
-      recoverSkillBodyMock.mockImplementation(async (id: string) => (id === "cuid_a" ? "RECOVERED BODY X" : null))
+      recoverDeclMock.mockImplementation(async (id: string) => (id === "cuid_a" ? recoveredDecl("RECOVERED BODY X") : null))
       spawnMock.mockImplementation(
         happySpawn({
           ...FAKE_REPORT,
@@ -314,7 +338,7 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
   })
 
   it("skill 域 DB 回落：--kind 切片名按 stem 前缀回映射成员（findings.transcript 归因不丢）", async () => {
-    recoverSkillBodyMock.mockImplementation(async (id: string) => (id === "cuid_a" ? "RECOVERED BODY X" : null))
+    recoverDeclMock.mockImplementation(async (id: string) => (id === "cuid_a" ? recoveredDecl("RECOVERED BODY X") : null))
     const sliceName = "成员A-rop-skill-x-1-1.jsonl"
     spawnMock.mockImplementation(
       happySpawn({
@@ -341,7 +365,7 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
       index: null,
       meta: { schema: "insight-run-import", version: 1, data: { importedAt: "", sourceDir: path.join(os.tmpdir(), "rsd-gone-bundle"), manifestFile: "workflow.json", exportDataComplete: true, sessions: { total: 0, imported: 0, existing: 0, missingFile: 0, failed: 0 }, failures: [], warnings: [] } },
     })
-    recoverSkillBodyMock.mockImplementation(async (id: string) => (id === "cuid_a" ? "RECOVERED BODY X" : null))
+    recoverDeclMock.mockImplementation(async (id: string) => (id === "cuid_a" ? recoveredDecl("RECOVERED BODY X") : null))
     spawnMock.mockImplementation(happySpawn())
 
     const res = await callRoute({ kind: "skill", name: "rop-skill-x" })
@@ -353,7 +377,7 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
   })
 
   it("成员子集：只物化选中成员的 transcript", async () => {
-    recoverSkillBodyMock.mockResolvedValue("BODY")
+    recoverDeclMock.mockResolvedValue(recoveredDecl("BODY"))
     spawnMock.mockImplementation(happySpawn())
 
     const res = await callRoute({ kind: "skill", name: "rop-skill-x", members: ["ses_b"] })
@@ -373,7 +397,7 @@ describe("run 级对账端点（多 --transcript 编排）", () => {
   })
 
   it("skill 域：全体成员均恢复不到正文 → 404", async () => {
-    recoverSkillBodyMock.mockResolvedValue(null)
+    recoverDeclMock.mockResolvedValue(null)
     const res = await callRoute({ kind: "skill", name: "rop-skill-x" })
     expect(res.status).toBe(404)
     const body = (await res.json()) as { reason: string }

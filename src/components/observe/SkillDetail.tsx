@@ -20,6 +20,7 @@ import { SkillCoverageCard } from "@/components/observe/SkillCoverageCard"
 import { SkillContentAudit } from "@/components/observe/SkillContentAudit"
 import { BookOpenIcon } from "lucide-react"
 import { useSkillContent } from "@/components/observe/use-skill-content"
+import { SkillSourceView, skillSourceAdvice, skillSourceLabel } from "@/components/observe/SkillSourceView"
 import {
   Table,
   TableHeader,
@@ -631,45 +632,25 @@ export function SkillDetail({ taskId, sessionSkills, skillEvents, hasMainAgentWo
                               {sa.skillName} · SKILL.md
                               {skillContentData?.source && (
                                 <span className="text-muted-foreground">
-                                  （来源：{skillContentData.source === "skill-tool" ? "Skill 工具注入" : skillContentData.source === "command" ? "命令注入" : skillContentData.source === "shell" ? "Shell 读取" : "Read 读取"}，{skillContentData.length} 字符
-                                  {skillContentData.source === "read"
-                                    ? skillContentData.fullRead
-                                      ? "，判定全文·无 offset/limit"
-                                      : "，部分读取·有 offset/limit 或截断"
-                                    : "，框架注入全文"}
-                                  {skillContentData.maxLine != null && `，到第 ${skillContentData.maxLine} 行`}）
+                                  （来源：{skillSourceLabel(skillContentData.source)}，{skillContentData.length} 字符）
                                 </span>
                               )}
-                            </span>
-                            <span className="flex items-center gap-3">
-                              {skillContentData?.content && (
-                                <span
-                                  role="button"
-                                  className="text-xs font-medium text-blue-500 cursor-pointer hover:underline"
-                                  onClick={(e) => { e.stopPropagation(); sc.download(sa.skillName) }}
-                                >
-                                  Download
-                                </span>
-                              )}
-                              <span
-                                role="button"
-                                title="收起"
-                                className="text-muted-foreground cursor-pointer hover:text-foreground text-sm leading-none px-1"
-                                onClick={(e) => { e.stopPropagation(); sc.clear(sa.skillName) }}
-                              >
-                                ×
-                              </span>
                             </span>
                           </div>
                           <div className="text-[11px] text-muted-foreground leading-snug">
-                            按时间顺序取本会话内该 skill 的注入内容或 SKILL.md 读取结果；若多次加载，取最长版本。仅含已采集内容，非运行时实时文件。
+                            注入内容若多次加载取最长版本；Read/Shell 读取按文件行号合并，只含会话中确实读到的行，缺了哪些行在正文里以标记行标出。仅含已采集内容，非运行时实时文件。
                           </div>
                           {skillContentError ? (
                             <div className="text-xs text-destructive">Error: {skillContentError}</div>
                           ) : skillContentData?.content ? (
-                            <pre className="max-h-[28rem] overflow-auto rounded border bg-background p-2 text-xs font-mono whitespace-pre-wrap break-words">
-                              {skillContentData.content}
-                            </pre>
+                            <SkillSourceView
+                              content={skillContentData.content}
+                              evidence={skillContentData.evidence}
+                              fullRead={skillContentData.fullRead}
+                              source={skillContentData.source}
+                              advice={skillSourceAdvice(skillContentData.source)}
+                              bodyClassName="max-h-[28rem]"
+                            />
                           ) : (
                             <div className="text-xs text-muted-foreground">未采集到该 skill 的 SKILL.md 内容（本会话可能未通过 Skill 工具加载或读取 SKILL.md）。</div>
                           )}

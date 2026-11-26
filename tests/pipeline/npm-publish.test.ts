@@ -97,7 +97,7 @@ describe("npm publish readiness (npm pack --dry-run)", () => {
     expect(leaked, `以下文件不应进包: ${leaked.join(", ")}`).toEqual([])
   }, 120_000)
 
-  it("产物文件数哨兵：≤ 600（2026-10 develop 线源码自然增长至 ~552：run-first 统一工作台 12 tab + collectors/session-handlers 平移 + 性能层；暴涨说明构建垃圾混入——曾混入 E2E 泄漏的 home/ 构建树 29MB）", () => {
+  it("产物文件数哨兵：≤ 650（2026-10 develop 线源码自然增长至 ~552：run-first 统一工作台 12 tab + collectors/session-handlers 平移 + 性能层；2026-11 v1.0.7 线到 600，Skills 恢复正文单一展示面 SkillSourceView +1 → 601，上限放到 650——核过包内 601 = 已跟踪源码 + 该一个文件，无夹带；暴涨说明构建垃圾混入——曾混入 E2E 泄漏的 home/ 构建树 29MB）", () => {
     const r = spawnSync("npm", ["pack", "--dry-run", "--json"], {
       cwd: PKG_DIR, encoding: "utf8", timeout: 120_000,
     })
@@ -105,7 +105,7 @@ describe("npm publish readiness (npm pack --dry-run)", () => {
     const parsed = parsePackJson(r.stdout as string)
     expect(parsed.length).toBe(1)
     expect(parsed[0].entryCount).toBeGreaterThan(300)
-    expect(parsed[0].entryCount).toBeLessThanOrEqual(600)
+    expect(parsed[0].entryCount).toBeLessThanOrEqual(650)
   }, 120_000)
 
   it("package.json 发布就绪：无 private、版本单轨、bin 与 postinstall 齐备", () => {

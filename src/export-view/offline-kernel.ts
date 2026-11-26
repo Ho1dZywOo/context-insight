@@ -18,7 +18,7 @@
 
 import { matchTurnSearch, type TurnSearchRow } from "@/lib/observe/collectors/search"
 import { selectInputContextTurns, toWireOrder, buildInputMessages, type PriorTurnRef } from "@/lib/ingest/input-reconstruct"
-import { summarizeToolCallErrors, toolCallErrorMessage, toolCallErrorKind, type TurnErrorDigest } from "@/lib/tool-call-errors"
+import { buildTurnErrorDigest, type TurnErrorDigest } from "@/lib/tool-call-errors"
 
 /** 成员富轮档案项：member-turns 端点 includeContent+includeToolDetail+
  * includeMeta 响应项的结构投影（超集字段容忍缺省） */
@@ -199,31 +199,10 @@ export function mergedItemsOf(members: OfflineMemberTurns[]): MergedItem[] {
   return out
 }
 
-/** 轮级错误摘要（collector 的 includeErrorDigest 预算同口径：错误调用超集
- *  过滤 + 共享 summarize/toolCallErrorMessage 单点） */
+/** 轮级摘要（collector 的 includeErrorDigest 预算同口径：成员富轮档案带全部
+ *  原文，直接交共享 buildTurnErrorDigest——错误与工具输出截断同一判别） */
 function errorDigestOf(it: MemberTurnItem): TurnErrorDigest | null {
-  // 错误判别走 tool-call-errors 单点（此前内联 claude 词表副本，codex 形态漏判）
-  const errCalls = it.toolCalls.filter(tc => toolCallErrorKind(tc) != null)
-  const skillFail = it.skillEvents.some(se => !se.success && se.errorMessage != null)
-  const truncated = it.finishReason === "length" || it.finishReason === "max_tokens"
-  if (errCalls.length === 0 && !skillFail && !truncated) return null
-  const patched = it.toolCalls.map(tc => {
-    const err = errCalls.find(c => c.toolCallId === tc.toolCallId)
-    return err != null
-      ? { toolName: tc.toolName, state: tc.state, errorType: err.errorType, errorMessage: err.errorMessage, resultJson: err.resultJson }
-      : tc
-  })
-  const summary = summarizeToolCallErrors(patched, it.skillEvents, it.finishReason)
-  if (summary.total === 0) return null
-  return {
-    ...summary,
-    messages: patched
-      .map(tc => ({ toolName: tc.toolName, message: toolCallErrorMessage(tc) }))
-      .filter(m => m.message !== ""),
-    skillMessages: it.skillEvents
-      .filter(se => !se.success && se.errorMessage != null)
-      .map(se => ({ skillName: se.skillName, message: (se.errorMessage ?? "").substring(0, 60) })),
-  }
+  return buildTurnErrorDigest(it.toolCalls, it.skillEvents, it.finishReason)
 }
 
 // —— 合成器①：run turns 分页 ————————————————————————————

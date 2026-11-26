@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { BookOpenIcon } from "lucide-react"
 import { useSkillContent } from "@/components/observe/use-skill-content"
+import { SkillSourceView, skillSourceAdvice, skillSourceLabel } from "@/components/observe/SkillSourceView"
 import type { ViewUrlFor } from "@/lib/observe/member-url"
 
 function truncateVisual(str: string, maxWidth: number): string {
@@ -323,7 +324,7 @@ function SkillsPerAgentChart({ taskId, skillEvents, urlFor }: SkillChartsProps) 
                                   {skill.name} · SKILL.md
                                   {contentData?.source && (
                                     <span className="text-muted-foreground">
-                                      （{contentData.source === "skill-tool" ? "Skill 工具注入" : contentData.source === "command" ? "命令注入" : contentData.source === "shell" ? "Shell 读取" : "Read 读取"}，{contentData.length} 字符）
+                                      （{skillSourceLabel(contentData.source)}，{contentData.length} 字符）
                                     </span>
                                   )}
                                 </span>
@@ -340,9 +341,14 @@ function SkillsPerAgentChart({ taskId, skillEvents, urlFor }: SkillChartsProps) 
                               {contentError ? (
                                 <div className="text-[11px] text-destructive">Error: {contentError}</div>
                               ) : contentData?.content ? (
-                                <pre className="max-h-72 overflow-auto rounded border bg-background p-2 text-[11px] font-mono whitespace-pre-wrap break-words">
-                                  {contentData.content}
-                                </pre>
+                                <SkillSourceView
+                                  content={contentData.content}
+                                  evidence={contentData.evidence}
+                                  fullRead={contentData.fullRead}
+                                  source={contentData.source}
+                                  advice={skillSourceAdvice(contentData.source)}
+                                  bodyClassName="max-h-72"
+                                />
                               ) : (
                                 <div className="text-[11px] text-muted-foreground">未采集到该 skill 的 SKILL.md 内容。</div>
                               )}

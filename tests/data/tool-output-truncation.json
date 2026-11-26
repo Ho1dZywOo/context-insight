@@ -1,0 +1,96 @@
+{
+  "description": "工具输出截断形态数据集（真库形态脱敏）：expect 非空 = 判定为 harness 截断；expect 为 null = 不算截断（正文引用 / 非固定位置 / 无横幅的零散标记）。每个 case 落成一次工具调用，经 run turns API 的轮级摘要验证。",
+  "cases": [
+    {
+      "key": "codex-native",
+      "toolName": "exec_command",
+      "state": "completed",
+      "result": "Warning: truncated output (original token count: 2707)\nTotal output lines: 96\n\n---\nname: demo-skill\n---\n第 1 行\n…217 chars truncated…\n第 95 行\n第 96 行\n",
+      "expect": { "harness": "codex", "originalTokens": 2707, "totalLines": 96, "shownLines": null }
+    },
+    {
+      "key": "codex-bytes-omitted",
+      "toolName": "exec_command",
+      "state": "completed",
+      "result": "Warning: truncated output (original token count: 275875)\n... 54921 bytes omitted ...\n\n## uninstall\nFound existing installation: demo 0.1.0\n",
+      "expect": { "harness": "codex", "originalTokens": 275875, "totalLines": null, "shownLines": null }
+    },
+    {
+      "key": "codex-proxy-shell",
+      "toolName": "exec_command",
+      "state": "completed",
+      "result": "Chunk ID: cac74b\nWall time: 6.7876 seconds\nProcess exited with code 0\nOriginal token count: 9164\nOutput:\nWarning: truncated output (original token count: 9164)\nTotal output lines: 170\n\n/home/demo/repo\n…4300 chars truncated…\nPLAN.md\nREADME.md\n",
+      "expect": { "harness": "codex", "originalTokens": 9164, "totalLines": 170, "shownLines": null }
+    },
+    {
+      "key": "codex-proxy-stream",
+      "toolName": "exec_command",
+      "state": "completed",
+      "result": "Chunk ID: 1f00\nWall time: 0.1 seconds\nProcess running with session ID 7\nOutput:\nChunk ID: 1f01\nWall time: 2.0 seconds\nProcess exited with code 0\nOriginal token count: 5000\nOutput:\nWarning: truncated output (original token count: 5000)\nTotal output lines: 40\n\nhead\n…900 tokens truncated…\ntail\n",
+      "expect": { "harness": "codex", "originalTokens": 5000, "totalLines": 40, "shownLines": null }
+    },
+    {
+      "key": "opencode-tail",
+      "toolName": "shell",
+      "state": "completed",
+      "result": "trace/meta/group/vf.md\ntrace/intermediate/group/vf.md\n\n\n[showing lines 19-34 of 34; full output saved to /home/demo/.local/share/opencode/shell/global/sh_13f4b4fc0001ILfWZcERfDrw9j.out]",
+      "expect": { "harness": "opencode", "originalTokens": null, "totalLines": 34, "shownLines": { "from": 19, "to": 34 } }
+    },
+    {
+      "key": "opencode-tail-exit",
+      "toolName": "webfetch",
+      "state": "completed",
+      "result": ">     return y1, y2, x_out\n\n\n[showing lines 594-962 of 962; full output saved to /home/demo/.local/share/opencode/shell/global/sh_13f4b.out]\nExited with code 1",
+      "expect": { "harness": "opencode", "originalTokens": null, "totalLines": 962, "shownLines": { "from": 594, "to": 962 } }
+    },
+    {
+      "key": "quote-line-start",
+      "toolName": "shell",
+      "state": "completed",
+      "result": "=== 头 300 字 ===\nWarning: truncated output (original token count: 9164)\nTotal output lines: 170\n/home/demo/repo\n",
+      "expect": null
+    },
+    {
+      "key": "quote-inline",
+      "toolName": "shell",
+      "state": "completed",
+      "result": "{\"tool\": \"exec_command\", \"r\": \"Chunk ID: cac74b\\nWall time: 6.7876 seconds\\nProcess exited with code 0\\nOriginal token count: 9164\\nOutput:\\nWarning: truncated output (original token count: 9164)\\nTota\"}",
+      "expect": null
+    },
+    {
+      "key": "quote-source-comment",
+      "toolName": "shell",
+      "state": "completed",
+      "result": "19://   resultJson = \"Warning: truncated output (original token count: N)\\n\n20://                Total output lines: M\\n\\n\" + 头段 + \"…K chars|tokens truncated…\" + 尾段\n",
+      "expect": null
+    },
+    {
+      "key": "marker-without-banner",
+      "toolName": "exec_command",
+      "state": "error",
+      "result": "exec_command failed: CreateProcess { message: \"Rejected(\\\"`rm -f a b; nohup bash -c '\\nset -euo pipefail\\nVENV=/x…1857 chars truncated… \\\"HYGIENE PASS\\\"\")",
+      "expect": null
+    },
+    {
+      "key": "opencode-notice-not-tail",
+      "toolName": "shell",
+      "state": "completed",
+      "result": "[showing lines 1-5 of 9; full output saved to /home/demo/sh_abc.out]\n后续正文",
+      "expect": null
+    },
+    {
+      "key": "opencode-notice-quoted",
+      "toolName": "shell",
+      "state": "completed",
+      "result": "--- shapes ---\n   28 \"[showing lines N-N of N; full output saved to <path>]\"\ns_truncated_mid sessions 2\n[showing lines 19-34 of 34; full output saved to /home/demo/sh_13f4b4fc.out]\\\"\"]\n后续 dump",
+      "expect": null
+    },
+    {
+      "key": "plain",
+      "toolName": "exec_command",
+      "state": "completed",
+      "result": "all good\nnothing truncated here\n",
+      "expect": null
+    }
+  ]
+}

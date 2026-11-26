@@ -8,9 +8,10 @@
 
 import { spawn } from "node:child_process";
 import type { PrismaClient } from "@prisma/client";
-import type { AuditLayerInfo } from "./sift-audit-types";
+import type { AuditDeclarationEvidence, AuditLayerInfo } from "./sift-audit-types";
 import {
   assembleCombinedDeclaration,
+  declarationEvidenceOf,
   extractFileContent,
   extractFilePath,
   isSkillInvokeToolCall,
@@ -19,11 +20,12 @@ import {
 } from "./sift-audit";
 // SKILL.md 正文候选走 skill-content 三通道单点（skill-tool / Read / shell）——
 // codex 无 read 工具，cat 读 SKILL.md 同样入规程候选，词表与摄取/恢复侧共用。
-import { skillMdReadsOfToolCall, skillMdReadsOfTurn } from "./skill-content";
+import { skillMdReadsOfToolCall, skillMdReadsOfTurn, selectFromSkillReads, type SkillMdRead } from "./skill-content";
+import { describeLineEvidence, sameDeclarationFile, type LineEvidence } from "./skill-evidence";
 import { isShellToolCall, SHELL_TOOL_DB_NAMES } from "./tool-conventions";
 // shell 隐式读（cat/sed 等）的文件归因引擎——与 skill-content shell 通道同源；
 // codex 无 read 工具，计划/规程文件此前只认 Read 词表 → 全灭。
-import { restoreShellReads, renderShellEntryText } from "./shell-restore";
+import { restoreShellReads, shellEntryCoverage } from "./shell-restore";
 import { extractShellFileReads } from "./file-reads";
 import { logError } from "@/lib/logger";
 
@@ -94,6 +96,8 @@ export interface WorkflowExtractCandidate {
   checkboxCount?: number;
   /** 完整路径（basename 撞名时 source 扩为「父目录/文件名」，其余时候不展示）。 */
   pathHint?: string;
+  /** 候选不完整时的行级证据（来源为会话内行号读取：覆盖了哪些行、缺哪些行）。 */
+  evidence?: LineEvidence;
 }
 
 export interface WorkflowExtractCandidates {
@@ -128,6 +132,8 @@ interface LlmExtractJob {
   content: string | null;
   source: string | null;
   error: string | null;
+  /** 所选声明不完整时的行级证据（完整时缺省）。 */
+  evidence?: AuditDeclarationEvidence[];
   promise: Promise<void> | null;
 }
 const extractJobs = new Map<string, LlmExtractJob>();
@@ -160,7 +166,7 @@ export function getOrStartLlmExtract(
   job.promise = (async () => {
     try {
       const decl = await llmExtractWorkflowDeclaration(sessionId, prisma);
-      if (decl) { job.content = decl.content; job.source = decl.source; }
+      if (decl) { job.content = decl.content; job.source = decl.source; job.evidence = decl.evidence; }
       else { job.error = "LLM 提取无输出（无候选/选择无效）"; }
     } catch (e) { job.error = e instanceof Error ? e.message : String(e); }
     finally { job.loading = false; }
@@ -195,7 +201,7 @@ export async function llmExtractWorkflowDeclaration(
   sessionId: string,
   prisma: PrismaClient,
   runner: LlmRunner = runClaudeCli,
-): Promise<{ content: string; source: string; layers: AuditLayerInfo[] } | null> {
+): Promise<{ content: string; source: string; layers: AuditLayerInfo[]; evidence: AuditDeclarationEvidence[] } | null> {
   const candidates = await collectWorkflowExtractCandidates(sessionId, prisma);
   if (candidates.regulation.length === 0 && candidates.plan.length === 0) {
     console.log('[llm-workflow-extract] no candidates collected');
@@ -218,7 +224,12 @@ export async function llmExtractWorkflowDeclaration(
     logError('workflow-extract', 'selection parsed to no layers', { output: result.text.slice(0, 300) });
     return null;
   }
-  return assembleCombinedDeclaration(layers);
+  const evidence = layers
+    .map(l => declarationEvidenceOf(l.source, l.label, l.evidence ? { fullRead: false, evidence: l.evidence } : null))
+    .filter((e): e is AuditDeclarationEvidence => e != null);
+  const assembled = assembleCombinedDeclaration(layers);
+  if (!assembled) return null;
+  return { ...assembled, evidence };
 }
 
 /**
@@ -272,9 +283,12 @@ export async function collectWorkflowExtractCandidates(
 
   const regCandidates: WorkflowExtractCandidate[] = [];
   const contextLines: string[] = [];
+  // 窗口内对 SKILL.md 的全部读取（skill-tool / Read / shell / 斜杠命令注入）——同一
+  // SKILL.md 的多个截断片段、行范围读在窗口结束后按行号合并为一个候选
+  const skillReads: SkillMdRead[] = [];
   // 窗口内文件读（Read/shell 隐式读）按路径分组 → 每文件首份实质快照
   // （同文件多次/多通道读不重复占席——overlay_flow 两段部分读此前吃掉 2 个候选位）。
-  const regFileSnaps = new Map<string, Array<{ content: string; partialRead: boolean }>>();
+  const regFileSnaps = new Map<string, Array<{ content: string; partialRead: boolean; evidence?: LineEvidence }>>();
   if (turns.length > 0) {
     // 步骤 1：窗口内工具调用的轻量元数据（不含 resultJson）
     const regMeta = await prisma.toolCall.findMany({
@@ -316,18 +330,7 @@ export async function collectWorkflowExtractCandidates(
       // 现场缺口：day0-inference 会话 19823 字注入体落在 turnIndex=1 的 system 轮，
       // 此前收集只认 turnIndex===0 → 规程候选仅剩 373 字命令壳，正文缺席。
       const injReads = skillMdReadsOfTurn(t);
-      for (const read of injReads) {
-        const content = stripSkillRuntimeTail(read.content);
-        if (content.length >= CANDIDATE_MIN_CHARS) {
-          regCandidates.push({
-            id: "",
-            layer: "regulation",
-            source: `${read.skillName} (SKILL.md)`,
-            content,
-            partialRead: false,
-          });
-        }
-      }
+      skillReads.push(...injReads);
       // S1（role=user 注入，无标记老形态）与泛化大文本的 turn0 兜底——注入轮已被
       // 上面通道以真名收录（同一正文不重复收两份）
       if (
@@ -348,19 +351,8 @@ export async function collectWorkflowExtractCandidates(
         // SKILL.md 正文候选（skillMdReadsOfToolCall 三通道单点；skill-tool 通道
         // 的 <skill_content> 剥壳在此前实现里，现统一走 skill-content）
         const mdReads = skillMdReadsOfToolCall(tc);
-        if (mdReads.length > 0) {
-          for (const read of mdReads) {
-            if (read.content.length >= CANDIDATE_MIN_CHARS) {
-              regCandidates.push({
-                id: "",
-                layer: "regulation",
-                source: `${read.skillName} (SKILL.md)`,
-                content: read.content,
-                partialRead: !read.fullRead,
-              });
-            }
-          }
-        } else if (tc.toolName.toLowerCase() === "read") {
+        if (mdReads.length > 0) skillReads.push(...mdReads);
+        if (mdReads.length === 0 && tc.toolName.toLowerCase() === "read") {
           const ex = extractFileContent(tc);
           if (ex && ex.content.length >= CANDIDATE_MIN_CHARS && ex.basename) {
             const key = extractFilePath(tc.argsJson) ?? ex.basename;
@@ -371,16 +363,34 @@ export async function collectWorkflowExtractCandidates(
         } else if (isShellToolCall(tc.toolName)) {
           // shell 隐式读（cat/sed 等）：.md/.txt 规程材料（flow 模板等）入候选
           for (const entry of restoreShellReads(tc.argsJson, tc.resultJson)) {
+            // 同一命令里读到的 SKILL.md 已走技能候选，不再作为文件候选重复入列；
+            // 命令里其余的规程文件照常入列（此前读到 SKILL.md 的命令整条被技能分支独占）
+            if (mdReads.some((r) => r.filePath != null && sameDeclarationFile(r.filePath, entry.filePath))) continue;
             const base = basenameOf(entry.filePath);
             if (!PLAN_FILE_EXTENSIONS.some((e) => base.toLowerCase().endsWith(e))) continue;
-            const { content, maxLine, covered } = renderShellEntryText(entry);
+            const { content, evidence, complete } = shellEntryCoverage(entry);
             if (content.length < CANDIDATE_MIN_CHARS) continue;
             const arr = regFileSnaps.get(entry.filePath) ?? [];
-            arr.push({ content, partialRead: covered < maxLine });
+            arr.push({ content, partialRead: !complete, evidence });
             regFileSnaps.set(entry.filePath, arr);
           }
         }
       }
+    }
+    // SKILL.md → 规程候选（每技能一份：多段读取按行号合并，只含确实读到的行；
+    // 此前每次读取各占一个候选，截断片段之间互相竞争、入选的只是残篇且无标记）
+    const skillNames = [...new Set(skillReads.map(r => r.skillName))];
+    for (const skillName of skillNames) {
+      const merged = selectFromSkillReads(skillReads, skillName);
+      if (!merged || merged.content.length < CANDIDATE_MIN_CHARS) continue;
+      regCandidates.push({
+        id: "",
+        layer: "regulation",
+        source: `${skillName} (SKILL.md)`,
+        content: merged.content,
+        partialRead: !merged.fullRead,
+        evidence: merged.fullRead ? undefined : merged.evidence,
+      });
     }
     // 文件分组 → 规程候选（每文件首份实质读取，首触时序）
     for (const [fp, snaps] of regFileSnaps) {
@@ -392,6 +402,7 @@ export async function collectWorkflowExtractCandidates(
         source: basenameOf(fp),
         content: best.content,
         partialRead: best.partialRead,
+        evidence: best.partialRead ? best.evidence : undefined,
         pathHint: fp,
       });
     }
@@ -428,16 +439,16 @@ export async function collectWorkflowExtractCandidates(
     resultJson: planResultById.get(tc.id) ?? null,
   }));
 
-  const fileGroups = new Map<string, Array<{ content: string; partialRead: boolean; op: "read" | "write" }>>();
+  const fileGroups = new Map<string, Array<{ content: string; partialRead: boolean; evidence?: LineEvidence; op: "read" | "write" }>>();
   for (const tc of planTcs) {
     if (isShellToolCall(tc.toolName)) {
       for (const entry of restoreShellReads(tc.argsJson, tc.resultJson)) {
         const base = basenameOf(entry.filePath);
         if (!PLAN_FILE_EXTENSIONS.some((e) => base.toLowerCase().endsWith(e))) continue;
-        const { content, maxLine, covered } = renderShellEntryText(entry);
+        const { content, evidence, complete } = shellEntryCoverage(entry);
         if (content.length < CANDIDATE_MIN_CHARS) continue;
         const arr = fileGroups.get(entry.filePath) ?? [];
-        arr.push({ content, partialRead: covered < maxLine, op: "read" });
+        arr.push({ content, partialRead: !complete, evidence, op: "read" });
         fileGroups.set(entry.filePath, arr);
       }
       continue;
@@ -469,6 +480,7 @@ export async function collectWorkflowExtractCandidates(
       source: basenameOf(fp),
       content: best.content,
       partialRead: best.partialRead,
+      evidence: best.partialRead ? best.evidence : undefined,
       readCount: snaps.filter((s) => s.op === "read").length,
       writeCount: snaps.filter((s) => s.op === "write").length,
       checkboxCount: (best.content.match(/^\s*[-*]\s*\[[ xX]\]/gm) ?? []).length,
@@ -607,7 +619,7 @@ function formatCandidateBlock(c: WorkflowExtractCandidate): string {
   const preview = c.content.slice(0, PREVIEW_MAX_CHARS);
   const ellipsis = c.content.length > PREVIEW_MAX_CHARS ? `…（节选，全文 ${c.content.length} 字）` : "";
   const marks = [
-    c.partialRead ? "部分读取" : null,
+    c.partialRead ? `部分读取${c.evidence ? `（${describeLineEvidence(c.evidence, false).summary}，缺口处的指令不在正文内）` : ""}` : null,
     c.readCount && c.readCount > 1 ? `被读 ${c.readCount} 次` : null,
     c.layer === "plan" && c.writeCount != null
       ? c.writeCount > 0
@@ -646,7 +658,7 @@ export function parseCandidateSelection(
   const layers: AuditLayerInfo[] = [];
   const reg = candidates.regulation.find((c) => c.id === sel.regulation);
   if (reg) {
-    layers.push({ kind: "regulation", label: "编排规程", source: reg.source, content: reg.content });
+    layers.push({ kind: "regulation", label: "编排规程", source: reg.source, content: reg.content, evidence: reg.evidence });
   }
   const plan = candidates.plan.find((c) => c.id === sel.plan);
   if (plan && plan.content !== reg?.content) {
@@ -655,6 +667,7 @@ export function parseCandidateSelection(
       label: "任务计划",
       source: plan.source,
       content: plan.content.replace(/\[x\]/g, "[ ]"),
+      evidence: plan.evidence,
     });
   }
   return layers;

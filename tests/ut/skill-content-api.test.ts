@@ -145,16 +145,17 @@ describe('skill-content API', () => {
     expect(json.fullRead).toBe(true);
   });
 
-  it('exec_command 行范围读取（sed -n）标记非全文', async () => {
+  it('exec_command 行范围读取（sed -n）读满范围：文件可能更长 → 非全文，尾部未知', async () => {
     const taskId = `skill-content-shell-partial-${Date.now()}`;
     const { turn } = await seedSession(taskId);
+    const lines50 = Array.from({ length: 50 }, (_, i) => `L${i + 1}`).join('\n');
     await prisma.toolCall.create({
       data: {
         turnId: turn.id,
         toolCallId: 'c1',
         toolName: 'exec_command',
         argsJson: JSON.stringify({ cmd: "sed -n '1,50p' /s/foo/SKILL.md" }),
-        resultJson: '# Foo 前 50 行',
+        resultJson: lines50,
         isSkillRelated: true,
         startedAt: new Date('2026-01-01T00:00:00Z'),
       },
@@ -165,6 +166,34 @@ describe('skill-content API', () => {
     const json = await res.json();
     expect(json.source).toBe('shell');
     expect(json.fullRead).toBe(false);
+    // 范围读满：1..50 行都在，但文件尾部是否读完无从证明
+    expect(json.evidence).toMatchObject({ fileLines: null, gaps: [], truncated: false });
+    expect(json.evidence.lineNumbers).toHaveLength(50);
+    expect(json.evidence.lineNumbers[49]).toBe(50);
+  });
+
+  it('exec_command 行范围读取的范围超过文件长度：输出短于范围即证明读到文件尾 → 全文', async () => {
+    const taskId = `skill-content-shell-range-eof-${Date.now()}`;
+    const { turn } = await seedSession(taskId);
+    await prisma.toolCall.create({
+      data: {
+        turnId: turn.id,
+        toolCallId: 'c1',
+        toolName: 'exec_command',
+        argsJson: JSON.stringify({ cmd: "sed -n '2,50p' /s/foo/SKILL.md" }),
+        resultJson: 'L2\nL3',
+        isSkillRelated: true,
+        startedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+    });
+
+    const res = await GET(makeRequest(taskId, 'foo'));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.content).toBe('L2\nL3');
+    // 文件到第 3 行为止；第 1 行不在本次读取范围内 → 仍不是完整声明
+    expect(json.fullRead).toBe(false);
+    expect(json.evidence).toMatchObject({ fileLines: 3, gaps: [{ from: 1, to: 1 }], lineNumbers: [2, 3] });
   });
 
   it('shell 命令混读多技能（cat a b）：归因不可判定 → 双双诚实 null（宁缺毋假）', async () => {

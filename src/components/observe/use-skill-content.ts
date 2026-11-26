@@ -8,6 +8,7 @@
 
 import { useState, useCallback } from "react"
 import { sessionViewUrlFor, type ViewUrlFor } from "@/lib/observe/member-url"
+import type { LineEvidence } from "@/lib/skill-evidence"
 
 export interface SkillContentResponse {
   skillName: string
@@ -16,6 +17,8 @@ export interface SkillContentResponse {
   length: number
   fullRead: boolean
   maxLine: number | null
+  /** 行级证据：覆盖了哪些行、缺哪些行、读取是否被截断；注入通道无行号语义 */
+  evidence?: LineEvidence | null
   /** agent .md 来源：system=会话恢复（子代理运行时 system 注入的声明原文，主路径），disk=磁盘扫描（兜底） */
   via?: "system" | "disk" | null
 }

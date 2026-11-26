@@ -12,6 +12,9 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { CheckCircle2Icon, AlertCircleIcon, BookOpenIcon, Loader2Icon } from "lucide-react"
 import { useSkillContentAudit, type SkillContentAuditItem } from "@/components/observe/use-skill-content-audit"
 import type { ViewUrlFor } from "@/lib/observe/member-url"
+import { describeLineEvidence } from "@/lib/skill-evidence"
+import { CODEX_LIMIT_ADVICE } from "@/lib/tool-output-truncation"
+import { skillSourceLabel } from "@/components/observe/SkillSourceView"
 
 interface SkillContentAuditProps {
   taskId: string
@@ -78,8 +81,8 @@ export function SkillContentAudit({ taskId, skillNames, onView, urlFor }: SkillC
             Skill 加载校验
           </span>
           <span className="text-xs text-muted-foreground">
-            检查每个 skill 是否在会话内读取了完整 SKILL.md：Skill 工具注入即全文；Read 需无 offset/limit 且无截断标记才判为全文，否则为部分读取
-          </span>
+            检查每个 skill 是否在会话内读到完整 SKILL.md：Skill 工具注入即全文；Read/Shell 读取需文件总行数可知且每行都有可靠内容才判为全文，否则为部分读取并标出未读的行
+            </span>
           {fullCount > 0 && <Badge variant="green" className="text-xs">{fullCount} 全文</Badge>}
           {partialCount > 0 && <Badge variant="orange" className="text-xs">{partialCount} 部分</Badge>}
           {missCount > 0 && <Badge variant="gray" className="text-xs">{missCount} 未读</Badge>}
@@ -94,13 +97,16 @@ export function SkillContentAudit({ taskId, skillNames, onView, urlFor }: SkillC
               : st === "partial"
                 ? "border-orange-500/40 bg-orange-500/10 text-orange-700 dark:text-orange-300 hover:bg-orange-500/20"
                 : "border-zinc-400/40 bg-zinc-400/10 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-400/20"
+            const channel = skillSourceLabel(item.source)
+            const notice = describeLineEvidence(item.evidence, item.fullRead, item.source === "shell" ? CODEX_LIMIT_ADVICE : "")
+            const injected = item.source === "skill-tool" || item.source === "command"
             const tip = st === "full"
-              ? (item.source === "skill-tool" || item.source === "command"
-                  ? `全文 · ${item.source === "command" ? "命令注入" : "Skill 工具注入"}（框架注入完整 SKILL.md）· ${item.length} 字符 / ${item.lines} 行`
-                  : `判定全文 · ${item.source === "shell" ? "Shell 读取（读类命令无行范围）" : "Read 读取，无 offset/limit 且无截断标记"} · ${item.length} 字符${item.source === "shell" ? "" : ` / 到第 ${item.maxLine} 行（无法完全排除大文件静默截断）`}`)
+              ? `全文 · ${channel}（${injected ? "框架注入完整 SKILL.md" : "会话内读到的行拼齐了整个文件"}）· ${item.length} 字符 / ${item.lines} 行`
               : st === "partial"
-                ? `部分读取 · ${item.source === "shell" ? "Shell 读取，命令带行范围（head/tail/sed）" : "Read 读取，检测到 offset/limit 或截断标记 → 仅读到第 " + item.maxLine + " 行"} · ${item.length} 字符`
+                ? `部分读取 · ${channel} · ${notice.summary} · ${notice.detail}`
                 : `未读取 · 未捕获到 SKILL.md 正文（该 skill 仅被调用未注入，或未通过 Skill 工具/Read/Shell 读取加载）`
+            const covered = item.evidence?.lineNumbers.length ?? item.lines
+            const coverageLabel = item.evidence?.fileLines != null ? `${covered}/${item.evidence.fileLines}` : `${covered}`
             return (
               <Tooltip key={item.skillName}>
                 <TooltipTrigger
@@ -118,7 +124,7 @@ export function SkillContentAudit({ taskId, skillNames, onView, urlFor }: SkillC
                       <span className="truncate max-w-[16ch]">{item.skillName}</span>
                       <span className="text-[10px] text-muted-foreground tabular-nums">
                         {st === "full" ? `全文·${item.lines}行`
-                          : st === "partial" ? `部分·${item.maxLine}行`
+                          : st === "partial" ? `部分·${coverageLabel}行`
                           : "未读"}
                       </span>
                     </span>
@@ -131,7 +137,7 @@ export function SkillContentAudit({ taskId, skillNames, onView, urlFor }: SkillC
         </div>
 
         <div className="text-[11px] text-muted-foreground leading-snug">
-          ✓ 绿色=全文（Skill 注入或 Read 无 limit）· ⚠ 橙色=部分读取（有 offset/limit 或截断）· 灰色=未读取。点击任意 chip 可在下方表格展开该 skill 行。每行右侧
+          ✓ 绿色=全文（Skill 注入，或读到的行拼齐了整个文件）· ⚠ 橙色=部分读取（已读/总行数，悬停看未读区间与成因）· 灰色=未读取。点击任意 chip 可在下方表格展开该 skill 行。每行右侧
           <span className="inline-flex items-center gap-0.5 mx-1 text-teal-600 dark:text-teal-400 font-medium">
             <BookOpenIcon className="size-3" />全文
           </span>

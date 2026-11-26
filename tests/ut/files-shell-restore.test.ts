@@ -21,6 +21,9 @@
 //   ⑦ Read 工具与 shell 通道在同一文件上合流（读写时间序合并）
 //   ⑧ 背靠背双 sed + 截断丢弃横跨段边界：位置空间封顶不吞后段尾行、
 //      跨段起点不可判定时跳过归因——行号永不污染（13-17 保持 gap）
+//   ⑨ 无编号 dump 被截断、后随别的输出段且锚点落在丢弃段：缝之后的保留行
+//      行号未经校验（是后随段的输出）→ 不归因，只留头段（guide.md 1-2；
+//      紧贴缝的 G03 是残行，同样不归因）
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -140,9 +143,9 @@ describe('Files 循迹复卷 shell 通道（codex exec_command 隐式读恢复�
     const res = await get(RUN_ID, 'dir-restore');
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('application/zip');
-    expect(Number(res.headers.get('X-Restored-Count'))).toBe(3);
-    // 全行数含 gap：SKILL.md 20（含 5 缺口行）+ flows.md 8 + req.txt 5
-    expect(Number(res.headers.get('X-Restored-Total-Lines'))).toBe(20 + 8 + 5);
+    expect(Number(res.headers.get('X-Restored-Count'))).toBe(4);
+    // 全行数含 gap：SKILL.md 20（含 5 缺口行）+ flows.md 8 + req.txt 5 + guide.md 2（未校验尾段不归因，不计行）
+    expect(Number(res.headers.get('X-Restored-Total-Lines'))).toBe(20 + 8 + 5 + 2);
     expect(Number(res.headers.get('X-Restored-Gap-Lines'))).toBe(5);
   });
 
@@ -154,5 +157,18 @@ describe('Files 循迹复卷 shell 通道（codex exec_command 隐式读恢复�
     const pipeCall = FIXTURE.calls.find(c => c.id === 'sr-f')!;
     const entries = restoreShellReads(JSON.stringify({ cmd: pipeCall.cmd, workdir: '/repo' }), pipeCall.result);
     expect(entries.length).toBe(0);
+  });
+
+  it('未校验的截断尾段不归因：无编号 dump 后随别的输出段、锚点被缝切掉时，尾段行号不可判定', async () => {
+    // cat guide.md 之后还有 printf 锚 + find；锚点落在被丢弃的中段 → cat 的区域
+    // 无法定位终点，缝之后的保留行是 find 的输出。修复前它们按总行数倒推被记成
+    // guide.md 的第 13–14 行（别的输出冒充文件内容）；现在只归因头段 1–2
+    const { restoreShellReads } = await import('@/lib/shell-restore');
+    const call = FIXTURE.calls.find(c => c.id === 'sr-tail-unverified')!;
+    const entries = restoreShellReads(JSON.stringify({ cmd: call.cmd, workdir: '/repo' }), call.result);
+    expect(entries.length).toBe(1);
+    expect([...entries[0]!.lines.keys()]).toEqual([1, 2]);
+    expect([...entries[0]!.lines.values()]).toEqual(['G01', 'G02']);
+    expect(entries[0]!.fileLines).toBeNull();
   });
 });

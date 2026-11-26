@@ -29,7 +29,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
-import type { AuditLayerInfo, AuditMemberMap, AuditMemberRef } from "@/lib/sift-audit-types"
+import type { AuditDeclarationEvidence, AuditLayerInfo, AuditMemberMap, AuditMemberRef } from "@/lib/sift-audit-types"
 import { logError, logInfo, logWarn } from "@/lib/logger"
 
 export interface SiftEvent {
@@ -44,6 +44,8 @@ export interface SiftEvent {
   _layers?: AuditLayerInfo[]
   /** run 级对账的成员映射（transcript 文件名 → 成员），随 result 事件回传供 finding 深链。 */
   _members?: AuditMemberMap
+  /** 不完整的对账声明及其行级证据，随 result 事件回传供前端常驻提示。 */
+  _evidence?: AuditDeclarationEvidence[]
 }
 
 /** 判定段阶段名（每个 transcript 切片独立重跑；单批时无批号）。
@@ -297,8 +299,9 @@ function runSiftAuditStreaming(opts: {
   memberBySession?: Record<string, AuditMemberRef>
   /** 进度分母外推用的切片数提示（DB 路径 = transcript 数；--run = 成员数）。 */
   expectedSlices?: number
+  evidence?: AuditDeclarationEvidence[]
 }): Promise<void> {
-  const { args, outputDir, onEvent, layers, members, memberBySession, expectedSlices, timeoutMs = 1_800_000, silenceKillMs = SILENCE_KILL_MS } = opts
+  const { args, outputDir, onEvent, layers, members, memberBySession, expectedSlices, evidence, timeoutMs = 1_800_000, silenceKillMs = SILENCE_KILL_MS } = opts
   return new Promise<void>((resolve) => {
     const model = new SiftProgressModel(expectedSlices ?? 1)
     let lastProgressMsg = ""
@@ -437,7 +440,7 @@ function runSiftAuditStreaming(opts: {
       const htmlPath = path.join(outputDir, "audit-report.html")
       const _html = fs.existsSync(htmlPath) ? fs.readFileSync(htmlPath, "utf8") : undefined
       logInfo("sift", "audit done", { ms: Date.now() - t0 })
-      onEvent({ stage: "result", percent: 100, report, _html, _layers: layers, _members: resolveMemberMap(report, members, memberBySession) })
+      onEvent({ stage: "result", percent: 100, report, _html, _layers: layers, _members: resolveMemberMap(report, members, memberBySession), _evidence: evidence })
       resolve()
     })
   })
@@ -452,12 +455,13 @@ function runSiftAuditStreaming(opts: {
  * extras._members：run 级对账的成员映射（transcript 文件名 → 成员，前端 finding 深链）。
  * extras._memberBySession：`--run` 原生对账的 sessionId → 成员表（report.run.units 归因）。
  * extras.expectedSlices：进度分母外推的切片数提示（不传按 1，transcript 头输出后自动修正）。
+ * extras._evidence：不完整的对账声明及其行级证据（声明完整时不传），随 result 事件回传。
  */
 export function makeStreamingAuditResponse(
   args: string[],
   outputDir: string,
   cleanup?: () => void,
-  extras?: { _layers?: AuditLayerInfo[]; _members?: AuditMemberMap; _memberBySession?: Record<string, AuditMemberRef>; expectedSlices?: number },
+  extras?: { _layers?: AuditLayerInfo[]; _members?: AuditMemberMap; _memberBySession?: Record<string, AuditMemberRef>; expectedSlices?: number; _evidence?: AuditDeclarationEvidence[] },
 ): Response {
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
@@ -474,6 +478,7 @@ export function makeStreamingAuditResponse(
           members: extras?._members,
           memberBySession: extras?._memberBySession,
           expectedSlices: extras?.expectedSlices,
+          evidence: extras?._evidence,
         })
       } catch (e: unknown) {
         send({ stage: "error", msg: e instanceof Error ? e.message : String(e) })

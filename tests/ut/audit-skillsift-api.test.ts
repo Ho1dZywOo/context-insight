@@ -287,6 +287,80 @@ describe("audit-skillsift route", () => {
     expect(lastWrittenSkillMd).toContain("# CANNbay 审计报告规范")
   })
 
+  it("kind=root → 所选声明不完整 → result 事件回传 _evidence（层标签 + 来源 + 行级证据）", async () => {
+    fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.db", framework: "opencode" })
+    const regContent = "# 规程\n\n- [ ] 已读的指令\n" + "x".repeat(120)
+    const planContent = "# 计划\n\n- [ ] 派发\n" + "y".repeat(120)
+    const regEvidence = {
+      lineNumbers: [1, 3], fileLines: 4, gaps: [{ from: 2, to: 2 }], truncated: true, conflictLines: [], readCount: 3,
+    }
+    llmExtractMock.mockResolvedValue({
+      content: `# Workflow 声明（主 agent）\n\n## 一、编排规程\n\n${regContent}\n\n## 二、任务计划\n\n${planContent}\n`,
+      source: "规程: demo (SKILL.md) + 计划: STATE.md",
+      layers: [
+        { kind: "regulation", label: "编排规程", source: "demo (SKILL.md)", content: regContent, evidence: regEvidence },
+        { kind: "plan", label: "任务计划", source: "STATE.md", content: planContent },
+      ],
+      evidence: [{ source: "demo (SKILL.md)", layer: "编排规程", evidence: regEvidence }],
+    })
+    spawnMock.mockImplementation(happySpawn())
+
+    const res = await POST(makeRequest({ taskId: "ses_1", skillName: "主 agent 编排", kind: "root" }))
+    const events = (await readNdjson(res)) as Array<{ stage: string; _evidence?: unknown[] }>
+    expect(res.status).toBe(200)
+    expect(events.at(-1)!._evidence).toEqual([
+      { source: "demo (SKILL.md)", layer: "编排规程", evidence: regEvidence },
+    ])
+  })
+
+  it("codex 截断会话（cat 头尾 + nl -ba 管道多段读同一 SKILL.md）→ 物化正文按行号拼回已读行 + result 事件带 _evidence", async () => {
+    const data = JSON.parse(fs.readFileSync(path.join(process.cwd(), "tests/data/skill-content-stitch.json"), "utf8")) as {
+      skillName: string
+      file: { lines: string[] }
+      reads: Array<{ cmd: string; total?: number; prefix?: string; head?: string; tail?: string; output?: string }>
+      expected: { fileLines: number; lineNumbers: number[]; gaps: Array<{ from: number; to: number }>; conflictLines: number[] }
+    }
+    fakePrisma.session.findFirst.mockResolvedValue({
+      id: "ses_cuid_1",
+      sourcePath: "/tmp/codex-capture/cpx-ses_1.jsonl",
+      framework: "codex-proxy",
+    })
+    const header = "Chunk ID: 7f3a9c\nWall time: 0.0041 seconds\nProcess exited with code 0\nOutput:\n"
+    fakePrisma.toolCall.findMany.mockResolvedValue(
+      data.reads.map((read, i) => ({
+        toolName: "exec_command",
+        argsJson: JSON.stringify({ cmd: read.cmd }),
+        resultJson: read.output != null
+          ? header + read.output
+          : header + (read.prefix ?? "") + `Warning: truncated output (original token count: 5000)\nTotal output lines: ${read.total}\n\n`
+            + read.head + "…9876 tokens truncated…" + read.tail,
+        startedAt: new Date(Date.parse("2026-11-17T10:00:00Z") + i * 60_000),
+      })),
+    )
+    fakePrisma.turn.findMany.mockResolvedValue([])
+    spawnMock.mockImplementation(happySpawn())
+
+    const res = await POST(makeRequest({ taskId: "ses_1", skillName: data.skillName }))
+    expect(res.status).toBe(200)
+    const events = (await readNdjson(res)) as Array<{
+      stage: string
+      _evidence?: Array<{ source: string; evidence: { fileLines: number; gaps: unknown; conflictLines: number[] } }>
+    }>
+
+    // 物化的声明 = 只含确实读到的行（多段按行号拼回），缺口处没有任何标记行
+    expect(lastWrittenSkillMd).toContain(data.file.lines[158])
+    expect(lastWrittenSkillMd).not.toContain("第 68 行")
+    expect(lastWrittenSkillMd).not.toContain("未读到")
+    expect(lastWrittenSkillMd).not.toContain("truncated")
+    expect(events.at(-1)!._evidence).toHaveLength(1)
+    expect(events.at(-1)!._evidence![0]!.source).toBe(data.skillName)
+    expect(events.at(-1)!._evidence![0]!.evidence).toMatchObject({
+      fileLines: data.expected.fileLines,
+      gaps: data.expected.gaps,
+      conflictLines: data.expected.conflictLines,
+    })
+  })
+
   it("sift 不在 PATH（spawn ENOENT）→ NDJSON error 事件", async () => {
     fakePrisma.session.findFirst.mockResolvedValue({ id: "ses_cuid_1", sourcePath: "/tmp/fake.db", framework: "opencode" })
     seedSkillBody()

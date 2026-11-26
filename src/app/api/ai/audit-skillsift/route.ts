@@ -12,7 +12,8 @@ import os from "node:os"
 import path from "node:path"
 import { prisma } from "@/lib/db"
 import {
-  recoverSkillBody,
+  recoverSkillDeclaration,
+  declarationEvidenceOf,
   ensureSkillFrontmatter,
   buildAuditArgs,
   buildStructuredRecords,
@@ -20,7 +21,7 @@ import {
 } from "@/lib/sift-audit"
 import { llmExtractWorkflowDeclaration } from "@/lib/llm-workflow-extract"
 import { makeStreamingAuditResponse } from "@/lib/sift-runner"
-import type { AuditLayerInfo } from "@/lib/sift-audit-types"
+import type { AuditDeclarationEvidence, AuditLayerInfo } from "@/lib/sift-audit-types"
 import { logError, logWarn } from '@/lib/logger'
 
 /**
@@ -62,12 +63,16 @@ export async function POST(req: Request) {
   let body: string | null = null
   // root 组合声明的层信息（规程/计划），随 result 事件回传前端做 finding 归层徽章。
   let rootLayers: AuditLayerInfo[] | undefined
+  // 对账所用声明不完整时（会话内读取被截断 / 带行范围）的证据——随 result 事件回传，
+  // 前端在报告顶部常驻提示「结论只对已读部分有效」；声明完整时不带
+  let declarationEvidence: AuditDeclarationEvidence[] | undefined
   if (auditKind === "root") {
     // root 恒 LLM 选择式提取（候选确定性收集 + claude CLI 选层 + 共享装配）
     try {
       const llmDecl = await llmExtractWorkflowDeclaration(session.id, prisma)
       body = llmDecl?.content ?? null
       rootLayers = llmDecl?.layers
+      declarationEvidence = llmDecl?.evidence
     } catch (e) {
       // CLI 基础设施失败（认证 403 / 非 0 退出 / 超时）→ 带具体原因返回，不再吞成笼统 404
       logWarn('route:ai/audit-skillsift', 'LLM 提取失败', { error: e instanceof Error ? e.message : String(e) });
@@ -77,7 +82,11 @@ export async function POST(req: Request) {
       )
     }
   } else {
-    body = await recoverSkillBody(session.id, skillName, prisma)
+    // 声明 = 会话中确实读到的行（多段读取按行号合并）；未读部分不补，缺口走证据提示
+    const decl = await recoverSkillDeclaration(session.id, skillName, prisma)
+    body = decl?.content ?? null
+    const ev = declarationEvidenceOf(skillName, undefined, decl)
+    declarationEvidence = ev ? [ev] : undefined
   }
   if (!body) {
     return NextResponse.json(
@@ -137,7 +146,7 @@ export async function POST(req: Request) {
     // tmp 清理放进流的 finally（等 sift 跑完），不能在路由 return 时删。
     return makeStreamingAuditResponse(args, outputDir, () =>
       fs.rmSync(skillTmp, { recursive: true, force: true }),
-    { _layers: rootLayers })
+    { _layers: rootLayers, _evidence: declarationEvidence })
   } catch (e) {
     logError('route:ai/audit-skillsift', '准备 skill 对账失败', { error: e instanceof Error ? e.message : String(e) });
     fs.rmSync(skillTmp, { recursive: true, force: true })

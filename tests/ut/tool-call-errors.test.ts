@@ -268,21 +268,21 @@ describe('tool-call-errors: summarizeToolCallErrors', () => {
     })
   })
 
-  describe('truncation detection', () => {
+  describe('model output truncation detection', () => {
     it('detects max_tokens and length finish reasons', () => {
       const maxTokens = summarizeToolCallErrors([], [], 'max_tokens')
-      expect(maxTokens.truncated).toBe(1)
+      expect(maxTokens.modelOutputTruncated).toBe(1)
       expect(maxTokens.total).toBe(1)
-      expect(maxTokens.details[0]).toEqual({ toolName: 'stop_reason=max_tokens', type: 'truncated' })
+      expect(maxTokens.details[0]).toEqual({ toolName: 'stop_reason=max_tokens', type: 'model_truncated' })
 
       const length = summarizeToolCallErrors([], [], 'length')
-      expect(length.truncated).toBe(1)
+      expect(length.modelOutputTruncated).toBe(1)
       expect(length.total).toBe(1)
     })
 
     it('ignores normal finish reasons', () => {
       const result = summarizeToolCallErrors([], [], 'end_turn')
-      expect(result.truncated).toBe(0)
+      expect(result.modelOutputTruncated).toBe(0)
       expect(result.total).toBe(0)
     })
   })

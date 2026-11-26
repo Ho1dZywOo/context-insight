@@ -6,6 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
+import type { LineEvidence } from "@/lib/skill-evidence"
+
 /**
  * AuditReport 的 TS 类型固化，对应 sift 的
  * `sift/models/audit_models.py`（AuditReport / AuditFinding /
@@ -208,6 +210,18 @@ export interface AuditLayerInfo {
   source: string
   /** 该层正文（已归一为声明态）；finding 按 instruction_text 子串匹配归层。 */
   content: string
+  /** 该层的行级证据（来源为会话内行号读取时携带）。 */
+  evidence?: LineEvidence
+}
+
+/** 对账所用声明的行级证据：声明不完整（有未读行 / 读取被截断）时随 result 事件
+ *  回传，前端在报告顶部常驻提示——结论只对已读部分有效。 */
+export interface AuditDeclarationEvidence {
+  /** 声明来源标识（skill 名 / 层来源）。 */
+  source: string;
+  /** 组合声明的层标签（root 的规程/计划）；单声明无。 */
+  layer?: string;
+  evidence: LineEvidence;
 }
 
 /** run 级对账的成员归因：transcript 文件名 → 成员（finding.transcript 反查深链用）。 */
@@ -246,4 +260,6 @@ export type SkillAuditStoredResult = AuditReport & {
   _html?: string
   _layers?: AuditLayerInfo[]
   _members?: AuditMemberMap
+  /** 不完整的声明及其证据；声明完整时缺省。 */
+  _evidence?: AuditDeclarationEvidence[]
 }

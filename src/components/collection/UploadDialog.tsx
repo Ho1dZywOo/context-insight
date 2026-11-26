@@ -18,8 +18,9 @@
 //   物理落点 <范式>/<runId>/，会话与 run 都可上传至任意顶层目录
 // 上传 action 走 registry（kind 分发事实单点）。受控组件——open/onOpenChange
 // 由调用方管理，上传开始与结果经 onUploadStart/onResult 回调交还调用方（列表
-// 行状态图标等）；结果提示统一在组件内经 notifyUploadResult 顶部 HUD 弹出
-// （全路径一致，调用方无需各自接反馈）。取代旧双弹窗（刀3 退役）。
+// 行状态图标等）。结果提示统一在组件内经 NoticeHud 弹出（全路径一致，调用方
+// 无需各自接反馈）：弹窗版面固定——变长的结果内容（失败原因 / 缺正文清单）
+// 一律不进弹窗，进需确认卡。取代旧双弹窗（刀3 退役）。
 
 import { useEffect, useState } from 'react'
 
@@ -63,30 +64,6 @@ export interface UploadRunTarget {
 }
 
 export type UploadTarget = UploadSessionTarget | UploadRunTarget
-
-/** 上传结果通知（NoticeHud 语义映射）：成功（绿勾）/警示（琥珀，缺正文等
- *  软告警）为瞬态确认，点击即收；失败走红叉持久报错卡——必须点「知道了」
- *  确认才离场，上传失败的原因用户必须有机会读到。任何上传面（弹窗 / 列表行）
- *  的结果都经本函数单点接线，调用方不再各自接反馈。 */
-type UploadHudTone = 'success' | 'warning' | 'error'
-
-interface NotifyUploadResultInput {
-  ok: boolean
-  title: string
-  /** 副文（白话详情）：错误原因 / 原生会话同步结果 / 缺正文告警摘要 */
-  description?: string | null
-  /** 显式覆盖色调（默认按 ok 推导：成功绿 / 失败红） */
-  tone?: UploadHudTone
-}
-
-function notifyUploadResult(input: NotifyUploadResultInput): void {
-  const tone = input.tone ?? (input.ok ? 'success' : 'error')
-  if (tone === 'error') {
-    notifyError(input.title, input.description ?? null)
-    return
-  }
-  notifyNotice({ tone, title: input.title, description: input.description ?? null })
-}
 
 /** 统一上传结果（会话/run 双通路同款）：warnings = 上传成功但缺正文等软提示 */
 export interface UploadOutcome {
@@ -391,8 +368,6 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
 }) {
   const form = useUploadForm(open, target ? { desc: (target.query ?? '').trim(), submitter: (target.user ?? '').trim() } : null)
   const [uploading, setUploading] = useState(false)
-  // 失败驻留弹窗内（可读可复制，重试上下文不丢）；成功即关——结果时刻由 HUD 呈现
-  const [error, setError] = useState<string | null>(null)
   const cred = useCredentialPrecheck(open)
 
   // 同步上传原生会话（仅捕获行显示）：勾选即预检（native-preview 只读探测），
@@ -444,7 +419,6 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
       return
     }
     setUploading(true)
-    setError(null)
     onUploadStart?.()
     try {
       const res = await fetch('/api/ingest/lake', {
@@ -471,31 +445,37 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
         cred.setTokenFlow('submit-retry')
         cred.setTokenDialogOpen(true)
       }
-      // 原生会话同步结果独立呈现（捕获行已上传成功，原生结果不影响 ok）
-      if (res.ok && withNative) {
-        const native = (data as { native?: { status?: string; reason?: string } })?.native
-        if (native?.status === 'uploaded') message = '原生会话已同步上传'
-        else if (native?.status === 'not-found') message = `捕获已上传；原生会话未找到：${native.reason ?? '未知原因'}`
-        else if (native?.status === 'failed') message = `捕获已上传；原生会话上传失败：${native.reason ?? '未知原因'}`
-      }
       if (res.ok) {
-        // 成功：HUD 确认（原生同步结果作副文）+ 即关
-        notifyUploadResult({
-          ok: true,
-          title: `已上传到 ${BAY_NAME}`,
-          description: message ?? null,
-        })
         onResult?.({ ok: true, message })
         onOpenChange(false)
       } else {
-        // 失败：HUD 报错 + 弹窗驻留明细
-        notifyUploadResult({ ok: false, title: '上传失败', description: message ?? '未知错误' })
-        setError(message ?? '上传失败')
+        // 失败：报错卡承载原因（弹窗留着，表单原样可重试）
+        notifyError('上传失败', message ?? '未知错误')
         onResult?.({ ok: false, message })
+        return
+      }
+      // 原生会话同步结果独立呈现（捕获行已上传成功，原生结果不影响 ok）：
+      // 未找到 = 上传前预检已提示过的预期结果，瞬态确认；上传失败 = 报错内容，
+      // 需确认卡承载——不许一闪而过
+      const native = (data as { native?: { status?: string; reason?: string } })?.native
+      if (native?.status === 'failed') {
+        notifyNotice({
+          tone: 'warning',
+          ack: true,
+          title: `捕获已上传到 ${BAY_NAME}，原生会话上传失败`,
+          description: '捕获行已入库，原生会话未同步',
+          detail: native.reason ?? null,
+          detailLabel: '失败原因',
+        })
+      } else {
+        notifyNotice({
+          tone: 'success',
+          title: `已上传到 ${BAY_NAME}`,
+          description: native?.status === 'not-found' ? `原生会话未找到：${native.reason ?? '未知原因'}` : native?.status === 'uploaded' ? '原生会话已同步上传' : null,
+        })
       }
     } catch {
-      notifyUploadResult({ ok: false, title: '上传失败', description: '网络错误' })
-      setError('网络错误')
+      notifyError('上传失败', '网络错误')
       onResult?.({ ok: false, message: 'Upload failed: network error' })
     } finally {
       setUploading(false)
@@ -532,7 +512,10 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
               </span>
             </label>
             {nativePreview && (
-              <p className={'text-xs ' + (nativePreview.loading ? 'text-muted-foreground' : nativePreview.found ? 'text-emerald-600' : 'text-amber-600')}>
+              <p
+                className={'line-clamp-2 break-words text-xs ' + (nativePreview.loading ? 'text-muted-foreground' : nativePreview.found ? 'text-emerald-600' : 'text-amber-600')}
+                title={nativePreview.loading || nativePreview.found ? undefined : `未找到原生会话：${nativePreview.reason ?? '本机没有对应记录'}`}
+              >
                 {nativePreview.loading
                   ? '正在查找本机原生会话…'
                   : nativePreview.found
@@ -547,9 +530,6 @@ function SessionUploadBody({ open, onOpenChange, target, onUploadStart, onResult
             <LoaderIcon className="size-4 animate-spin" />
             <span className="text-sm text-muted-foreground">上传中（敏感信息清洗可能耗时）...</span>
           </div>
-        )}
-        {error && (
-          <p className="text-sm text-red-600 dark:text-red-400 break-words whitespace-pre-wrap">{error}</p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={uploading}>取消</Button>
@@ -594,8 +574,6 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
   const runName = target?.runName ?? null
   const form = useUploadForm(open, target ? { desc: runName ?? '' } : null)
   const [uploading, setUploading] = useState(false)
-  const [result, setResult] = useState<{ unchanged: boolean; sessionCount: number; missingSessions: string[] } | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const cred = useCredentialPrecheck(open)
 
   async function startUpload() {
@@ -609,8 +587,6 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
       return
     }
     setUploading(true)
-    setResult(null)
-    setError(null)
     onUploadStart?.()
     try {
       const desc = `提交人: ${form.submitter.trim()}` + (form.contentDesc.trim() ? `\n内容描述: ${form.contentDesc.trim()}` : '')
@@ -636,37 +612,36 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
           cred.setTokenFlow('submit-retry')
           cred.setTokenDialogOpen(true)
         }
-        // 失败：HUD 报错 + 弹窗驻留明细
-        notifyUploadResult({ ok: false, title: '上传失败', description: message })
-        setError(message)
+        // 失败：报错卡承载原因（弹窗留着，表单原样可重试）
+        notifyError('上传失败', message)
         onResult?.({ ok: false, message })
         return
       }
       const unchanged = data.unchanged === true
       const sessionCount = typeof data.sessionCount === 'number' ? data.sessionCount : 0
       const missingSessions = Array.isArray(data.missingSessions) ? data.missingSessions as string[] : []
-      setResult({ unchanged, sessionCount, missingSessions })
       if (missingSessions.length > 0) {
-        // 成功但有缺正文告警：HUD 警示（琥珀）+ 弹窗驻留明细（完整 sid 清单）
-        notifyUploadResult({
-          ok: true,
+        // 成功但缺正文：完整清单是必须读到的内容——需确认卡承载（不自动退场），
+        // 弹窗照常关闭，不再把清单堆进弹窗
+        notifyNotice({
           tone: 'warning',
-          title: `已上传 ${sessionCount} 个成员会话到 ${BAY_NAME}`,
-          description: `${missingSessions.length} 个成员会话不在 insight，包内缺其正文：${missingSessions.slice(0, 3).join(', ')}${missingSessions.length > 3 ? ' 等' : ''}`,
+          ack: true,
+          title: `已上传 ${sessionCount} 个成员会话到 ${BAY_NAME}，${missingSessions.length} 个缺正文`,
+          description: '这些成员会话不在 insight，包内缺其正文',
+          detail: missingSessions.join('\n'),
+          detailLabel: '缺正文的成员会话',
         })
       } else {
-        // 干净成功：HUD 确认 + 即关
-        notifyUploadResult({
-          ok: true,
+        notifyNotice({
+          tone: 'success',
           title: unchanged ? '包内容与数据仓一致，无需重新上传' : `已上传 ${sessionCount} 个成员会话到 ${BAY_NAME}`,
         })
-        onOpenChange(false)
       }
+      onOpenChange(false)
       onResult?.({ ok: true, message: null, warnings: Array.isArray(data.warnings) ? data.warnings : [] })
     } catch (e) {
       const message = e instanceof Error ? e.message : '网络错误'
-      notifyUploadResult({ ok: false, title: '上传失败', description: message })
-      setError(message)
+      notifyError('上传失败', message)
       onResult?.({ ok: false, message })
     } finally {
       setUploading(false)
@@ -699,23 +674,6 @@ function RunUploadBody({ open, onOpenChange, target, onUploadStart, onResult }: 
             <LoaderIcon className="size-4 animate-spin" />
             <span className="text-sm text-muted-foreground">上传中（大包清洗耗时较长）...</span>
           </div>
-        )}
-        {result && (
-          <div className="text-sm space-y-1">
-            <p className="text-emerald-600 dark:text-emerald-400 break-words">
-              {result.unchanged
-                ? '包内容与数据仓一致，无需重新上传'
-                : `已上传 ${result.sessionCount} 个成员会话到 ${BAY_NAME}`}
-            </p>
-            {result.missingSessions.length > 0 && (
-              <p className="text-xs text-amber-600 dark:text-amber-400 break-words">
-                ⚠ {result.missingSessions.length} 个成员会话不在 insight，包内缺其正文：{result.missingSessions.join(', ')}
-              </p>
-            )}
-          </div>
-        )}
-        {error && (
-          <p className="text-sm text-red-600 dark:text-red-400 break-words whitespace-pre-wrap">{error}</p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={uploading}>

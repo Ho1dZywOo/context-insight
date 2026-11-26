@@ -135,6 +135,36 @@ describe('selectSkillContent（行号校准合并——现场 01a1c5d6 形态）
   });
 });
 
+describe('selectSkillContent 来源归因（按「行数」判多数，不按读取「次数」）', () => {
+  it('Read 只读 3 行 + shell cat 读 20 行 → 来源判 shell（读次数 1:1 不再误判 read）', () => {
+    const read3: SkillToolCall = {
+      toolName: 'Read',
+      argsJson: JSON.stringify({ file_path: '/a/foo/SKILL.md', offset: 1, limit: 3 }),
+      resultJson: `1\t${MD(1)}\n2\t${MD(2)}\n3\t${MD(3)}`,
+      startedAt: t(2),
+    };
+    const cat20 = shellTc('cat /a/foo/SKILL.md', `${md(1, 20)}\n`, 1);
+    const r = selectSkillContent([cat20, read3], 'foo');
+    expect(r).not.toBeNull();
+    expect(r!.source).toBe('shell');
+    expect(r!.content).toBe(md(1, 20));
+  });
+
+  it('Read 整读 20 行 + shell sed 只读 3 行 → 来源判 read（多数行来自 Read）', () => {
+    const sed3 = shellTc("sed -n '1,3p' /a/foo/SKILL.md", `${md(1, 3)}\n`, 1);
+    const read20: SkillToolCall = {
+      toolName: 'Read',
+      argsJson: JSON.stringify({ file_path: '/a/foo/SKILL.md' }),
+      resultJson: MD_LINES.map((s, i) => `${i + 1}\t${s}`).join('\n'),
+      startedAt: t(2),
+    };
+    const r = selectSkillContent([sed3, read20], 'foo');
+    expect(r).not.toBeNull();
+    expect(r!.source).toBe('read');
+    expect(r!.content).toBe(md(1, 20));
+  });
+});
+
 describe('skillMdReadsOfToolCall（三通道单点分类器）', () => {
   it('shell 通道：剥 codex 终端元数据壳 + 模型自印横幅 → SKILL.md 原文', () => {
     const tc: SkillToolCall = {
@@ -190,7 +220,10 @@ describe('skillMdReadsOfToolCall（三通道单点分类器）', () => {
       startedAt: t(1),
     };
     expect(skillMdReadsOfToolCall(skill)).toEqual([
-      { skillName: 'foo', source: 'skill-tool', content: 'BODY', fullRead: true, maxLine: null, ts: t(1).getTime() },
+      {
+        skillName: 'foo', source: 'skill-tool', content: 'BODY', fullRead: true, maxLine: null,
+        fileLines: null, truncated: false, ts: t(1).getTime(),
+      },
     ]);
     const read: SkillToolCall = {
       toolName: 'read',

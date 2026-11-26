@@ -300,7 +300,7 @@ describe('Run 详情页统一 Overview（bundle 形态，run-first）', () => {
       toolCalls: [{ toolCallId: 'tc_dig', toolName: 'Bash', state: 'error', durationMs: 200 }],
       skillEvents: [], member: { taskId: SID_A, label: '成员 A 会话' },
       errorDigest: {
-        total: 2, cancelled: 0, failed: 1, skillFail: 1, truncated: 0,
+        total: 2, cancelled: 0, failed: 1, skillFail: 1, modelOutputTruncated: 0,
         details: [{ toolName: 'Bash', type: 'failed' }, { toolName: 'demo-skill', type: 'skill_fail' }],
         messages: [{ toolName: 'Bash', message: 'exit 2' }],
         skillMessages: [{ skillName: 'demo-skill', message: '技能炸了' }],
