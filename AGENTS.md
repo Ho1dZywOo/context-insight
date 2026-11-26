@@ -62,6 +62,7 @@ Run 统一工作台（`run/[runId]`）is `"use client"` with 11 tabs
 - **Context windows**: `src/lib/context-window-config.ts` — configurable via `context-windows.json`, hardcoded defaults as fallback. Web `ContextTracker.tsx` has its own model mapping — keep in sync.
 - **AI analysis**: `src/lib/ai/analyzer.ts` — only OpenAI-compatible `/chat/completions`, config in localStorage only
 - **声明行级证据**: `src/lib/skill-evidence.ts` — 纯函数单点：行号读取合并（同号行矛盾即弃用并上报）、覆盖面/缺口计算、用户可读说明；`skill-content.ts`（Skills 面板原文恢复）与 `llm-workflow-extract.ts`（root 对账候选）共用，缺口只走证据提示、不写进声明正文（sift 把正文整体交 LLM 抽指令）
+- **工具输出截断语义**: `src/lib/tool-output-truncation.ts` — 纯函数单点：只认 harness 写入截断的固定位置（codex 结果头横幅、proxy 形态在元数据壳之后；opencode 结果尾落盘行），正文引用不算；查询超集 `TOOL_OUTPUT_TRUNCATION_QUERY_OR`（与错误超集分列——截断不是错误，不进轮级错误摘要 `errorDigest`；`tool-call-errors.ts` 的 `buildTurnErrorDigest` 是 collector / 离线内核 / 客户端回退三路共用的错误摘要组装单点），展示层 `OutputTruncationNotice.tsx`（工具行标记 + 截断痕迹衬色 + Skills 逐次调用说明行）；总览不展示。Skills 侧：`collectors/skills.ts` 把命中超集的工具调用经摄取侧同一检测（`detectSkillInvocations`）归到事件，事件带 `outputTruncation`。文案一律写「工具输出截断」（不写「已截断」），与模型输出截断（`modelOutputTruncated`）、界面展示省略严格三分
 - **CLI client**: `src/cli/client.ts` — InsightClient with 17 methods across `/api/observe/*`, `/api/ingest/*`, `/api/ai/*`
 - **CLI types**: `src/cli/types.ts` — `Api`-prefixed interfaces to distinguish from `src/lib/shared/types.ts`
 - **Lake v2（数据湖引擎）**: `src/lib/lake`（mirror 治理/导出/编排）

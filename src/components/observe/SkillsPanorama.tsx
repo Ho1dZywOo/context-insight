@@ -27,7 +27,9 @@ import {
 } from "@/components/observe/perf-shared";
 import { useSkillContent } from "@/components/observe/use-skill-content";
 import { SkillCoverageCard } from "@/components/observe/SkillCoverageCard";
+import { OutputTruncationChip, OutputTruncationNote } from "@/components/observe/OutputTruncationNotice";
 import { runMemberUrlFor } from "@/lib/observe/member-url";
+import type { ToolOutputTruncation } from "@/lib/tool-output-truncation";
 import type { MouseEvent as ReactMouseEvent } from "react";
 
 export interface SkillsSkillItem {
@@ -63,6 +65,8 @@ export interface SkillsEventItem {
     cacheWriteTokens: number;
   };
   member: { taskId: string; label: string | null } | null;
+  /** 这一次读取的工具输出被运行环境截断（agent 未看到全文）；完整读取与旧载荷缺省为 null */
+  outputTruncation?: ToolOutputTruncation | null;
 }
 
 export interface SkillsDispatchItem {
@@ -842,30 +846,34 @@ export function SkillsPanorama({ runId, data, members, onOpenTurn }: {
                     {/* 逐次调用：成员归因在这里披露（一行一个，不堆徽标） */}
                     <div className="mt-2 min-h-0 flex-1 divide-y divide-foreground/[0.05] overflow-y-auto">
                       {selAgg.events.map(ev => (
-                        <div key={ev.id} className="flex items-center gap-2 py-1.5 text-xs">
-                          <span className="w-14 shrink-0 text-muted-foreground tabular-nums" title={ev.turnCreatedAt ?? "时间戳缺失"}>
-                            {ev.turnCreatedAt ? fmtClock(ev.turnCreatedAt) : `#${ev.turnIndex}`}
-                          </span>
-                          <span
-                            className={cn("size-1.5 shrink-0 rounded-full", ev.success ? "bg-emerald-600" : "bg-red-500")}
-                            title={ev.success ? "成功" : `失败：${ev.errorMessage ?? "未知错误"}`}
-                          />
-                          <span className="w-11 shrink-0 text-muted-foreground">{ev.eventType}</span>
-                          <span className="min-w-0 flex-1 truncate text-foreground/85" title={ev.member?.taskId}>{ev.member?.label ?? "—"}</span>
-                          <span className="shrink-0 text-muted-foreground tabular-nums" title="调用 turn 的 token">{fmtTok(ev.turnTokens.totalTokens)} tok</span>
-                          {ev.turnId ? (
-                            <button
-                              type="button"
-                              data-skill-jump={ev.turnId}
-                              title="跳转 turn 现场"
-                              onClick={() => onOpenTurn(ev.turnId!)}
-                              className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
-                            >
-                              <ArrowUpRightIcon className="size-3.5" />
-                            </button>
-                          ) : (
-                            <span className="inline-flex size-5 shrink-0" />
-                          )}
+                        <div key={ev.id} className="py-1.5 text-xs" data-skill-truncation={ev.outputTruncation ? ev.id : undefined}>
+                          <div className="flex items-center gap-2">
+                            <span className="w-14 shrink-0 text-muted-foreground tabular-nums" title={ev.turnCreatedAt ?? "时间戳缺失"}>
+                              {ev.turnCreatedAt ? fmtClock(ev.turnCreatedAt) : `#${ev.turnIndex}`}
+                            </span>
+                            <span
+                              className={cn("size-1.5 shrink-0 rounded-full", ev.success ? "bg-emerald-600" : "bg-red-500")}
+                              title={ev.success ? "成功" : `失败：${ev.errorMessage ?? "未知错误"}`}
+                            />
+                            <span className="w-11 shrink-0 text-muted-foreground">{ev.eventType}</span>
+                            <span className="min-w-0 flex-1 truncate text-foreground/85" title={ev.member?.taskId}>{ev.member?.label ?? "—"}</span>
+                            {ev.outputTruncation && <OutputTruncationChip truncation={ev.outputTruncation} />}
+                            <span className="shrink-0 text-muted-foreground tabular-nums" title="调用 turn 的 token">{fmtTok(ev.turnTokens.totalTokens)} tok</span>
+                            {ev.turnId ? (
+                              <button
+                                type="button"
+                                data-skill-jump={ev.turnId}
+                                title="跳转 turn 现场"
+                                onClick={() => onOpenTurn(ev.turnId!)}
+                                className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+                              >
+                                <ArrowUpRightIcon className="size-3.5" />
+                              </button>
+                            ) : (
+                              <span className="inline-flex size-5 shrink-0" />
+                            )}
+                          </div>
+                          {ev.outputTruncation && <OutputTruncationNote truncation={ev.outputTruncation} className="mt-0.5 pl-16" />}
                         </div>
                       ))}
                       {selAgg.events.length === 0 && (

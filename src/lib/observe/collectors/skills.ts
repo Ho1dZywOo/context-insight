@@ -17,6 +17,12 @@ import type { PrismaClient } from '@prisma/client';
 import type { ObserveScope } from '@/lib/observe/scope';
 import { memberByRowId, memberByTaskId } from '@/lib/observe/scope';
 import { isSoloRunId } from '@/lib/run/identity';
+import { detectSkillInvocations } from '@/lib/ingest/skill-invocations';
+import {
+  TOOL_OUTPUT_TRUNCATION_QUERY_OR,
+  toolOutputTruncationOf,
+  type ToolOutputTruncation,
+} from '@/lib/tool-output-truncation';
 
 export interface MergedSkillItem {
   skillName: string;
@@ -51,6 +57,34 @@ export interface MergedSkillEventItem {
     cacheWriteTokens: number;
   };
   member: { taskId: string; label: string | null } | null;
+  /** 这一次读取的工具输出被运行环境截断（agent 未看到全文）；完整读取 = null */
+  outputTruncation: ToolOutputTruncation | null;
+}
+
+/** 截断归因的输入行：命中截断超集的工具调用 */
+export interface TruncatedSkillReadCall {
+  turnId: string;
+  toolCallId: string;
+  toolName: string;
+  argsJson: string | null;
+  resultJson: string | null;
+}
+
+/** 截断的工具调用 → 它们读取的技能，键 = `${turnId}\n${skillName}`（与事件的
+ *  (turnId, skillName) 对位）。「读了哪个技能」与摄取侧创建 SkillEvent 用同一个
+ *  检测（detectSkillInvocations），事件与调用天然对得上；同一技能在一轮内被
+ *  多次读取时任一次被截即记为截断。 */
+export function skillReadTruncationsOf(calls: TruncatedSkillReadCall[]): Map<string, ToolOutputTruncation> {
+  const out = new Map<string, ToolOutputTruncation>();
+  for (const tc of calls) {
+    const truncation = toolOutputTruncationOf(tc.resultJson);
+    if (truncation == null) continue;
+    const toolCall = { toolCallId: tc.toolCallId, toolName: tc.toolName, argsJson: tc.argsJson, resultJson: null, state: 'ok' };
+    for (const inv of detectSkillInvocations([toolCall])) {
+      out.set(`${tc.turnId}\n${inv.skillName}`, truncation);
+    }
+  }
+  return out;
 }
 
 export interface CollectSkillsOptions {
@@ -158,6 +192,17 @@ export async function collectScopeSkills(
   }
   const skills = [...byName.values()].sort((a, b) => b.invocationCount - a.invocationCount || a.skillName.localeCompare(b.skillName));
 
+  // 工具输出截断归因：命中截断超集的工具调用 → 它们读取的技能（见
+  // skillReadTruncationsOf）；逐次调用行据此给出截断说明
+  const truncatedCalls = await prisma.toolCall.findMany({
+    where: {
+      turn: { sessionId: { in: memberRowIds } },
+      OR: TOOL_OUTPUT_TRUNCATION_QUERY_OR,
+    },
+    select: { turnId: true, toolCallId: true, toolName: true, argsJson: true, resultJson: true },
+  });
+  const truncByEventKey = skillReadTruncationsOf(truncatedCalls);
+
   const events: MergedSkillEventItem[] = [];
   const dispatches: MergedDispatchItem[] = [];
   const dispatchedSids = new Set<string>();
@@ -220,6 +265,7 @@ export async function collectScopeSkills(
           cacheWriteTokens: t.cacheWriteTokens,
         },
         member: member ? { taskId: member.taskId, label: member.label } : null,
+        outputTruncation: truncByEventKey.get(`${t.id}\n${se.skillName}`) ?? null,
       });
     }
   }

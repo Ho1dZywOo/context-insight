@@ -17,6 +17,12 @@
 //   读侧 —— 本模块 kind/消息/查询超集，展示层禁止再持框架词表副本
 import { codexExecFailureEvidenceOf } from '@/lib/tool-conventions';
 
+/** 轮级摘要明细类型（闭集）：cancelled / failed / skill_fail 为错误；
+ *  model_truncated 为模型输出截断。工具输出截断不是错误，不进本摘要——
+ *  它由 tool-output-truncation 单点在工具行与 Skills 逐次调用上单独承载 */
+export type ToolCallDigestDetailType =
+  | 'cancelled' | 'failed' | 'skill_fail' | 'model_truncated';
+
 export interface ToolCallErrorItem {
   toolName: string
   resultJson?: string | null | undefined
@@ -39,13 +45,15 @@ export interface ErrorSummary {
   cancelled: number
   failed: number
   skillFail: number
-  truncated: number
-  details: Array<{ toolName: string; type: string }>
+  /** 模型输出被 max_tokens 截断（finishReason = length / max_tokens），计入 total */
+  modelOutputTruncated: number
+  details: Array<{ toolName: string; type: ToolCallDigestDetailType }>
 }
 
-/** 轮级错误摘要（服务端预算，Overview 消费）：计数与 details 与
+/** 轮级摘要（服务端预算，Overview 消费）：计数与 details 与
  *  summarizeToolCallErrors 同源同口径，另带错误消息提取（60 字符内）与技能
- *  失败消息——消费方不再需要 resultJson 原文（18MB 级载荷不进 Overview 响应）。 */
+ *  失败消息——消费方不再需要 resultJson 原文（18MB 级载荷不进 Overview 响应）。
+ *  载体名沿用 errorDigest（线上与离线导出档案的既定字段）。 */
 export interface TurnErrorDigest extends ErrorSummary {
   messages: Array<{ toolName: string; message: string }>
   skillMessages: Array<{ skillName: string; message: string }>
@@ -264,6 +272,11 @@ export function toolCallErrorMessage(tc: { errorMessage?: string | null; resultJ
 /** Completion reasons which indicate that the model output was cut short. */
 const TRUNCATED_FINISH_REASONS = new Set(['length', 'max_tokens']);
 
+/** finishReason 是否表示模型输出被截断（轮是否有摘要信号的预判用） */
+export function isModelOutputTruncated(finishReason: string | null | undefined): boolean {
+  return finishReason != null && TRUNCATED_FINISH_REASONS.has(finishReason)
+}
+
 /** 单次工具调用错误判别（summarize / count / tool-stats / 展示层的公共内核）：
  *  'cancelled'（result 含 <tool_use_error> + Cancelled）/ 'failed' / null。
  *  头部退出码是定性判据：非零 → failed；Exit code: 0 是成功回显 → 撤销旧
@@ -294,7 +307,7 @@ export function summarizeToolCallErrors(
 ): ErrorSummary {
   let failed = 0
   let cancelledCount = 0
-  const details: Array<{ toolName: string; type: string }> = []
+  const details: Array<{ toolName: string; type: ToolCallDigestDetailType }> = []
 
   for (const tc of toolCalls) {
     const kind = toolCallErrorKind(tc)
@@ -317,16 +330,38 @@ export function summarizeToolCallErrors(
     }
   }
 
-  const truncated = finishReason != null && TRUNCATED_FINISH_REASONS.has(finishReason) ? 1 : 0
-  if (truncated) details.push({ toolName: `stop_reason=${finishReason}`, type: 'truncated' })
+  const truncated = isModelOutputTruncated(finishReason) ? 1 : 0
+  if (truncated) details.push({ toolName: `stop_reason=${finishReason}`, type: 'model_truncated' })
 
   return {
     total: cancelledCount + failed + skillFail + truncated,
     cancelled: cancelledCount,
     failed,
     skillFail,
-    truncated,
+    modelOutputTruncated: truncated,
     details,
+  }
+}
+
+/** 轮级摘要组装单点：服务端 collector（includeErrorDigest）、离线导出内核与
+ *  客户端原文回退三路共用——计数 / 明细 / 消息提取逐值同口径（parity 由
+ *  IT 锁）。toolCalls 须带 resultJson（服务端只对超集命中的调用携带原文，
+ *  未命中的调用两项判别恒为空，结果等价）。无任何信号 → null（响应零冗余）。 */
+export function buildTurnErrorDigest(
+  toolCalls: ToolCallErrorItem[],
+  skillEvents?: SkillEventErrorItem[],
+  finishReason?: string | null,
+): TurnErrorDigest | null {
+  const summary = summarizeToolCallErrors(toolCalls, skillEvents, finishReason)
+  if (summary.total === 0) return null
+  return {
+    ...summary,
+    messages: toolCalls
+      .map(tc => ({ toolName: tc.toolName, message: toolCallErrorMessage(tc) }))
+      .filter(m => m.message !== ''),
+    skillMessages: (skillEvents ?? [])
+      .filter(se => !se.success && se.errorMessage != null)
+      .map(se => ({ skillName: se.skillName, message: se.errorMessage!.substring(0, 60) })),
   }
 }
 

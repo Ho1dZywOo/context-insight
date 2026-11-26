@@ -25,7 +25,7 @@ import { isProxyVersion } from '@/lib/shared/session-format';
 import { turnWallMs } from '@/lib/observe/turn-duration';
 import { wireToolDurations } from '@/lib/tool-timing';
 import { fetchContentHeads } from '@/lib/observe/collectors/content-heads';
-import { summarizeToolCallErrors, toolCallErrorMessage, TOOL_CALL_ERROR_QUERY_OR, type TurnErrorDigest } from '@/lib/tool-call-errors';
+import { buildTurnErrorDigest, isModelOutputTruncated, TOOL_CALL_ERROR_QUERY_OR, type TurnErrorDigest } from '@/lib/tool-call-errors';
 
 export interface MergedToolCallItem {
   toolCallId: string;
@@ -100,7 +100,7 @@ export interface CollectTurnsOptions {
   includeToolResult?: boolean;
   /** 轮级错误摘要服务端预算（Overview 消费）：错误工具调用经独立过滤查询
    *  （state/errorType/原文标记，超集于客户端分类条件），摘要与消息提取
-   *  与客户端 summarizeToolCallErrors/toolCallErrorMessage 单一源同口径 */
+   *  与客户端 buildTurnErrorDigest 单一源同口径 */
   includeErrorDigest?: boolean;
 }
 
@@ -231,8 +231,8 @@ export async function collectScopeTurns(
     : new Map<string, TurnIdentity>();
   // 轮级错误摘要（includeErrorDigest）：错误工具调用先经独立过滤查询收齐
   //（state/errorType/原文标记——消费端分类条件的超集，非错误轮零参与），
-  // 再用共享 summarizeToolCallErrors/toolCallErrorMessage 预算摘要——与客
-  // 户端原文计算逐值同口径（IT 锁 parity），Overview 响应不再携带 resultJson
+  // 再经共享 buildTurnErrorDigest 预算摘要——与客户端原文计算逐值同口径
+  //（IT 锁 parity），Overview 响应不再携带 resultJson
   const digestByTurnId = options.includeErrorDigest
     ? await (async () => {
         const errorCalls = await prisma.toolCall.findMany({
@@ -242,7 +242,7 @@ export async function collectScopeTurns(
           },
           select: { turnId: true, toolCallId: true, toolName: true, state: true, errorType: true, errorMessage: true, resultJson: true },
         });
-        const errByToolCallId = new Map(errorCalls.map(c => [c.toolCallId, c]));
+        const byToolCallId = new Map(errorCalls.map(c => [c.toolCallId, c]));
         const byTurn = new Map<string, typeof errorCalls>();
         for (const c of errorCalls) {
           const list = byTurn.get(c.turnId) ?? [];
@@ -251,27 +251,17 @@ export async function collectScopeTurns(
         }
         const digest = new Map<string, TurnErrorDigest>();
         for (const t of rows) {
-          const errCalls = byTurn.get(t.id);
+          const errorCallsOfTurn = byTurn.get(t.id);
           const skillFail = t.skillEvents.some(se => !se.success && se.errorMessage != null);
-          const truncated = t.finishReason === 'length' || t.finishReason === 'max_tokens';
-          if ((errCalls?.length ?? 0) === 0 && !skillFail && !truncated) continue;
+          if ((errorCallsOfTurn?.length ?? 0) === 0 && !skillFail && !isModelOutputTruncated(t.finishReason)) continue;
           const patched = t.toolCalls.map(tc => {
-            const err = errByToolCallId.get(tc.toolCallId);
-            return err != null
-              ? { toolName: tc.toolName, state: tc.state, errorType: err.errorType, errorMessage: err.errorMessage, resultJson: err.resultJson }
+            const hit = byToolCallId.get(tc.toolCallId);
+            return hit != null
+              ? { toolName: tc.toolName, state: tc.state, errorType: hit.errorType, errorMessage: hit.errorMessage, resultJson: hit.resultJson }
               : tc;
           });
-          const summary = summarizeToolCallErrors(patched, t.skillEvents, t.finishReason);
-          if (summary.total === 0) continue;
-          digest.set(t.id, {
-            ...summary,
-            messages: patched
-              .map(tc => ({ toolName: tc.toolName, message: toolCallErrorMessage(tc) }))
-              .filter(m => m.message !== ''),
-            skillMessages: t.skillEvents
-              .filter(se => !se.success && se.errorMessage != null)
-              .map(se => ({ skillName: se.skillName, message: se.errorMessage!.substring(0, 60) })),
-          });
+          const turnDigest = buildTurnErrorDigest(patched, t.skillEvents, t.finishReason);
+          if (turnDigest != null) digest.set(t.id, turnDigest);
         }
         return digest;
       })()

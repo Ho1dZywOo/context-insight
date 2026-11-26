@@ -66,8 +66,11 @@ beforeAll(async () => {
   const tSkill = await mk(7, '2026-10-13T02:01:20Z');
   const tTrunc = await mk(8, '2026-10-13T02:01:30Z', { finishReason: 'length' });
   const tClean = await mk(9, '2026-10-13T02:01:40Z'); // 干净轮 → 无 digest
+  // 仅工具输出截断的轮：不是错误（total = 0），但携带摘要——截断提示据此渲染
+  const tOutTrunc = await mk(10, '2026-10-13T02:01:50Z');
 
   await prisma.toolCall.create({ data: { turnId: tState.id, toolCallId: 'rtp-tc-state', toolName: 'Bash', state: 'error' } });
+  await prisma.toolCall.create({ data: { turnId: tOutTrunc.id, toolCallId: 'rtp-tc-out-trunc', toolName: 'exec_command', state: 'completed', resultJson: 'Warning: truncated output (original token count: 2707)\nTotal output lines: 96\n\nrtp-头段\n…217 chars truncated…\nrtp-尾段' } });
   // ②错误摘要锚点轮（state / Exit code / cancelled / skill 失败 / 截断）。
   //   Exit code 轮用真失败形态（结果头部非零退出码——claude Bash 失败回显的
   //   实际位置；mid-text 字样是正文引用，属误伤形态不再作锚点）
@@ -77,7 +80,7 @@ beforeAll(async () => {
   await prisma.skillEvent.create({ data: { turnId: tSkill.id, skillName: 'rtp-skill', eventType: 'invoke', success: false, errorMessage: 'rtp-技能失败原因' } });
 
   ctx.turnIds = {
-    long: tLong.id, sum: tSum.id, state: tState.id, exit: tExit.id,
+    long: tLong.id, sum: tSum.id, state: tState.id, exit: tExit.id, outTrunc: tOutTrunc.id,
     cancel: tCancel.id, skill: tSkill.id, trunc: tTrunc.id, clean: tClean.id,
   };
 });
@@ -150,14 +153,16 @@ describe('run turns 性能层（详情页逐 tab 提速）', () => {
       expect(item.errorDigest, `digest 在场：${key}`).toBeDefined();
       expect(item.errorDigest).toEqual(rawDigestOf(ctx.turnIds[key]));
     }
-    // 具体信号抽查：state 错误 / Exit code 消息 / cancelled / 技能失败 / 截断
+    // 具体信号抽查：state 错误 / Exit code 消息 / cancelled / 技能失败 / 模型输出截断
     expect(byId.get(ctx.turnIds.state)!.errorDigest!.failed).toBe(1);
     expect(byId.get(ctx.turnIds.exit)!.errorDigest!.messages).toEqual([{ toolName: 'Read', message: 'exit 1' }]);
     expect(byId.get(ctx.turnIds.cancel)!.errorDigest!.cancelled).toBe(1);
     expect(byId.get(ctx.turnIds.cancel)!.errorDigest!.messages[0].message).toContain('rtp-操作被 Cancelled');
     expect(byId.get(ctx.turnIds.skill)!.errorDigest!.skillFail).toBe(1);
     expect(byId.get(ctx.turnIds.skill)!.errorDigest!.skillMessages).toEqual([{ skillName: 'rtp-skill', message: 'rtp-技能失败原因' }]);
-    expect(byId.get(ctx.turnIds.trunc)!.errorDigest!.truncated).toBe(1);
+    expect(byId.get(ctx.turnIds.trunc)!.errorDigest!.modelOutputTruncated).toBe(1);
+    // 工具输出被截断不是错误：仅截断的轮无 digest（响应零冗余）
+    expect((byId.get(ctx.turnIds.outTrunc) as { errorDigest?: TurnErrorDigest }).errorDigest).toBeUndefined();
     // 干净轮：无 digest（响应零冗余）
     expect((byId.get(ctx.turnIds.clean) as { errorDigest?: TurnErrorDigest }).errorDigest).toBeUndefined();
     // 路由参数透传（API 层契约）
