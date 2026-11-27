@@ -67,6 +67,7 @@ Run 统一工作台（`run/[runId]`）is `"use client"` with 11 tabs
 - **CLI client**: `src/cli/client.ts` — InsightClient with 17 methods across `/api/observe/*`, `/api/ingest/*`, `/api/ai/*`
 - **CLI types**: `src/cli/types.ts` — `Api`-prefixed interfaces to distinguish from `src/lib/shared/types.ts`
 - **Lake v2（数据湖引擎）**: `src/lib/lake`（mirror 治理/导出/编排）
+- **Run 工作台页头（单行应用栏）**: `src/components/run/header/` — `RunWorkbenchHeader` 三段同排、tab 导航居页头正中（左右两翼 `flex: 1 1 0` 等权平分「页头宽 − 中段宽」，中段按内容宽度——右翼 chip / 动作增减不牵动 tab 条位置；某一翼内容超出自己那半份时中段才向另一侧让位；居中不靠中段 `margin: auto`），页面加载 / 错误 / 就绪三态共用同一外壳 `RunWorkbenchShell`；加载态 tab 条以真身作骨架（`RunTabBar` 的 `pending`：禁用 + 呼吸，数据到达只解除禁用）。`RunHeaderActions`（同步 chip / 刷新 / 导出 / 上传）不读宿主能力，动作在不在场由入参决定（null = 不渲染，离线档案即无动作区）。密度按页头自身宽度（`@container`）让位、导航最后让：上传钮 / chip 文字（页头 < 1420px 收成图标）→ 品牌字标（< 1100px 收起）→ tab 条横滚。阈值是 Tailwind 类名字面量，单点在 `RunWorkbenchHeader`（`HEADER_*`）与 `BrandLockup`；页面 chrome 不要再写回 `page.tsx`
 
 ### CLI Frontend
 

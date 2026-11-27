@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Run 工作台页头合并为一行：返回、品牌、tab 导航（Overview … Score）与同步状态、上传等操作同排，tab 导航居中，内容区多出一行高度；窗口较窄时操作先收成图标、tab 条再横向滚动（当前 tab 始终可见）
+
 ## [1.0.8] - 2026-11-26
 
 ### Changed
