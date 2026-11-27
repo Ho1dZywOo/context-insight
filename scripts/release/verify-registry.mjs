@@ -13,7 +13,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const registry = 'https://registry.npmjs.org/'
+const requestedRegistry = readArg('--registry')
+const registry = requestedRegistry ? `${requestedRegistry.replace(/\/+$/, '')}/` : 'https://registry.npmjs.org/'
+const usage = 'Usage: node scripts/release/verify-registry.mjs --tag beta|latest|next|dev --version X.Y.Z [--wait-seconds N] [--poll-seconds N] [--registry URL]'
 
 function readArg(name) {
   const index = process.argv.indexOf(name)
@@ -21,14 +23,21 @@ function readArg(name) {
 }
 
 if (process.argv.includes('--help')) {
-  console.error('Usage: node scripts/release/verify-registry.mjs --tag latest|next|dev --version X.Y.Z')
+  console.error(usage)
   process.exit(0)
 }
 
 const tag = readArg('--tag')
 const version = readArg('--version')
 if (!tag || !version) {
-  console.error('Usage: node scripts/release/verify-registry.mjs --tag latest|next|dev --version X.Y.Z')
+  console.error(usage)
+  process.exit(2)
+}
+
+const waitSeconds = Number(readArg('--wait-seconds') ?? '0')
+const pollSeconds = Number(readArg('--poll-seconds') ?? '30')
+if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || !Number.isFinite(pollSeconds) || pollSeconds <= 0) {
+  console.error(usage)
   process.exit(2)
 }
 
@@ -36,6 +45,64 @@ const packages = [
   { name: 'context-insight', commands: ['context-insight', 'ctxi'], brand: 'Context-Insight' },
   { name: 'cannbot-insight', commands: ['cannbot-insight', 'cbi'], brand: 'CANNBot-Insight' },
 ]
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+async function fetchDistTags(name, timeoutMs) {
+  const url = `${registry}-/package/${encodeURIComponent(name)}/dist-tags?t=${Date.now()}`
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: {
+      accept: 'application/json',
+      'cache-control': 'no-cache',
+      pragma: 'no-cache',
+    },
+  })
+  if (!response.ok) throw new Error(`GET ${url} returned ${response.status}`)
+  return response.json()
+}
+
+async function waitForTag() {
+  const deadline = Date.now() + waitSeconds * 1000
+  let attempt = 0
+  const states = {}
+  while (true) {
+    if (Date.now() >= deadline) {
+      const state = packages.map((spec) => `${spec.name}=${states[spec.name] ?? '(not checked)'}`).join(', ')
+      throw new Error(`registry tag ${tag} did not reach ${version} within ${waitSeconds}s: ${state}`)
+    }
+    attempt += 1
+    const pending = []
+    for (const spec of packages) {
+      const remainingMs = deadline - Date.now()
+      if (remainingMs <= 0) {
+        states[spec.name] = states[spec.name] ?? '(deadline reached)'
+        pending.push(spec.name)
+        break
+      }
+      try {
+        const distTags = await fetchDistTags(spec.name, Math.max(1, Math.min(30_000, remainingMs)))
+        states[spec.name] = distTags[tag] ?? '(missing)'
+        if (distTags[tag] !== version) pending.push(spec.name)
+      } catch (error) {
+        states[spec.name] = `error: ${error instanceof Error ? error.message : String(error)}`
+        pending.push(spec.name)
+      }
+    }
+    if (pending.length === 0) {
+      console.log(`[registry-wait] ${tag} points to ${version} for ${packages.map((spec) => spec.name).join(', ')}`)
+      return
+    }
+
+    const state = packages.map((spec) => `${spec.name}=${states[spec.name]}`).join(', ')
+    console.log(`[registry-wait] attempt ${attempt}: ${state}`)
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) throw new Error(`registry tag ${tag} did not reach ${version} within ${waitSeconds}s: ${state}`)
+    await sleep(Math.min(pollSeconds * 1000, remainingMs))
+  }
+}
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -63,6 +130,7 @@ const env = {
   npm_config_audit: 'false',
   npm_config_fund: 'false',
   npm_config_registry: registry,
+  npm_config_prefer_online: 'true',
   npm_config_update_notifier: 'false',
   CONTEXT_NO_BROWSER: '1',
   CONTEXT_INSIGHT_HOME: home,
@@ -70,9 +138,11 @@ const env = {
   CANNBOT_INSIGHT_HOME: home,
 }
 
+if (waitSeconds > 0) await waitForTag()
+
 try {
   for (const spec of packages) {
-    run('npm', ['install', '--global', '--prefix', prefix, `${spec.name}@${tag}`, '--no-audit', '--no-fund', '--no-package-lock'], { cwd: temp, env })
+    run('npm', ['install', '--global', '--prefix', prefix, `${spec.name}@${tag}`, '--no-audit', '--no-fund', '--no-package-lock', '--prefer-online'], { cwd: temp, env })
     for (const command of spec.commands) {
       const executable = path.join(prefix, 'bin', process.platform === 'win32' ? `${command}.cmd` : command)
       const output = run(executable, ['--version'], { cwd: temp, env, timeout: 60_000 }).stdout.trim()
