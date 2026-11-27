@@ -52,7 +52,9 @@ context-insight            # first run: auto-build + migrate (~30s-2min), then s
 
 - Requires Node.js >= 22.14; mainland-China networks can add `--registry=https://registry.npmmirror.com`
 - Offline fallback: `npm install -g ./context-insight-<version>.tgz`
-- Writable state lives in `~/.context-insight/`; default port 21025 (auto-increments if occupied)
+- Writable state lives in `~/.context-insight/`; fixed port 21025 — never silently drifts. On a shared server each user sets their own: `export CONTEXT_INSIGHT_PORT=<port>` (keep ≥5 apart)
+- One instance per data directory: starting while yours is already running is refused, with the running port and the `--stop` / `-k` commands to use
+- `ctxi --stop` stops every instance of your data directory — including leftovers after the launcher was `kill -9`'d. It only stops processes proven to belong to that data directory; anything else on the port is reported (with its PID) and left alone
 - CLI subcommands pass through: `context-insight upload --file … --list` / `sessions`; short alias `ctxi`
 - Python 3 optional (starts the smart-agent analysis backend when present)
 - Alternate brand: `npm install -g cannbot-insight` — the same tool published under the CANNBot-Insight name (commands `cannbot-insight` / `cbi`, data dir `~/.cannbot-insight/`); session data is fully interchangeable with context-insight (shared format identity)
@@ -60,8 +62,9 @@ context-insight            # first run: auto-build + migrate (~30s-2min), then s
 | Flag | Effect |
 |------|--------|
 | `-a`, `--advanced` | Show advanced tabs (wireRounds/replay) |
-| `-k`, `--kill` | Stop all insight/smart-agent instances of this repo, then start on 21025 (falls back to the next free port if occupied by others) |
+| `-k`, `--kill` | Take over: stop every instance of your data directory (leftovers included), then start on your fixed port. Refuses if the port is held by something that isn't yours |
 | `-f`, `--fresh` | Clear the build cache and rebuild |
+| `--stop` | Stop every instance of your data directory and exit (non-zero if the port is still held by someone else's process) |
 | `-h`, `--help` | Print the full CLI reference — all subcommands and flags (incl. `-v, --version`) |
 
 ### Option 1: Web UI from source

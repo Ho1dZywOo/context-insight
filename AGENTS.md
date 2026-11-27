@@ -67,6 +67,7 @@ Run 统一工作台（`run/[runId]`）is `"use client"` with 11 tabs
 - **CLI client**: `src/cli/client.ts` — InsightClient with 17 methods across `/api/observe/*`, `/api/ingest/*`, `/api/ai/*`
 - **CLI types**: `src/cli/types.ts` — `Api`-prefixed interfaces to distinguish from `src/lib/shared/types.ts`
 - **Lake v2（数据湖引擎）**: `src/lib/lake`（mirror 治理/导出/编排）
+- **npm 启动器（实例生命周期）**: `bin/context-insight.mjs` 只做分发（`--stop` / CLI 透传 / Web UI），逻辑按职责拆在 `bin/launcher-*.mjs`：`context`（环境解析单点：数据目录 / 固定端口 / 安装目录 / 登记路径）/ `control`（数据目录里的 Unix socket，既是启动器互斥锁又是 status / stop 控制通道——同一数据目录只允许一个实例，进程一死监听即消失）/ `records`（每端口一份实例记录，旧单槽位 `insight.pid` 首读自动迁移）/ `proc`（进程观测：Linux 走 /proc，非 Linux 退 lsof）/ `instances`（「谁算我这份数据目录的实例」的唯一真相源）/ `stop`（`--stop` 编排与端口占用诊断）/ `web`（Web UI 启动流程）/ `identity`（`GET /api/instance/identity` 的客户端，契约在 `src/lib/instance-identity.ts`）。**归属键是数据目录，不是安装目录**（一个安装目录可以服务多份数据目录——源码仓里 `start.sh` 起的实例、nvm 切版本后的旧实例、开发时的多 HOME）：一个进程是自家的 = 形态对得上（next-server 自改的进程标题 / `python server.py`）+ 至少一条数据目录证明（打开了本数据目录的库文件 / 服务端自报身份属于本数据目录 / 本数据目录的记录在案且端口吻合；smart-agent 另认可端口紧邻自家 next-server），工作目录是本包安装目录只作旁证。`--stop` 两条路：启动器活着走控制通道让它自己收尾；启动器没了（`kill -9` / 断电 / 旧版本）按证据回收。**红线：证明不了属于本数据目录的进程一律不杀**——只如实报告占用者是谁（自家 / 另一个数据目录的 insight 实例 / 无关进程）并给出 `kill <pid>`；任何「杀进程」的改动先读 `bin/launcher-instances.mjs` 头部，改动判定必须同步 `tests/ut/launcher-multi-user.test.ts`（含「同安装目录、别的数据目录的 next-server 不杀」回归锁）
 
 ### CLI Frontend
 

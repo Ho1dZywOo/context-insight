@@ -50,7 +50,9 @@ context-insight            # 首次：自动 build + migrate（约 30s-2min）�
 
 - 需 Node.js >= 22.12；国内网络可加 `--registry=https://registry.npmmirror.com`
 - 离线环境可用 tgz：`npm install -g ./context-insight-<版本>.tgz`
-- 可写状态集中在 `~/.context-insight/`；默认端口 21025（占用自动顺延）
+- 可写状态集中在 `~/.context-insight/`；端口固定 21025，绝不静默顺延。多人服务器每人固定自己的端口：`export CONTEXT_INSIGHT_PORT=<端口>`（间隔 ≥5）
+- 同一数据目录只允许一个实例：已有实例在运行时再次启动会被拒绝，并报出运行中的端口与可用的 `--stop` / `-k` 命令
+- `ctxi --stop` 停掉本数据目录的全部实例——包括启动器被 `kill -9` 后残留的后台进程。只停能证明属于本数据目录的进程；端口上若是别的进程，报出它的 PID、不代杀
 - CLI 子命令直接透传：`context-insight upload --file … --list` / `sessions`；短别名 `ctxi`
 - Python 3 可选（存在则启动 smart-agent 分析后端，缺失静默降级）
 - 别名品牌：`npm install -g cannbot-insight` —— 同一工具以 CANNBot-Insight 品牌名发布（命令 `cannbot-insight` / `cbi`，数据目录 `~/.cannbot-insight/`）；会话数据与 context-insight 完全互通（共享同一格式标识）
@@ -58,8 +60,9 @@ context-insight            # 首次：自动 build + migrate（约 30s-2min）�
 | 标志 | 作用 |
 |------|------|
 | `-a`, `--advanced` | 显示高级 tab（wireRounds/replay） |
-| `-k`, `--kill` | 停掉本仓所有 insight/smart-agent 实例后从 21025 启动（被他方占用时顺延下一个空闲端口） |
+| `-k`, `--kill` | 接管：停掉本数据目录的全部实例（含残留）后在自己的固定端口启动；端口被非自家进程占用则拒绝 |
 | `-f`, `--fresh` | 清空构建缓存重建 |
+| `--stop` | 停掉本数据目录的全部实例后退出（端口仍被别人的进程占着时退出码非 0） |
 | `-h`, `--help` | 打印完整 CLI 参考 —— 全部子命令与旗标（含 `-v, --version` 版本输出） |
 
 ### 方式一：源码运行 Web UI
