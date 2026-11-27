@@ -19,8 +19,9 @@
 // 均不读 lockfile，对发布物零影响。
 
 import { describe, it, expect } from "vitest"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
+import { createServer } from "node:http"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { VERSION } from "../../src/lib/version"
@@ -174,5 +175,46 @@ describe("release registry verification workflow", () => {
     expect(`${result.stdout}${result.stderr}`).toContain("--wait-seconds")
     expect(`${result.stdout}${result.stderr}`).toContain("--poll-seconds")
   })
+
+  it("registry 慢响应时总等待严格受 deadline 约束", async () => {
+    const server = createServer((_request, response) => {
+      const timer = setTimeout(() => {
+        response.setHeader("content-type", "application/json")
+        response.end(JSON.stringify({ beta: "old-version" }))
+      }, 1_200)
+      response.on("close", () => clearTimeout(timer))
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject)
+      server.listen(0, "127.0.0.1", resolve)
+    })
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("missing test registry port")
+
+    const started = Date.now()
+    try {
+      const result = await new Promise<{ code: number | null; stdout: string; stderr: string; elapsed: number }>((resolve, reject) => {
+        const child = spawn(process.execPath, [
+          "scripts/release/verify-registry.mjs",
+          "--tag", "beta",
+          "--version", "9.9.9",
+          "--wait-seconds", "1",
+          "--poll-seconds", "30",
+          "--registry", `http://127.0.0.1:${address.port}/`,
+        ], { cwd: PKG_DIR })
+        let stdout = ""
+        let stderr = ""
+        child.stdout.on("data", (chunk) => { stdout += chunk })
+        child.stderr.on("data", (chunk) => { stderr += chunk })
+        child.once("error", reject)
+        child.once("close", (code) => resolve({ code, stdout, stderr, elapsed: Date.now() - started }))
+      })
+
+      expect(result.code).not.toBe(0)
+      expect(result.elapsed, `stdout=${result.stdout}\nstderr=${result.stderr}`).toBeLessThan(2_000)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  }, 10_000)
 
 })

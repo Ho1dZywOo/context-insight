@@ -13,8 +13,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const registry = 'https://registry.npmjs.org/'
-const usage = 'Usage: node scripts/release/verify-registry.mjs --tag beta|latest|next|dev --version X.Y.Z [--wait-seconds N] [--poll-seconds N]'
+const requestedRegistry = readArg('--registry')
+const registry = requestedRegistry ? `${requestedRegistry.replace(/\/+$/, '')}/` : 'https://registry.npmjs.org/'
+const usage = 'Usage: node scripts/release/verify-registry.mjs --tag beta|latest|next|dev --version X.Y.Z [--wait-seconds N] [--poll-seconds N] [--registry URL]'
 
 function readArg(name) {
   const index = process.argv.indexOf(name)
@@ -49,10 +50,10 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
-async function fetchDistTags(name) {
+async function fetchDistTags(name, timeoutMs) {
   const url = `${registry}-/package/${encodeURIComponent(name)}/dist-tags?t=${Date.now()}`
   const response = await fetch(url, {
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {
       accept: 'application/json',
       'cache-control': 'no-cache',
@@ -66,13 +67,23 @@ async function fetchDistTags(name) {
 async function waitForTag() {
   const deadline = Date.now() + waitSeconds * 1000
   let attempt = 0
+  const states = {}
   while (true) {
+    if (Date.now() >= deadline) {
+      const state = packages.map((spec) => `${spec.name}=${states[spec.name] ?? '(not checked)'}`).join(', ')
+      throw new Error(`registry tag ${tag} did not reach ${version} within ${waitSeconds}s: ${state}`)
+    }
     attempt += 1
-    const states = {}
     const pending = []
     for (const spec of packages) {
+      const remainingMs = deadline - Date.now()
+      if (remainingMs <= 0) {
+        states[spec.name] = states[spec.name] ?? '(deadline reached)'
+        pending.push(spec.name)
+        break
+      }
       try {
-        const distTags = await fetchDistTags(spec.name)
+        const distTags = await fetchDistTags(spec.name, Math.max(1, Math.min(30_000, remainingMs)))
         states[spec.name] = distTags[tag] ?? '(missing)'
         if (distTags[tag] !== version) pending.push(spec.name)
       } catch (error) {
@@ -87,10 +98,9 @@ async function waitForTag() {
 
     const state = packages.map((spec) => `${spec.name}=${states[spec.name]}`).join(', ')
     console.log(`[registry-wait] attempt ${attempt}: ${state}`)
-    if (Date.now() >= deadline) {
-      throw new Error(`registry tag ${tag} did not reach ${version} within ${waitSeconds}s: ${state}`)
-    }
-    await sleep(Math.min(pollSeconds * 1000, Math.max(0, deadline - Date.now())))
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) throw new Error(`registry tag ${tag} did not reach ${version} within ${waitSeconds}s: ${state}`)
+    await sleep(Math.min(pollSeconds * 1000, remainingMs))
   }
 }
 
