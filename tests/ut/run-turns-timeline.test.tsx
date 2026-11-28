@@ -20,6 +20,7 @@ import { createElement, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import { RunTurnsTimeline } from '@/components/run/turns-timeline/RunTurnsTimeline';
+import { tintOf } from '@/components/run/turns-timeline/selection-geometry';
 import type { SwimAgent, SwimBridge } from '@/lib/swimlane-model';
 
 const lanesRenders = vi.hoisted(() => ({ count: 0 }));
@@ -133,6 +134,18 @@ function clickAt(el: Element, x: number) {
 const sec = (s: number) => Math.round((s / 120) * 1000);
 /** 本机时区 HH:MM:SS */
 const hms = (ms: number) => { const d = new Date(ms); return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':'); };
+/** `translateX(Npx)` 里的 N */
+function tx(el: HTMLElement): number {
+  const m = /^translateX\(([-\d.e]+)px\)$/.exec(el.style.transform);
+  if (!m) throw new Error(`not a translateX: ${el.style.transform}`);
+  return Number(m[1]);
+}
+/** 行内宽度的 px 数 */
+function wd(el: HTMLElement): number {
+  const m = /^([\d.e]+)px$/.exec(el.style.width);
+  if (!m) throw new Error(`not a px width: ${el.style.width}`);
+  return Number(m[1]);
+}
 function pointerAt(el: Element, type: string, x: number) {
   act(() => { el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x })); });
 }
@@ -263,71 +276,87 @@ describe('RunTurnsTimeline — ① 单击即跳', () => {
 });
 
 describe('RunTurnsTimeline — ② 选中区间跟随与性能契约', () => {
-  it('选中轮的时间窗横贯所有道（竖带 = 起点与宽度），自己的那段活跃条点亮、只点亮所在道；时刻牌挂在轴区起点', () => {
+  it('选中层（iOS 风格）：柔光横贯所有道、所属条子上浮起同色胶囊、轴上居中于起点滑一枚实色时刻胶囊；位移走 transform', () => {
     const { rerender } = render({ selectedTurnId: 't2' });
-    const band = q<HTMLElement>('[data-playhead]')!;
-    expect(band.style.left).toBe('50%');
-    expect(band.style.width).toBe(`${(30 / 120) * 100}%`);
-    // 点亮的落点只在 root 道（t2 是 root 的轮），位置与竖带同宽
-    const lit = qa('[data-selected-turn]');
-    expect(lit.map(e => `${e.closest('[data-lane]')!.getAttribute('data-lane')}@${(e as HTMLElement).style.left}`)).toEqual(['root@50%']);
-    expect(lit[0]!.closest('[data-lane]')!.getAttribute('data-lane')).toBe('root');
-    expect(lit[0]!.style.left).toBe('50%');
-    expect(lit[0]!.style.width).toBe(`${(30 / 120) * 100}%`);
-    // 时刻牌在轴区（吸顶行），不是道区里的一根线
-    const chip = q('[data-playhead-time]')!;
-    expect(chip.closest('[data-timeline-axis]')).toBeTruthy();
-    expect(chip.textContent).toBe(hms(at(60)));
-    expect(chip.className).toContain('translate-x-0');
-    // 选中的是子代理轮：竖带同宽，点亮落在槽道里该子代理的条子上
+    // 轨道 1000px（getBoundingClientRect 桩）：t2 = 60–90s / 120s → 左缘 500px、宽 250px
+    const band = q<HTMLElement>('[data-selection-band]')!;
+    expect(tx(band)).toBe(500);
+    expect(wd(band)).toBe(250);
+    // 柔光：横向渐变（两端渐隐）、无描边——只用填充
+    expect(band.style.background).toContain('linear-gradient(90deg');
+    expect(band.style.boxShadow).toBe('');
+    // 选中段只在 root 道（t2 是 root 的轮），位置与柔光同源
+    const lit = qa('[data-selected-turn]') as HTMLElement[];
+    expect(lit.map(e => e.closest('[data-lane]')!.getAttribute('data-lane'))).toEqual(['root']);
+    expect(tx(lit[0]!)).toBe(500);
+    expect(wd(lit[0]!)).toBe(250);
+    // 整个选中态一个色系：条子本色（root = 蓝）
+    expect(['#3b82f6', 'rgb(59, 130, 246)']).toContain(lit[0]!.style.backgroundColor);
+    // 时刻胶囊在轴区（吸顶行）：实色本色、白字、宽 64、居中于起点
+    const pill = q<HTMLElement>('[data-selection-pill]')!;
+    expect(pill.closest('[data-timeline-axis]')).toBeTruthy();
+    expect(pill.textContent).toBe(hms(at(60)));
+    expect(wd(pill)).toBe(64);
+    expect(tx(pill)).toBe(500 - 32);
+    expect(pill.style.backgroundColor).toBe(lit[0]!.style.backgroundColor);
+    // 选中的是子代理轮：柔光同宽，浮起的胶囊落在槽道里该子代理的条子上
     rerender({ selectedTurnId: 'sb1' });
-    expect(q<HTMLElement>('[data-playhead]')!.style.left).toBe(`${(95 / 120) * 100}%`);
-    expect(q<HTMLElement>('[data-playhead]')!.style.width).toBe(`${(15 / 120) * 100}%`);
-    const litSub = qa('[data-selected-turn]');
-    expect(litSub).toHaveLength(1);
-    expect(litSub[0]!.closest('[data-lane]')!.getAttribute('data-lane')).toBe('slot-1');
-    expect(litSub[0]!.style.left).toBe(`${(95 / 120) * 100}%`);
-    // 未知轮 / 无选中 → 无竖带、无点亮
+    expect(tx(q<HTMLElement>('[data-selection-band]')!)).toBeCloseTo(((95 / 120) * 100) / 100 * 1000, 6);
+    expect(wd(q<HTMLElement>('[data-selection-band]')!)).toBeCloseTo(((15 / 120) * 100) / 100 * 1000, 6);
+    const litSub = qa('[data-selected-turn]') as HTMLElement[];
+    expect(litSub.map(e => e.closest('[data-lane]')!.getAttribute('data-lane'))).toEqual(['slot-1']);
+    expect(tx(litSub[0]!)).toBeCloseTo(((95 / 120) * 100) / 100 * 1000, 6);
+    // 未知轮 / 无选中 → 整个选中层不在场
     rerender({ selectedTurnId: 'nope' });
-    expect(q('[data-playhead]')).toBeNull();
+    expect(q('[data-selection-band]')).toBeNull();
+    expect(q('[data-selection-pill]')).toBeNull();
     expect(q('[data-selected-turn]')).toBeNull();
   });
 
-  it('零宽的轮也看得见：竖带宽度为 0 但保底 6px；起点贴近右界时时刻牌改挂左侧', () => {
+  it('零宽的轮也看得见：柔光保底 24px 的对称一束；时刻胶囊贴右界时钳在轴内，不出界', () => {
     render({
       selectedTurnId: 't0',
       agents: [agent({ ...ROOT, activeIntervals: [...(ROOT.activeIntervals ?? []), { start: at(119), end: at(119), turnId: 't0' }] })],
       bridges: [],
     });
-    const band = q<HTMLElement>('[data-playhead]')!;
-    expect(band.style.left).toBe(`${(119 / 120) * 100}%`);
-    expect(band.style.width).toBe('0%');
-    expect(band.style.minWidth).toBe('6px');
-    // 所属条子上同样套环（宽度 0、保底 3px）——真实数据里零宽轮很常见
-    const lit = qa('[data-selected-turn]');
+    const x = ((119 / 120) * 100) / 100 * 1000;
+    const band = q<HTMLElement>('[data-selection-band]')!;
+    expect(tx(band)).toBeCloseTo(x, 6);
+    expect(wd(band)).toBe(24);
+    // 窄于两段渐隐 → 对称渐入渐出
+    expect(band.style.background).toBe(`linear-gradient(90deg, transparent, ${tintOf('#3b82f6')} 50%, transparent)`);
+    // 所属条子上同样浮起（保底 6px）
+    const lit = qa('[data-selected-turn]') as HTMLElement[];
     expect(lit).toHaveLength(1);
-    expect((lit[0] as HTMLElement).style.width).toBe('0%');
-    expect((lit[0] as HTMLElement).style.minWidth).toBe('3px');
-    expect(q('[data-playhead-time]')!.className).toContain('-translate-x-full');
+    expect(wd(lit[0]!)).toBe(6);
+    // 居中会出右界 → 钳到 1000 − 64
+    expect(tx(q<HTMLElement>('[data-selection-pill]')!)).toBe(1000 - 64);
+  });
+
+  it('首帧 / 缩放时选中层直接落位：容器带 data-sel-instant（关掉过渡），下一帧才恢复滑动', () => {
+    render({ selectedTurnId: 't2' });
+    expect(q('[data-timeline-vscroll]')!.hasAttribute('data-sel-instant')).toBe(true);
   });
 
   it('换选只重渲染「上一选 / 当前选」两道：逐道 memo，其余道一根条子都不动', () => {
     const { rerender, onSelectTurn } = render({ selectedTurnId: 't2' });
-    // 初始：root + slot-1 两道各渲染一次
-    expect(lanesRenders.count).toBe(2);
+    // 首帧：root + slot-1 各渲染一次；随后轨道宽度测出（0 → 1000px），被点亮的
+    // root 道拿到像素几何再渲染一次——一次性落位，之后换选不再触发
+    expect(lanesRenders.count).toBe(3);
+    const settled = lanesRenders.count;
     // t2（root）→ sa1（槽道）：root 道撤销点亮、slot-1 道点亮 = 恰好两道
     rerender({ selectedTurnId: 'sa1' });
-    expect(lanesRenders.count).toBe(4);
+    expect(lanesRenders.count).toBe(settled + 2);
     // sa1 → sb1：都在 slot-1 道 → 只有一道
     rerender({ selectedTurnId: 'sb1' });
-    expect(lanesRenders.count).toBe(5);
+    expect(lanesRenders.count).toBe(settled + 3);
     // 时间线上点击换选（onSelectTurn 是桩，选中不变）→ 零重渲染
     clickAt(laneEl('root'), sec(15));
     expect(onSelectTurn).toHaveBeenLastCalledWith('t1');
-    expect(lanesRenders.count).toBe(5);
+    expect(lanesRenders.count).toBe(settled + 3);
     // 撤销选中：只有当前被点亮的那一道
     rerender({ selectedTurnId: null });
-    expect(lanesRenders.count).toBe(6);
+    expect(lanesRenders.count).toBe(settled + 4);
   });
 
   it('道行子树只在模型变化时整体重渲染（图例过滤、阈值切换、车道表）', () => {

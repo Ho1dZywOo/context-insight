@@ -15,9 +15,10 @@
 //   ① 单击即跳——点到哪一刻，就选中那一刻的轮次（root 道整道可点；槽道点
 //      条子内任一时刻落到该子代理当时的轮），走既有选中管线（详情归属 →
 //      成员懒加载 → 节点自动展开 → 行居中揭示）；
-//   ② 选中区间——选中轮（列表点击 / ←→ 走查 / 深链 / 搜索命中）的时间窗在
-//      所有道上铺一条淡色竖带（这一轮期间别的成员在做什么一目了然），它自己
-//      的那段活跃条点亮成实色，轴上起点挂时刻牌；放大后走出视野自动跟随滚动；
+//   ② 选中区间（iOS 风格：只用条子本色的填充，不用描边）——选中轮（列表点击 /
+//      ←→ 走查 / 深链 / 搜索命中）的时间窗在所有道上铺一束同色柔光（这一轮期间
+//      别的成员在做什么一目了然），它自己的那段活跃条浮起成同色胶囊，轴上居中于
+//      起点滑一枚实色时刻胶囊；放大后走出视野自动跟随滚动；
 //   ③ 缩放以选中区间为锚——放大/缩小（按钮 / Ctrl+滚轮）后锚点停在原屏幕位置，
 //      放大后滚轮横走时间轴；
 //   ④ 测距是显式模式（工具条尺子）：开着才量时距，不与导航抢单击。
@@ -27,7 +28,8 @@
 // 永远同步；轴与道的横向滚动位置只有一个来源（道区容器），轴区镜像它。
 //
 // 性能契约：道行子树逐道 memo——换选只有「上一选 / 当前选」两道重渲染，其余
-// 动的只是覆盖层里的选中区间；悬停游标线与时刻牌直写 DOM，不触发渲染；刻度
+// 动的只是覆盖层里的选中层，且只动 transform / width / opacity（见 globals.css
+// .turns-sel-slide）；悬停游标线与时刻牌直写 DOM，不触发渲染；刻度
 // 与网格线只为可视窗口生成（放大 1024× 时整段上有数千个刻度点，全画会卡），
 // 横向滚动只重画这一层，条子不重渲染；时刻 → 轮次是模型里的二分查找，不拉任何数据。
 
@@ -56,6 +58,15 @@ import {
   type SwimBridge,
 } from "@/lib/swimlane-model";
 import { TimelineHScroll, type TimelineHScrollHandle, type TimelineHScrollSource } from "./TimelineHScroll";
+import {
+  MIN_SEGMENT_PX,
+  MIN_SELECTION_PX,
+  PILL_W,
+  bandGradient,
+  glowOf,
+  tintOf,
+  type SelectionGeometry,
+} from "./selection-geometry";
 import { TimelineLanes, type LaneSelection } from "./TimelineLanes";
 
 const THRESHOLDS = [
@@ -75,15 +86,10 @@ const AXIS_H = 20;
 const LABEL_W = 96;
 /** 整个图区（轴 + 道 + 滚动条）的最大高度：约 12 道一屏，再多纵向翻 */
 const MAX_PLOT_H = 288;
-/** 选中区间的最小可见宽度（px）：零宽 / 极短的轮也要看得见 */
-const MIN_SELECTION_PX = 6;
 /** 选中区间的离视口边缘不足这么多像素即视为「走出视野」 */
 const FOLLOW_MARGIN_PX = 48;
-/** 时刻牌默认在区间起点右侧；起点过了这个百分比改挂左侧，免得出右界 */
-const CHIP_FLIP_PCT = 85;
-/** 选中区间竖带的两侧描边（primary 的半透明色） */
-const SELECTION_EDGE = "color-mix(in oklab, var(--color-primary) 45%, transparent)";
-const SELECTION_EDGE_SHADOW = `inset 1.5px 0 0 0 ${SELECTION_EDGE}, inset -1.5px 0 0 0 ${SELECTION_EDGE}`;
+/** 测距瞄准时刻牌过了这个百分比改挂光标左侧，免得出右界 */
+const CURSOR_FLIP_PCT = 90;
 
 interface MeasurePoint {
   /** 相对整段时长（0–100）——缩放不改变它 */
@@ -134,6 +140,8 @@ export function RunTurnsTimeline({
   /** 可视窗口（整段时长的百分比范围）——刻度只为它生成；{0,0} = 尚未测量 */
   const [view, setView] = useState<AxisView>({ fromPct: 0, toPct: 0 });
   const [hover, setHover] = useState<{ bar: SwimBar; x: number; y: number } | null>(null);
+  /** 轨道像素宽：选中层的几何全用它换算成 px，位移才能走 transform */
+  const [trackW, setTrackW] = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const lanesScrollId = useId();
@@ -189,6 +197,43 @@ export function RunTurnsTimeline({
   }, []);
   useLayoutEffect(() => { measureView(); }, [measureView, showPlot, collapsed, zoom]);
 
+  const measureTrack = useCallback(() => {
+    const w = trackRef.current?.getBoundingClientRect().width ?? 0;
+    setTrackW(prev => (prev === w ? prev : w));
+  }, []);
+  useLayoutEffect(measureTrack, [measureTrack, showPlot, collapsed, zoom]);
+  // 视口变宽窄（窗口缩放 / 侧栏开合）：轨道随之变宽，重测
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!showPlot || collapsed || !el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      measureTrack();
+      scheduleMeasureView();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [showPlot, collapsed, measureTrack, scheduleMeasureView]);
+  // 选中层只在「换选」时滑动；缩放 / 轨道变宽窄（首帧布局落定、窗口缩放）是
+  // 几何换算变了而不是选了别的轮——直接落位（data-sel-instant 关掉过渡）。标记要
+  // 等到「再下一帧」才移除：提交若发生在某帧 rAF 阶段之前，单层 rAF 会在样式计算
+  // 前就把标记拿掉，新位置就带着过渡飘过去；嵌套两帧保证至少有一帧以无过渡绘制
+  useLayoutEffect(() => {
+    const host = vScrollRef.current;
+    if (!host) return;
+    host.setAttribute("data-sel-instant", "");
+    if (typeof requestAnimationFrame !== "function") return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => host.removeAttribute("data-sel-instant"));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+      // 标记由本效果独占：换缩放档时先撤，重跑时再加（中间不绘制）
+      host.removeAttribute("data-sel-instant");
+    };
+  }, [showPlot, collapsed, zoom, trackW]);
+
   // ── 横向滚动位置只有一个来源（道区容器）：轴区与滚动条镜像它 ──
   const syncScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -232,9 +277,10 @@ export function RunTurnsTimeline({
   }, [model, selectedTurnId]);
   // 选中轮点亮在哪根条子上：按归属（条子自己的可见轮），不按时间交叠——root
   // 条横贯整段，任何轮都和它「交叠」，但只有它自己的轮才点亮
-  const selectionByLane = useMemo(() => {
-    const out = new Map<string, LaneSelection>();
-    if (!model || !selection) return out;
+  const lit = useMemo(() => {
+    const byLane = new Map<string, LaneSelection>();
+    if (!model || !selection) return { byLane, color: null as string | null };
+    let color: string | null = null;
     for (const lane of model.lanes) {
       for (const bar of lane.bars) {
         if (!bar.windows.some(w => w.turnId === selectedTurnId)) continue;
@@ -242,12 +288,34 @@ export function RunTurnsTimeline({
         const to = Math.min(selection.endPct, bar.startPct + bar.widthPct);
         // 零宽的轮（起止同一毫秒，真实数据里很常见）也点亮：落点宽度可为 0，渲染时保底 3px
         if (to < from) continue;
-        out.set(lane.key, { barKey: bar.key, color: bar.color, leftPct: from, widthPct: to - from, top: swimBarTop(lane.rows, bar.row) });
+        byLane.set(lane.key, {
+          color: bar.color,
+          glow: glowOf(bar.color),
+          x: (from / 100) * trackW,
+          w: Math.max(((to - from) / 100) * trackW, MIN_SEGMENT_PX),
+          top: swimBarTop(lane.rows, bar.row),
+        });
+        color = bar.color;
         break;
       }
     }
-    return out;
-  }, [model, selection, selectedTurnId]);
+    return { byLane, color };
+  }, [model, selection, selectedTurnId, trackW]);
+  const selectionByLane = lit.byLane;
+  // ② 选中层的像素几何：轴上的时刻胶囊（居中于起点、钳在轴内）+ 横贯所有道的柔光；
+  // 色取所属条子的本色——整个选中态只有一个色系
+  const sel = useMemo<SelectionGeometry | null>(() => {
+    if (!selection || trackW <= 0 || !lit.color) return null;
+    const x = (selection.startPct / 100) * trackW;
+    const w = Math.max(((selection.endPct - selection.startPct) / 100) * trackW, MIN_SELECTION_PX);
+    return {
+      color: lit.color,
+      pillX: clamp(x - PILL_W / 2, 0, Math.max(0, trackW - PILL_W)),
+      x,
+      w,
+      background: bandGradient(tintOf(lit.color), w),
+    };
+  }, [selection, lit.color, trackW]);
   const selectionStartPctRef = useRef<number | null>(null);
   useEffect(() => { selectionStartPctRef.current = selection?.startPct ?? null; }, [selection]);
 
@@ -383,7 +451,7 @@ export function RunTurnsTimeline({
     time.textContent = fmtClock(m.startMs + (pct / 100) * m.totalMs);
     time.style.left = `${pct}%`;
     time.style.opacity = "1";
-    time.style.transform = pct > CHIP_FLIP_PCT + 5 ? "translateX(calc(-100% - 6px))" : "translateX(6px)";
+    time.style.transform = pct > CURSOR_FLIP_PCT ? "translateX(calc(-100% - 6px))" : "translateX(6px)";
   }, [pctAt]);
   const onTrackLeave = useCallback(() => {
     const line = hoverLineRef.current;
@@ -578,17 +646,14 @@ export function RunTurnsTimeline({
                   {plot.axis.edgeEnd && (
                     <span className="absolute right-0 top-0.5 whitespace-nowrap text-[10px] tabular-nums text-muted-foreground">{axis!.edgeEnd}</span>
                   )}
-                  {/* 选中区间的时刻牌：挂在区间起点（靠右界时改挂左侧） */}
-                  {selection && (
+                  {/* 选中区间的时刻胶囊：实色（条子本色）白字，居中于区间起点、钳在轴内 */}
+                  {sel && (
                     <span
-                      data-playhead-time
-                      className={cn(
-                        "absolute top-px whitespace-nowrap rounded-full bg-background px-1.5 text-[10px] font-semibold leading-4 text-primary tabular-nums shadow-sm ring-1 ring-primary/20 transition-[left] duration-200 ease-out motion-reduce:transition-none",
-                        selection.startPct > CHIP_FLIP_PCT ? "-translate-x-full" : "translate-x-0",
-                      )}
-                      style={{ left: `${selection.startPct}%` }}
+                      data-selection-pill
+                      className="turns-sel-slide turns-sel-pop pointer-events-none absolute top-0.5 flex h-[18px] items-center justify-center rounded-full text-[11px] font-semibold tabular-nums text-white [text-shadow:0_1px_2px_rgb(0_0_0/0.25)]"
+                      style={{ left: 0, width: PILL_W, transform: `translateX(${sel.pillX}px)`, backgroundColor: sel.color }}
                     >
-                      {fmtClock(selection.startMs)}
+                      {fmtClock(selection!.startMs)}
                     </span>
                   )}
                   {/* 测距瞄准时刻牌：直写 DOM */}
@@ -652,20 +717,14 @@ export function RunTurnsTimeline({
                   <TimelineLanes lanes={plot.model.lanes} selectionByLane={selectionByLane} onHover={onHover} />
 
                   {/* 覆盖层：均不接事件 */}
-                  {/* 选中区间：选中轮的时间窗横贯所有道——这一轮期间别的成员在做什么 */}
-                  {selection && (
+                  {/* 选中区间：选中轮的时间窗横贯所有道——一束同色柔光（两端渐隐、无描边），
+                      这一轮期间别的成员在做什么一目了然 */}
+                  {sel && (
                     <div
-                      data-playhead
+                      data-selection-band
                       aria-hidden
-                      className="pointer-events-none absolute bottom-0 z-[3] rounded-[3px] bg-primary/[0.07] transition-[left,width] duration-200 ease-out motion-reduce:transition-none"
-                      style={{
-                        top: 0,
-                        left: `${selection.startPct}%`,
-                        width: `${selection.endPct - selection.startPct}%`,
-                        minWidth: MIN_SELECTION_PX,
-                        // 两侧半透明描边：窄到一颗小竖丸时也有「区间」的轮廓，而不是一根实色线
-                        boxShadow: SELECTION_EDGE_SHADOW,
-                      }}
+                      className="turns-sel-slide turns-sel-pop pointer-events-none absolute bottom-0 z-[3] rounded-full"
+                      style={{ top: 0, left: 0, width: sel.w, transform: `translateX(${sel.x}px)`, background: sel.background }}
                     />
                   )}
                   {measure && (

@@ -15,15 +15,17 @@
 
 import { memo } from "react";
 import { SWIM_BAR_H, swimBarTop, swimLaneHeight, type SwimBar, type SwimLane } from "@/lib/swimlane-model";
+import { SELECTION_LIFT } from "./selection-geometry";
 import { cn } from "@/lib/utils";
 
-/** 选中轮在本道条子上的落点（相对整段时长的百分比；已钳进条盒） */
+/** 选中轮在本道条子上的落点：相对轨道左缘的 px 几何（已钳进条盒），位移走 transform */
 export interface LaneSelection {
-  barKey: string;
-  /** 条子本色：选中环沿用道自己的颜色（不引入第二种色） */
+  /** 条子本色：选中段沿用道自己的颜色（不引入第二种色） */
   color: string;
-  leftPct: number;
-  widthPct: number;
+  /** 选中段的柔影色 */
+  glow: string;
+  x: number;
+  w: number;
   top: number;
 }
 
@@ -96,21 +98,20 @@ export const TimelineLane = memo(function TimelineLane({
           </div>
         );
       })}
-      {/* 选中轮的时间窗：在本道的条子上套一圈选中环（本色 + 白色间隔 + 本色描边，
-          换轮时位置与宽度平滑过渡）——横贯所有道的淡色竖带在覆盖层 */}
+      {/* 选中轮的时间窗：在本道的条子上「浮起」成同色胶囊（比条子高一点、带柔影，
+          只用填充不用描边）；换轮沿 iOS 曲线滑到新位置，横贯所有道的同色柔光在覆盖层 */}
       {selection && (
         <span
           data-selected-turn
           aria-hidden
-          className="pointer-events-none absolute z-[2] rounded-[3px] transition-[left,width] duration-200 ease-out motion-reduce:transition-none"
+          className="turns-sel-slide turns-sel-pop pointer-events-none absolute left-0 z-[2] rounded-full"
           style={{
-            left: `${selection.leftPct}%`,
-            width: `${selection.widthPct}%`,
-            minWidth: 3,
-            top: selection.top,
-            height: SWIM_BAR_H,
+            width: selection.w,
+            transform: `translateX(${selection.x}px)`,
+            top: selection.top - SELECTION_LIFT,
+            height: SWIM_BAR_H + SELECTION_LIFT * 2,
             backgroundColor: selection.color,
-            boxShadow: `0 0 0 1.5px var(--color-background), 0 0 0 3px ${selection.color}`,
+            boxShadow: `0 1px 6px ${selection.glow}`,
           }}
         />
       )}

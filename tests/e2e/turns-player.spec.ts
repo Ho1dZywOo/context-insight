@@ -103,7 +103,7 @@ test.describe("Turns 面板交互", () => {
     const timeline = page.locator("[data-turns-timeline]");
     const track = timeline.locator("[data-timeline-track]");
     await expect(track).toBeVisible();
-    const playhead = timeline.locator("[data-playhead]");
+    const band = timeline.locator("[data-selection-band]");
     const detail = page.locator("[data-turn-detail]");
     const gridLines = timeline.locator("[data-timeline-grid] span");
     // 一屏最多 6 格 + 窗口外扩一格（不足 3 格时降一档步长，最多约 8 格）：与 run 的时间跨度无关
@@ -114,12 +114,21 @@ test.describe("Turns 面板交互", () => {
     await expect(rows.first()).toBeVisible();
     await rows.nth(Math.floor((await rows.count()) / 2)).click();
     await expect(detail).toBeVisible({ timeout: 20_000 });
-    await expect(playhead).toBeAttached();
+    await expect(band).toBeAttached();
+    // 首帧布局落定后轨道宽度会变一次（列表 / 详情面板就位）——选中层随之直接落位；
+    // 先等它停稳再取锚点
+    await expect
+      .poll(async () => {
+        const a = (await band.boundingBox())!.x;
+        await page.waitForTimeout(120);
+        return Math.abs((await band.boundingBox())!.x - a) < 0.01;
+      })
+      .toBe(true);
     // 可视宽度 = 滚动容器宽度（轨道在 1× 时与之等宽）
     const viewport = (await timeline.locator("[data-timeline-scroll]").boundingBox())!;
     const viewLeft = viewport.x;
     const viewWidth = viewport.width;
-    const anchorBefore = (await playhead.boundingBox())!.x;
+    const anchorBefore = (await band.boundingBox())!.x;
     expect(anchorBefore).toBeGreaterThan(viewLeft);
     expect(anchorBefore).toBeLessThan(viewLeft + viewWidth);
 
@@ -127,7 +136,7 @@ test.describe("Turns 面板交互", () => {
     const zoomIn = timeline.getByRole("button", { name: "放大" });
     for (let i = 0; i < 10; i++) await zoomIn.click();
     await expect(timeline.locator("[data-zoom-value]")).toHaveText("1024×");
-    const anchorAfter = (await playhead.boundingBox())!.x;
+    const anchorAfter = (await band.boundingBox())!.x;
     expect(Math.abs(anchorAfter - anchorBefore)).toBeLessThan(8);
     // 刻度仍只为可视窗口生成（整段上有数千个刻度点，一个都不多画）
     expect(await gridLines.count()).toBeLessThanOrEqual(11);
@@ -170,11 +179,11 @@ test.describe("Turns 面板交互", () => {
     await expect
       .poll(async () => {
         const t = (await track.boundingBox())!;
-        const x = (await playhead.boundingBox())!.x;
+        const x = (await band.boundingBox())!.x;
         return Math.abs(x - (t.x + ((expectedStart - startMs) / totalMs) * t.width));
       }, { timeout: 5_000 })
       .toBeLessThan(2);
-    const landed = (await playhead.boundingBox())!.x;
+    const landed = (await band.boundingBox())!.x;
     expect(landed).toBeGreaterThanOrEqual(viewLeft - 1);
     expect(landed).toBeLessThanOrEqual(viewLeft + viewWidth + 1);
   });
@@ -188,8 +197,8 @@ test.describe("Turns 面板交互", () => {
     await run.expectTabActive("turns");
 
     const timeline = page.locator("[data-turns-timeline]");
-    const band = timeline.locator("[data-playhead]");
-    const chip = timeline.locator("[data-playhead-time]");
+    const band = timeline.locator("[data-selection-band]");
+    const chip = timeline.locator("[data-selection-pill]");
     const rows = page.locator("[data-turn-list] [data-turn-row]");
     await expect(rows.first()).toBeVisible();
     await rows.nth(Math.floor((await rows.count()) / 2)).click();
@@ -209,20 +218,27 @@ test.describe("Turns 面板交互", () => {
     });
     // root 道 = 'root'（单成员）或成员 taskId（多成员 run）
     expect(ringLane.root || ringLane.key === "root").toBe(true);
-    // 起点过了轴宽 85% 时时刻牌改挂在起点左侧（右缘对齐），免得出右界
+    // 时刻胶囊居中于区间起点（贴边时钳在轴内）——始终罩住起点
     await expect
       .poll(async () => {
         const b = (await band.boundingBox())!;
         const c = (await chip.boundingBox())!;
-        const flipped = (await chip.getAttribute("class"))!.includes("-translate-x-full");
-        return Math.abs(b.x - (flipped ? c.x + c.width : c.x));
+        return c.x - 1.5 <= b.x && b.x <= c.x + c.width + 1.5;
       })
-      .toBeLessThan(1.5);
+      .toBe(true);
+    // iOS 风格：只用填充不用描边；位移走 transform，过渡只动 transform / width / opacity
+    expect(await chip.evaluate(el => getComputedStyle(el).boxShadow)).toBe("none");
+    expect(await chip.evaluate(el => getComputedStyle(el).borderTopWidth)).toBe("0px");
+    expect(await chip.evaluate(el => getComputedStyle(el).transform)).toMatch(/^matrix\(1, 0, 0, 1, /);
+    expect(await chip.evaluate(el => getComputedStyle(el).transitionProperty)).toContain("transform");
+    expect(await chip.evaluate(el => getComputedStyle(el).transitionProperty)).not.toContain("left");
+    expect(await band.evaluate(el => getComputedStyle(el).backgroundImage)).toContain("linear-gradient");
+    expect(await ring.evaluate(el => getComputedStyle(el).boxShadow)).not.toContain("0px 0px");
     await expect
       .poll(async () => Math.abs((await ring.boundingBox())!.x - (await band.boundingBox())!.x))
       .toBeLessThan(1.5);
     // 竖带有可见宽度（所选轮的时长），不是一根线
-    expect((await band.boundingBox())!.width).toBeGreaterThan(2);
+    expect((await band.boundingBox())!.width).toBeGreaterThanOrEqual(24);
     if (process.env.SHOT) {
       const tl = (await timeline.boundingBox())!;
       await page.screenshot({ path: "/tmp/opencode/v5-real.png", clip: { x: 0, y: tl.y - 4, width: 1440, height: Math.min(tl.height + 8, 420) } });
