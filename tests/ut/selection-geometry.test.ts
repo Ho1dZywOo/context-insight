@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BEAM_FEATHER_PX,
-  MIN_SEGMENT_PX,
+  SELECTION_BAR_PX,
   PILL_W,
   SELECTION_LIFT,
   beamOf,
@@ -22,7 +22,7 @@ describe('selection-geometry — Turns 时间线选中层的几何与配色', ()
     expect(glowOf('#3b82f6')).toBe('color-mix(in oklab, #3b82f6 45%, transparent)');
   });
 
-  it('柔光包着选中段：实心核 = 选中段范围，两侧各渐隐 8px——两者必然重合', () => {
+  it('柔光包着选中条：实心核 = 选中条范围，两侧各渐隐 8px——两者必然重合', () => {
     const tint = tintOf('#3b82f6');
     const beam = beamOf({ color: '#3b82f6', x: 500, w: 250 });
     expect(beam.x).toBe(500 - BEAM_FEATHER_PX / 2);
@@ -30,16 +30,17 @@ describe('selection-geometry — Turns 时间线选中层的几何与配色', ()
     expect(beam.background).toBe(
       `linear-gradient(90deg, transparent 0, ${tint} 8px, ${tint} calc(100% - 8px), transparent 100%)`,
     );
-    // 实心核的左右缘 = 选中段的左右缘
+    // 实心核的左右缘 = 选中条的左右缘
     expect(beam.x + BEAM_FEATHER_PX / 2).toBe(500);
     expect(beam.x + beam.w - BEAM_FEATHER_PX / 2).toBe(750);
   });
 
-  it('零宽轮（选中段保底 6px）：柔光同样以它为核，居中于起点而非偏向一侧', () => {
-    const beam = beamOf({ color: 'red', x: 991.67, w: MIN_SEGMENT_PX });
+  it('选中条是恒定宽度的细条：长短轮、零宽轮都是 4px，居中于起点两侧', () => {
+    const beam = beamOf({ color: 'red', x: 991.67, w: SELECTION_BAR_PX });
+    expect(SELECTION_BAR_PX).toBe(4);
     expect(beam.x).toBeCloseTo(991.67 - 8, 6);
-    expect(beam.w).toBe(MIN_SEGMENT_PX + BEAM_FEATHER_PX);
-    expect(beam.x + beam.w / 2).toBeCloseTo(991.67 + MIN_SEGMENT_PX / 2, 6);
+    expect(beam.w).toBe(SELECTION_BAR_PX + BEAM_FEATHER_PX);
+    expect(beam.x + beam.w / 2).toBeCloseTo(991.67 + SELECTION_BAR_PX / 2, 6);
   });
 
   it('尺寸常量彼此自洽：渐隐为偶数（两侧各半），胶囊装得下 HH:MM:SS', () => {

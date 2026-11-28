@@ -59,8 +59,8 @@ import {
 } from "@/lib/swimlane-model";
 import { TimelineHScroll, type TimelineHScrollHandle, type TimelineHScrollSource } from "./TimelineHScroll";
 import {
-  MIN_SEGMENT_PX,
   PILL_W,
+  SELECTION_BAR_PX,
   beamOf,
   glowOf,
   type SelectionGeometry,
@@ -283,15 +283,12 @@ export function RunTurnsTimeline({
     for (const lane of model.lanes) {
       for (const bar of lane.bars) {
         if (!bar.windows.some(w => w.turnId === selectedTurnId)) continue;
-        const from = Math.max(selection.startPct, bar.startPct);
-        const to = Math.min(selection.endPct, bar.startPct + bar.widthPct);
-        // 零宽的轮（起止同一毫秒，真实数据里很常见）也点亮：落点宽度可为 0，渲染时保底 3px
-        if (to < from) continue;
+        // 恒定宽度的细条，落在所选轮的起点（钳在条盒内）——不随轮次时长伸缩
         byLane.set(lane.key, {
           color: bar.color,
           glow: glowOf(bar.color),
-          x: (from / 100) * trackW,
-          w: Math.max(((to - from) / 100) * trackW, MIN_SEGMENT_PX),
+          x: (Math.max(selection.startPct, bar.startPct) / 100) * trackW,
+          w: SELECTION_BAR_PX,
           top: swimBarTop(lane.rows, bar.row),
         });
         segment = byLane.get(lane.key) ?? null;
@@ -301,9 +298,9 @@ export function RunTurnsTimeline({
     return { byLane, segment };
   }, [model, selection, selectedTurnId, trackW]);
   const selectionByLane = lit.byLane;
-  // ② 选中层的像素几何（以柔光为主）：选中段是柔光的实心核，柔光只向两侧渐隐——
-  // 两者必然重合；轴上的时刻胶囊居中于选中段起点、钳在轴内；色取所属条子的本色，
-  // 整个选中态只有一个色系
+  // ② 选中层的像素几何（以柔光为主）：恒定宽度的细条——选中条是柔光的实心核，
+  // 柔光只向两侧渐隐，两者必然重合；轴上的时刻胶囊居中于所选轮起点、钳在轴内；
+  // 色取所属条子的本色，整个选中态只有一个色系
   const sel = useMemo<SelectionGeometry | null>(() => {
     const segment = lit.segment;
     if (!segment || trackW <= 0) return null;
@@ -708,8 +705,8 @@ export function RunTurnsTimeline({
                   <TimelineLanes lanes={plot.model.lanes} selectionByLane={selectionByLane} onHover={onHover} />
 
                   {/* 覆盖层：均不接事件 */}
-                  {/* 选中柔光（为主）：横贯所有道，实心核 = 选中段、两侧渐隐、无描边——
-                      这一轮期间别的成员在做什么一目了然 */}
+                  {/* 选中柔光（为主）：横贯所有道的恒定细条，实心核 = 选中条、两侧渐隐、
+                      无描边——所指的那一刻别的成员在做什么一目了然 */}
                   {sel && (
                     <div
                       data-selection-band

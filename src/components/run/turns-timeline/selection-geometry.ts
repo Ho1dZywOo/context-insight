@@ -8,16 +8,16 @@
 // Turns 时间线选中层的几何与配色（纯函数，无 DOM）：iOS 风格的选中态——只用
 // 条子本色的填充，不用描边；位移走 transform。
 
-/** 所属条子上选中段的最小宽度（px）——零宽轮也是一颗看得见的胶囊 */
-export const MIN_SEGMENT_PX = 6;
+/** 选中条的宽度（px）：恒定的细条，不随轮次时长变宽变窄——位置 = 所选轮起点 */
+export const SELECTION_BAR_PX = 4;
 /** 轴上时刻胶囊的宽度（HH:MM:SS 等宽数字 + 留白） */
 export const PILL_W = 64;
-/** 选中段比条子上下各高出这么多：选中即「浮起」 */
+/** 选中条比条子上下各高出这么多：选中即「浮起」 */
 export const SELECTION_LIFT = 1;
-/** 柔光在选中段两侧各渐隐的宽度（px） */
+/** 柔光在选中条两侧各渐隐的宽度（px） */
 export const BEAM_FEATHER_PX = 16;
 
-/** 选中段：选中轮的时间窗落在所属条子上的范围（相对轨道左缘的 px） */
+/** 选中条：所选轮起点落在所属条子上的位置（相对轨道左缘的 px），宽度恒定 */
 export interface SelectionSegment {
   /** 条子本色 */
   color: string;
@@ -42,14 +42,14 @@ export function tintOf(color: string): string {
   return `color-mix(in oklab, ${color} 21%, transparent)`;
 }
 
-/** 选中段的柔影色：本色半透明 */
+/** 选中条的柔影色：本色半透明 */
 export function glowOf(color: string): string {
   return `color-mix(in oklab, ${color} 45%, transparent)`;
 }
 
 /**
- * 柔光包着选中段：实心核 = 选中段的范围（两者必然重合——光效为主，选中段是
- * 它的核），两侧各渐隐固定像素。渐隐落在选中段之外，不会把邻段也染亮。
+ * 柔光包着选中条：实心核 = 选中条（两者必然重合——光效为主，选中条是它的核，
+ * 都是恒定宽度的细条），两侧各渐隐固定像素，不染亮邻段。
  */
 export function beamOf(segment: SelectionSegment): { x: number; w: number; background: string } {
   const half = BEAM_FEATHER_PX / 2;

@@ -20,9 +20,9 @@ import { cn } from "@/lib/utils";
 
 /** 选中轮在本道条子上的落点：相对轨道左缘的 px 几何（已钳进条盒），位移走 transform */
 export interface LaneSelection {
-  /** 条子本色：选中段沿用道自己的颜色（不引入第二种色） */
+  /** 条子本色：选中条沿用道自己的颜色（不引入第二种色） */
   color: string;
-  /** 选中段的柔影色 */
+  /** 选中条的柔影色 */
   glow: string;
   x: number;
   w: number;
@@ -98,8 +98,8 @@ export const TimelineLane = memo(function TimelineLane({
           </div>
         );
       })}
-      {/* 选中轮的时间窗：在本道的条子上「浮起」成同色胶囊（比条子高一点、带柔影，
-          只用填充不用描边）；换轮沿 iOS 曲线滑到新位置，横贯所有道的同色柔光在覆盖层 */}
+      {/* 选中条：所选轮起点在本道条子上「浮起」成恒定宽度的同色细条（比条子高一点、
+          带柔影，只用填充不用描边）；换轮沿 iOS 曲线滑到新位置，横贯所有道的同色柔光在覆盖层 */}
       {selection && (
         <span
           data-selected-turn

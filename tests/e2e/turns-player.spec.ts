@@ -173,9 +173,9 @@ test.describe("Turns 面板交互", () => {
     expect(expected).toBeTruthy();
 
     await page.mouse.click(clickX, laneBox.y + laneBox.height / 2);
-    // 选中轮 = 独立算出的那一轮；选中段起点 = 所选轮起点（落点在空档时取最近一轮，
+    // 选中轮 = 独立算出的那一轮；选中条起点 = 所选轮起点（落点在空档时取最近一轮，
     // 所以它可以在落点任一侧）——屏幕位置按轨道比例换算逐像素对上，且不出视野
-    // （出视野即跟随滚动）。量的是选中段而非柔光：柔光在段两侧还各多 8px 渐隐
+    // （出视野即跟随滚动）。量的是选中条而非柔光：柔光在段两侧还各多 8px 渐隐
     const segment = timeline.locator("[data-selected-turn]");
     await expect(detail).toHaveAttribute("data-turn-detail", expected!, { timeout: 10_000 });
     const expectedStart = windows.find(w => w.turnId === expected)!.start;
@@ -226,7 +226,10 @@ test.describe("Turns 面板交互", () => {
       Promise.all([band, ring, chip].map(l => l.evaluate(el => el.getAnimations().every(a => a.playState !== "running"))))
         .then(flags => flags.every(Boolean));
     await expect.poll(settled).toBe(true);
-    // 以柔光为主：选中段是柔光的实心核——两者左缘差 8px（半段渐隐）、段宽 = 光宽 − 16px
+    // 恒定宽度的细条：选中条 4px、柔光 20px；以柔光为主，选中条是柔光的实心核——
+    // 两者左缘差 8px（半段渐隐）、条宽 = 光宽 − 16px
+    expect((await ring.boundingBox())!.width).toBeCloseTo(4, 0);
+    expect((await band.boundingBox())!.width).toBeCloseTo(20, 0);
     {
       const b = (await band.boundingBox())!;
       const r = (await ring.boundingBox())!;
@@ -250,7 +253,7 @@ test.describe("Turns 面板交互", () => {
     expect(await band.evaluate(el => getComputedStyle(el).backgroundImage)).toContain("linear-gradient");
     expect(await ring.evaluate(el => getComputedStyle(el).boxShadow)).not.toContain("0px 0px");
     // 竖带有可见宽度（所选轮的时长），不是一根线
-    expect((await band.boundingBox())!.width).toBeGreaterThanOrEqual(22);
+
     if (process.env.SHOT) {
       const tl = (await timeline.boundingBox())!;
       await page.screenshot({ path: "/tmp/opencode/v5-real.png", clip: { x: 0, y: tl.y - 4, width: 1440, height: Math.min(tl.height + 8, 420) } });
