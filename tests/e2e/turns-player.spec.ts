@@ -178,4 +178,133 @@ test.describe("Turns 面板交互", () => {
     expect(landed).toBeGreaterThanOrEqual(viewLeft - 1);
     expect(landed).toBeLessThanOrEqual(viewLeft + viewWidth + 1);
   });
+
+  // 选中效果 = 三层一体的「选中区间」：横贯所有道的淡色竖带（道区）+ 轴上的
+  // 时刻牌（吸顶轴行）+ 只在所选轮所属的那根条子上套一圈选中环——不再是一根线。
+  // 普通模式下鼠标停多久都不立游标线（只有测距模式才有瞄准线）
+  test("顶部时间线：选中区间 = 竖带 + 时刻牌 + 所属条子的选中环；普通模式无游标线", async ({ page }) => {
+    const run = new RunWorkbenchPO(page);
+    await run.goto(E2E_TOOL_RUN_ID, "tab=turns");
+    await run.expectTabActive("turns");
+
+    const timeline = page.locator("[data-turns-timeline]");
+    const band = timeline.locator("[data-playhead]");
+    const chip = timeline.locator("[data-playhead-time]");
+    const rows = page.locator("[data-turn-list] [data-turn-row]");
+    await expect(rows.first()).toBeVisible();
+    await rows.nth(Math.floor((await rows.count()) / 2)).click();
+    await expect(page.locator("[data-turn-detail]")).toBeVisible({ timeout: 20_000 });
+
+    // 竖带在道区、时刻牌在轴区，两者左缘对齐在所选轮起点；选中环恰好一个，
+    // 落在 root 道里（列表选的是 root 轮；多成员 run 的 root 道 = 成员 taskId）
+    await expect(band).toBeAttached();
+    await expect(chip).toBeAttached();
+    expect(await band.evaluate(el => el.closest("[data-timeline-track]") !== null)).toBe(true);
+    expect(await chip.evaluate(el => el.closest("[data-timeline-axis]") !== null)).toBe(true);
+    const ring = timeline.locator("[data-selected-turn]");
+    await expect(ring).toHaveCount(1);
+    const ringLane = await ring.evaluate(el => {
+      const lane = el.closest("[data-lane]")!;
+      return { key: lane.getAttribute("data-lane") ?? "", root: lane.className.includes("cursor-pointer") };
+    });
+    // root 道 = 'root'（单成员）或成员 taskId（多成员 run）
+    expect(ringLane.root || ringLane.key === "root").toBe(true);
+    // 起点过了轴宽 85% 时时刻牌改挂在起点左侧（右缘对齐），免得出右界
+    await expect
+      .poll(async () => {
+        const b = (await band.boundingBox())!;
+        const c = (await chip.boundingBox())!;
+        const flipped = (await chip.getAttribute("class"))!.includes("-translate-x-full");
+        return Math.abs(b.x - (flipped ? c.x + c.width : c.x));
+      })
+      .toBeLessThan(1.5);
+    await expect
+      .poll(async () => Math.abs((await ring.boundingBox())!.x - (await band.boundingBox())!.x))
+      .toBeLessThan(1.5);
+    // 竖带有可见宽度（所选轮的时长），不是一根线
+    expect((await band.boundingBox())!.width).toBeGreaterThan(2);
+    if (process.env.SHOT) {
+      const tl = (await timeline.boundingBox())!;
+      await page.screenshot({ path: "/tmp/opencode/v5-real.png", clip: { x: 0, y: tl.y - 4, width: 1440, height: Math.min(tl.height + 8, 420) } });
+    }
+
+    // 普通模式：鼠标在道上移动并停留 → 没有瞄准线/悬停时刻牌
+    const laneBox = (await timeline.locator("[data-timeline-track] [data-lane]").first().boundingBox())!;
+    await page.mouse.move(laneBox.x + laneBox.width * 0.8, laneBox.y + laneBox.height / 2, { steps: 6 });
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(ring).toHaveCount(1);
+    expect(await timeline.locator("[data-measure-cursor]").evaluate(el => getComputedStyle(el).opacity)).toBe("0");
+    expect(await timeline.locator("[data-measure-cursor-time]").evaluate(el => getComputedStyle(el).opacity)).toBe("0");
+    if (process.env.SHOT) {
+      const tl = (await timeline.boundingBox())!;
+      await page.screenshot({ path: "/tmp/opencode/v5-real-after-click.png", clip: { x: 0, y: tl.y - 4, width: 1440, height: Math.min(tl.height + 8, 420) } });
+    }
+  });
+
+  // 版面：1× 没有横向滚动条；放大后吸底的自绘滚动条出现（始终在图区底部，
+  // 不随纵向翻道滚走），拖滑块 / 滚轮都写道区 scrollLeft 这一个来源，轴区镜像
+  test("顶部时间线：放大后吸底滚动条常驻，轴与道同步横滚", async ({ page }) => {
+    const run = new RunWorkbenchPO(page);
+    await run.goto(E2E_TOOL_RUN_ID, "tab=turns");
+    await run.expectTabActive("turns");
+
+    const timeline = page.locator("[data-turns-timeline]");
+    const track = timeline.locator("[data-timeline-track]");
+    await expect(track).toBeVisible();
+    const box = timeline.locator("[data-timeline-vscroll]");
+    const lanes = timeline.locator("[data-timeline-scroll]");
+    const hscroll = timeline.locator("[data-timeline-hscroll]");
+    const thumb = timeline.locator("[data-timeline-hscroll-thumb]");
+    await expect(hscroll).toHaveCount(0);
+    await expect(timeline.locator("[data-timeline-hscroll-thumb]")).toHaveCount(0);
+
+    const zoomIn = timeline.getByRole("button", { name: "放大" });
+    for (let i = 0; i < 4; i++) await zoomIn.click();
+    await expect(timeline.locator("[data-zoom-value]")).toHaveText("16×");
+    await expect(hscroll).toBeVisible();
+    // 滚动条在纵向滚动容器里，底缘贴着图区底缘（吸底）
+    expect(await hscroll.evaluate(el => el.closest("[data-timeline-vscroll]") !== null)).toBe(true);
+    const boxRect = (await box.boundingBox())!;
+    const hsRect = (await hscroll.boundingBox())!;
+    expect(Math.abs(hsRect.y + hsRect.height + 6 - (boxRect.y + boxRect.height))).toBeLessThan(2);
+    // 滚动条与道区同一横向范围（都在名列右侧）
+    const lanesRect = (await lanes.boundingBox())!;
+    expect(Math.abs(hsRect.x - lanesRect.x)).toBeLessThan(1.5);
+    expect(Math.abs(hsRect.width - lanesRect.width)).toBeLessThan(1.5);
+    // 道区不露出原生横向条（由这一条代替）
+    expect(await lanes.evaluate(el => getComputedStyle(el).scrollbarWidth)).toBe("none");
+
+    const readScroll = () => page.evaluate(() => ({
+      lanes: document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollLeft,
+      axis: document.querySelector<HTMLElement>("[data-timeline-axis]")!.scrollLeft,
+      thumb: document.querySelector<HTMLElement>("[data-timeline-hscroll-thumb]")!.style.transform,
+    }));
+    // 拖滑块：写道区 scrollLeft → 轴区镜像、滑块随动
+    const before = await readScroll();
+    const tb = (await thumb.boundingBox())!;
+    await page.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(tb.x + tb.width / 2 + 120, tb.y + tb.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(async () => (await readScroll()).lanes).toBeGreaterThan(before.lanes + 100);
+    const dragged = await readScroll();
+    expect(Math.abs(dragged.axis - dragged.lanes)).toBeLessThan(1.5);
+    expect(dragged.thumb).not.toBe(before.thumb);
+    if (process.env.SHOT) {
+      const tl = (await timeline.boundingBox())!;
+      await page.screenshot({ path: "/tmp/opencode/v5-zoom.png", clip: { x: 0, y: tl.y - 4, width: 1440, height: Math.min(tl.height + 8, 420) } });
+    }
+    // 滚轮在道区上横走时间轴（道不溢出纵向时不抢纵滚）
+    const lr = (await lanes.boundingBox())!;
+    await page.mouse.move(lr.x + lr.width / 2, lr.y + lr.height / 2);
+    await page.mouse.wheel(0, 200);
+    await expect.poll(async () => (await readScroll()).lanes).toBeGreaterThan(dragged.lanes);
+    const wheeled = await readScroll();
+    expect(Math.abs(wheeled.axis - wheeled.lanes)).toBeLessThan(1.5);
+    // 缩回 1×：横向溢出消失，滚动条收起
+    for (let i = 0; i < 4; i++) await timeline.getByRole("button", { name: "缩小" }).click();
+    await expect(timeline.locator("[data-zoom-value]")).toHaveText("1×");
+    await expect(hscroll).toHaveCount(0);
+  });
 });

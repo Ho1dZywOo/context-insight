@@ -15,20 +15,26 @@
 //   ① 单击即跳——点到哪一刻，就选中那一刻的轮次（root 道整道可点；槽道点
 //      条子内任一时刻落到该子代理当时的轮），走既有选中管线（详情归属 →
 //      成员懒加载 → 节点自动展开 → 行居中揭示）；
-//   ② 播放头跟随——选中轮（列表点击 / ←→ 走查 / 深链 / 搜索命中）的时间窗
-//      在轴上立一根播放头；放大后走出视野自动跟随滚动；
-//   ③ 缩放以播放头为锚——放大/缩小（按钮 / Ctrl+滚轮）后锚点停在原屏幕位置，
+//   ② 选中区间——选中轮（列表点击 / ←→ 走查 / 深链 / 搜索命中）的时间窗在
+//      所有道上铺一条淡色竖带（这一轮期间别的成员在做什么一目了然），它自己
+//      的那段活跃条点亮成实色，轴上起点挂时刻牌；放大后走出视野自动跟随滚动；
+//   ③ 缩放以选中区间为锚——放大/缩小（按钮 / Ctrl+滚轮）后锚点停在原屏幕位置，
 //      放大后滚轮横走时间轴；
 //   ④ 测距是显式模式（工具条尺子）：开着才量时距，不与导航抢单击。
 //
-// 性能契约：道行子树（TimelineLanes）memo——换选只改播放头那一个元素；
-// 悬停游标线与时刻牌直写 DOM，不触发渲染；刻度与网格线只为可视窗口生成
-// （放大 1024× 时整段上有数千个刻度点，全画会卡），横向滚动只重画这一层，
-// 条子不重渲染；时刻 → 轮次是模型里的二分查找，不拉任何数据。
+// 版面：一个纵向滚动容器装下「轴行（吸顶）+ 名列与道 + 横向滚动条（吸底，
+// 放大后才出现）」——道多的 run 包纵向翻看时轴与滚动条始终在位，名列与道
+// 永远同步；轴与道的横向滚动位置只有一个来源（道区容器），轴区镜像它。
+//
+// 性能契约：道行子树逐道 memo——换选只有「上一选 / 当前选」两道重渲染，其余
+// 动的只是覆盖层里的选中区间；悬停游标线与时刻牌直写 DOM，不触发渲染；刻度
+// 与网格线只为可视窗口生成（放大 1024× 时整段上有数千个刻度点，全画会卡），
+// 横向滚动只重画这一层，条子不重渲染；时刻 → 轮次是模型里的二分查找，不拉任何数据。
 
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -43,12 +49,14 @@ import { buildAxis, fmtClock, fmtDuration, fmtTokens, type AxisView } from "@/li
 import {
   buildSwimlaneModel,
   pickTurnAt,
+  swimBarTop,
   swimLaneHeight,
   type SwimAgent,
   type SwimBar,
   type SwimBridge,
 } from "@/lib/swimlane-model";
-import { TimelineLanes } from "./TimelineLanes";
+import { TimelineHScroll, type TimelineHScrollHandle, type TimelineHScrollSource } from "./TimelineHScroll";
+import { TimelineLanes, type LaneSelection } from "./TimelineLanes";
 
 const THRESHOLDS = [
   { ms: 60_000, label: "1m" },
@@ -65,13 +73,29 @@ const ZOOM_FACTOR = 2;
 
 const AXIS_H = 20;
 const LABEL_W = 96;
-/** 播放头离视口边缘不足这么多像素即视为「走出视野」 */
+/** 整个图区（轴 + 道 + 滚动条）的最大高度：约 12 道一屏，再多纵向翻 */
+const MAX_PLOT_H = 288;
+/** 选中区间的最小可见宽度（px）：零宽 / 极短的轮也要看得见 */
+const MIN_SELECTION_PX = 6;
+/** 选中区间的离视口边缘不足这么多像素即视为「走出视野」 */
 const FOLLOW_MARGIN_PX = 48;
+/** 时刻牌默认在区间起点右侧；起点过了这个百分比改挂左侧，免得出右界 */
+const CHIP_FLIP_PCT = 85;
+/** 选中区间竖带的两侧描边（primary 的半透明色） */
+const SELECTION_EDGE = "color-mix(in oklab, var(--color-primary) 45%, transparent)";
+const SELECTION_EDGE_SHADOW = `inset 1.5px 0 0 0 ${SELECTION_EDGE}, inset -1.5px 0 0 0 ${SELECTION_EDGE}`;
 
 interface MeasurePoint {
   /** 相对整段时长（0–100）——缩放不改变它 */
   pct: number;
   ms: number;
+}
+
+/** 选中轮的时间窗（百分比相对整段时长；缩放不改变它） */
+interface Selection {
+  startPct: number;
+  endPct: number;
+  startMs: number;
 }
 
 export interface RunTurnsTimelineProps {
@@ -81,7 +105,7 @@ export interface RunTurnsTimelineProps {
   /** 声明车道表 */
   lanes: string[];
   lanesInferred: boolean;
-  /** 当前选中轮：只驱动播放头，不进道行子树 */
+  /** 当前选中轮：只驱动选中区间，不进道行子树 */
   selectedTurnId: string | null;
   onSelectTurn: (turnId: string) => void;
   /** 工具条右端插槽（搜索胶囊） */
@@ -112,7 +136,11 @@ export function RunTurnsTimeline({
   const [hover, setHover] = useState<{ bar: SwimBar; x: number; y: number } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lanesScrollId = useId();
   const trackRef = useRef<HTMLDivElement>(null);
+  const vScrollRef = useRef<HTMLDivElement>(null);
+  const axisScrollRef = useRef<HTMLDivElement>(null);
+  const hScrollRef = useRef<TimelineHScrollHandle>(null);
   const hoverLineRef = useRef<HTMLDivElement>(null);
   const hoverTimeRef = useRef<HTMLSpanElement>(null);
   const anchorRef = useRef<{ pct: number; offset: number } | null>(null);
@@ -161,23 +189,67 @@ export function RunTurnsTimeline({
   }, []);
   useLayoutEffect(() => { measureView(); }, [measureView, showPlot, collapsed, zoom]);
 
+  // ── 横向滚动位置只有一个来源（道区容器）：轴区与滚动条镜像它 ──
+  const syncScroll = useCallback(() => {
+    const el = scrollRef.current;
+    const axis = axisScrollRef.current;
+    if (el && axis && axis.scrollLeft !== el.scrollLeft) axis.scrollLeft = el.scrollLeft;
+    hScrollRef.current?.sync();
+  }, []);
+  const onLanesScroll = useCallback(() => {
+    syncScroll();
+    scheduleMeasureView();
+  }, [syncScroll, scheduleMeasureView]);
+  useLayoutEffect(() => { syncScroll(); }, [syncScroll, zoom, showPlot, collapsed]);
+  // 自绘滚动条对道区容器的读写口（滚动条自己不持有别人的 ref）
+  const hScrollSource: TimelineHScrollSource = {
+    id: lanesScrollId,
+    read: () => {
+      const el = scrollRef.current;
+      return el ? { left: el.scrollLeft, view: el.clientWidth, content: el.scrollWidth } : { left: 0, view: 0, content: 0 };
+    },
+    write: left => {
+      const el = scrollRef.current;
+      if (el) el.scrollLeft = left;
+    },
+  };
+
   const axis = useMemo(
     () => (model && showPlot ? buildAxis(model.startMs, model.totalMs, zoom, view) : null),
     [model, showPlot, zoom, view],
   );
 
-  // ② 播放头：选中轮的时间窗起点（被图例滤掉的类型也照常定位，钳在轴内）
-  const playhead = useMemo(() => {
+  // ② 选中区间：选中轮的时间窗（被图例滤掉的类型也照常定位，钳在轴内）
+  const selection = useMemo<Selection | null>(() => {
     if (!model || selectedTurnId == null) return null;
     const window = model.windowOfTurn.get(selectedTurnId);
     if (!window) return null;
     return {
-      pct: clamp(((window.start - model.startMs) / model.totalMs) * 100, 0, 100),
-      clock: fmtClock(window.start),
+      startPct: clamp(((window.start - model.startMs) / model.totalMs) * 100, 0, 100),
+      endPct: clamp(((window.end - model.startMs) / model.totalMs) * 100, 0, 100),
+      startMs: window.start,
     };
   }, [model, selectedTurnId]);
-  const playheadPctRef = useRef<number | null>(null);
-  useEffect(() => { playheadPctRef.current = playhead?.pct ?? null; }, [playhead]);
+  // 选中轮点亮在哪根条子上：按归属（条子自己的可见轮），不按时间交叠——root
+  // 条横贯整段，任何轮都和它「交叠」，但只有它自己的轮才点亮
+  const selectionByLane = useMemo(() => {
+    const out = new Map<string, LaneSelection>();
+    if (!model || !selection) return out;
+    for (const lane of model.lanes) {
+      for (const bar of lane.bars) {
+        if (!bar.windows.some(w => w.turnId === selectedTurnId)) continue;
+        const from = Math.max(selection.startPct, bar.startPct);
+        const to = Math.min(selection.endPct, bar.startPct + bar.widthPct);
+        // 零宽的轮（起止同一毫秒，真实数据里很常见）也点亮：落点宽度可为 0，渲染时保底 3px
+        if (to < from) continue;
+        out.set(lane.key, { barKey: bar.key, color: bar.color, leftPct: from, widthPct: to - from, top: swimBarTop(lane.rows, bar.row) });
+        break;
+      }
+    }
+    return out;
+  }, [model, selection, selectedTurnId]);
+  const selectionStartPctRef = useRef<number | null>(null);
+  useEffect(() => { selectionStartPctRef.current = selection?.startPct ?? null; }, [selection]);
 
   // ── 缩放 ──
   const zoomTo = useCallback((next: number, anchorPct: number, anchorOffset: number) => {
@@ -198,7 +270,7 @@ export function RunTurnsTimeline({
     el.scrollLeft = Math.max(0, (anchor.pct / 100) * track.offsetWidth - anchor.offset);
   }, [zoom]);
 
-  /** 步进缩放：锚点 = 视野内的播放头，否则视口中心 */
+  /** 步进缩放：锚点 = 视野内的选中区间起点，否则视口中心 */
   const zoomBy = useCallback((factor: number) => {
     const el = scrollRef.current;
     const track = trackRef.current;
@@ -207,7 +279,7 @@ export function RunTurnsTimeline({
       zoomTo(next, 50, 0);
       return;
     }
-    const pct = playheadPctRef.current;
+    const pct = selectionStartPctRef.current;
     const x = pct == null ? NaN : (pct / 100) * track.offsetWidth;
     if (pct != null && x >= el.scrollLeft && x <= el.scrollLeft + el.clientWidth) {
       zoomTo(next, pct, x - el.scrollLeft);
@@ -216,9 +288,9 @@ export function RunTurnsTimeline({
     }
   }, [zoomTo]);
 
-  // 滚轮：Ctrl/⌘ = 以光标为锚缩放；放大后纵轮横走时间轴（道数超出可视高度、
-  // 自身可纵滚时让位原生纵滚）。React 的 onWheel 是 passive 的，preventDefault
-  // 须走原生监听
+  // 滚轮：Ctrl/⌘ = 以光标为锚缩放；放大后纵轮横走时间轴——但道多到需要纵向
+  // 翻时让位原生纵滚（横向走滚动条或 Shift+滚轮）。React 的 onWheel 是 passive
+  // 的，preventDefault 须走原生监听
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -233,7 +305,8 @@ export function RunTurnsTimeline({
         zoomTo(zoomRef.current * (e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR), pct, offset);
         return;
       }
-      const scrollsVertically = el.scrollHeight > el.clientHeight + 1;
+      const v = vScrollRef.current;
+      const scrollsVertically = v !== null && v.scrollHeight > v.clientHeight + 1;
       if (zoomRef.current > MIN_ZOOM && el.scrollWidth > el.clientWidth && !scrollsVertically) {
         e.preventDefault();
         el.scrollLeft += e.deltaY;
@@ -243,18 +316,18 @@ export function RunTurnsTimeline({
     return () => el.removeEventListener("wheel", onWheel);
   }, [showPlot, collapsed, zoomTo]);
 
-  // ② 跟随：播放头走出视野（放大后才会发生）→ 平滑滚到视野中央
+  // ② 跟随：选中区间起点走出视野（放大后才会发生）→ 平滑滚到视野中央
   useEffect(() => {
-    if (playhead == null) return;
+    if (!selection) return;
     const el = scrollRef.current;
     const track = trackRef.current;
     if (!el || !track || track.offsetWidth <= 0 || el.scrollWidth <= el.clientWidth) return;
-    const x = (playhead.pct / 100) * track.offsetWidth;
+    const x = (selection.startPct / 100) * track.offsetWidth;
     if (x >= el.scrollLeft + FOLLOW_MARGIN_PX && x <= el.scrollLeft + el.clientWidth - FOLLOW_MARGIN_PX) return;
     const left = Math.max(0, x - el.clientWidth / 2);
     if (typeof el.scrollTo === "function") el.scrollTo({ left, behavior: "smooth" });
     else el.scrollLeft = left;
-  }, [playhead, showPlot]);
+  }, [selection, showPlot]);
 
   // ── 交互 ──
   const pctAt = useCallback((clientX: number): number | null => {
@@ -295,24 +368,37 @@ export function RunTurnsTimeline({
     if (target) latestOnSelect.current(target.turnId);
   }, [pctAt, addMeasurePoint]);
 
-  // 悬停游标线 + 时刻牌：直写 DOM（mousemove 频率高，不进 React 渲染）
+  // 测距模式的瞄准线（道区）+ 时刻牌（轴区）：只在测距时出现——普通模式下悬停
+  // 只提亮条子弹浮窗，不立线（点击后鼠标停在原地，一根深色线常驻会被当成
+  // 「选中」误读）。直写 DOM（mousemove 频率高，不进 React 渲染）
   const onTrackMove = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
     const m = modelRef.current;
     const pct = pctAt(e.clientX);
     const line = hoverLineRef.current;
     const time = hoverTimeRef.current;
+    if (!measuringRef.current) return;
     if (!m || pct == null || !line || !time) return;
     line.style.left = `${pct}%`;
     line.style.opacity = "1";
     time.textContent = fmtClock(m.startMs + (pct / 100) * m.totalMs);
-    const flip = pct > 90;
-    time.style.left = flip ? "auto" : "6px";
-    time.style.right = flip ? "6px" : "auto";
+    time.style.left = `${pct}%`;
+    time.style.opacity = "1";
+    time.style.transform = pct > CHIP_FLIP_PCT + 5 ? "translateX(calc(-100% - 6px))" : "translateX(6px)";
   }, [pctAt]);
   const onTrackLeave = useCallback(() => {
     const line = hoverLineRef.current;
+    const time = hoverTimeRef.current;
     if (line) line.style.opacity = "0";
+    if (time) time.style.opacity = "0";
   }, []);
+  // 关掉测距的瞬间鼠标可能正停在道上：瞄准线随之收起
+  useEffect(() => {
+    if (measuring) return;
+    const line = hoverLineRef.current;
+    const time = hoverTimeRef.current;
+    if (line) line.style.opacity = "0";
+    if (time) time.style.opacity = "0";
+  }, [measuring]);
 
   const onHover = useCallback((bar: SwimBar | null, anchor: DOMRect | null) => {
     setHover(bar && anchor ? { bar, x: anchor.left + anchor.width / 2, y: anchor.bottom } : null);
@@ -451,7 +537,6 @@ export function RunTurnsTimeline({
         )}
         {children}
       </div>
-
       {collapsed ? null : !plot ? (
         model === null ? (
           <div className="px-4 pb-3">
@@ -462,42 +547,17 @@ export function RunTurnsTimeline({
         )
       ) : (
         <div className="flex flex-col">
-          <div className="flex min-h-0 max-h-[248px] overflow-y-auto">
-            {/* 道名列：固定不随时间轴横滚 */}
-            <div className="shrink-0 border-r border-foreground/[0.07]" style={{ width: LABEL_W }}>
-              <div style={{ height: AXIS_H }} />
-              {plot.model.lanes.map(lane => (
-                <div
-                  key={lane.key}
-                  data-lane-label={lane.key}
-                  className="flex items-center gap-1.5 border-b border-foreground/[0.06] px-2 last:border-b-0"
-                  style={{ height: swimLaneHeight(lane.rows) }}
-                  title={lane.label}
-                >
-                  <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: lane.color }} aria-hidden />
-                  <span className={cn("truncate text-[11px]", lane.kind === "root" ? "font-medium text-foreground/80" : "text-muted-foreground")}>
-                    {lane.label}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div
-              ref={scrollRef}
-              data-timeline-scroll
-              className={cn("relative min-w-0 flex-1 overflow-x-auto overflow-y-hidden", measuring && "cursor-crosshair")}
-              onScroll={scheduleMeasureView}
-            >
-              <div
-                ref={trackRef}
-                data-timeline-track
-                className="relative select-none"
-                style={{ width: `${zoom * 100}%`, minWidth: "100%" }}
-                onClick={onTrackClick}
-                onMouseMove={onTrackMove}
-                onMouseLeave={onTrackLeave}
-              >
-                {/* 轴 */}
-                <div className="relative border-b border-foreground/[0.07]" style={{ height: AXIS_H }}>
+          <div
+            ref={vScrollRef}
+            data-timeline-vscroll
+            className="relative overflow-y-auto overscroll-y-contain"
+            style={{ maxHeight: MAX_PLOT_H }}
+          >
+            {/* 轴行：吸顶——道多纵向翻看时刻度始终在顶部；横向位置镜像道区 */}
+            <div className="sticky top-0 z-[8] flex border-b border-foreground/[0.07] bg-background" style={{ height: AXIS_H }}>
+              <div className="shrink-0 border-r border-foreground/[0.07]" style={{ width: LABEL_W }} />
+              <div ref={axisScrollRef} data-timeline-axis className="relative min-w-0 flex-1 overflow-hidden">
+                <div className="relative h-full" style={{ width: `${zoom * 100}%`, minWidth: "100%" }}>
                   {plot.axis.ticks.map(t => (
                     <span
                       key={t.pct}
@@ -518,68 +578,128 @@ export function RunTurnsTimeline({
                   {plot.axis.edgeEnd && (
                     <span className="absolute right-0 top-0.5 whitespace-nowrap text-[10px] tabular-nums text-muted-foreground">{axis!.edgeEnd}</span>
                   )}
-                  {playhead && (
+                  {/* 选中区间的时刻牌：挂在区间起点（靠右界时改挂左侧） */}
+                  {selection && (
                     <span
                       data-playhead-time
-                      className="absolute top-px -translate-x-1/2 rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground tabular-nums transition-[left] duration-200 ease-out motion-reduce:transition-none"
-                      style={{ left: `${playhead.pct}%` }}
+                      className={cn(
+                        "absolute top-px whitespace-nowrap rounded-full bg-background px-1.5 text-[10px] font-semibold leading-4 text-primary tabular-nums shadow-sm ring-1 ring-primary/20 transition-[left] duration-200 ease-out motion-reduce:transition-none",
+                        selection.startPct > CHIP_FLIP_PCT ? "-translate-x-full" : "translate-x-0",
+                      )}
+                      style={{ left: `${selection.startPct}%` }}
                     >
-                      {playhead.clock}
+                      {fmtClock(selection.startMs)}
                     </span>
                   )}
-                </div>
-
-                {/* 网格线：独立一层（横向滚动只重画这一层，条子不重渲染） */}
-                <div
-                  data-timeline-grid
-                  aria-hidden
-                  className="pointer-events-none absolute inset-x-0 bottom-0"
-                  style={{ top: AXIS_H }}
-                >
-                  {plot.axis.ticks.map(t => (
-                    <span key={t.pct} className="absolute inset-y-0 w-px bg-foreground/[0.05]" style={{ left: `${t.pct}%` }} />
-                  ))}
-                </div>
-
-                {/* 道（memo 子树） */}
-                <TimelineLanes lanes={plot.model.lanes} onHover={onHover} />
-
-                {/* 覆盖层：均不接事件 */}
-                {playhead && (
-                  <div
-                    data-playhead
-                    aria-hidden
-                    className="pointer-events-none absolute bottom-0 z-[5] w-px bg-primary transition-[left] duration-200 ease-out motion-reduce:transition-none"
-                    style={{ left: `${playhead.pct}%`, top: AXIS_H }}
-                  />
-                )}
-                {measure && (
-                  <div data-measure className="pointer-events-none absolute bottom-0 z-[4]" style={{ top: AXIS_H, left: 0, right: 0 }}>
-                    <span className="absolute inset-y-0 w-px bg-foreground" style={{ left: `${measure.a.pct}%` }} />
-                    {measure.b && (
-                      <>
-                        <span
-                          className="absolute inset-y-0 bg-foreground/[0.12]"
-                          style={{ left: `${Math.min(measure.a.pct, measure.b.pct)}%`, width: `${Math.abs(measure.b.pct - measure.a.pct)}%` }}
-                        />
-                        <span className="absolute inset-y-0 w-px bg-foreground" style={{ left: `${measure.b.pct}%` }} />
-                      </>
-                    )}
-                  </div>
-                )}
-                <div
-                  ref={hoverLineRef}
-                  aria-hidden
-                  className="pointer-events-none absolute bottom-0 z-[6] w-px bg-foreground/60 opacity-0"
-                  style={{ top: AXIS_H, left: 0 }}
-                >
+                  {/* 测距瞄准时刻牌：直写 DOM */}
                   <span
                     ref={hoverTimeRef}
-                    className="absolute top-0.5 whitespace-nowrap rounded bg-foreground/85 px-1 text-[10px] leading-4 text-background tabular-nums"
+                    data-measure-cursor-time
+                    aria-hidden
+                    className="pointer-events-none absolute top-px whitespace-nowrap rounded-full bg-foreground px-1.5 text-[10px] font-medium leading-4 text-background tabular-nums opacity-0"
+                    style={{ left: 0 }}
                   />
                 </div>
               </div>
             </div>
+
+            {/* 名列 + 道：并排在同一个纵向滚动容器里，同步不靠计算 */}
+            <div className="flex">
+              {/* 道名列：不随时间轴横滚 */}
+              <div className="shrink-0 border-r border-foreground/[0.07]" style={{ width: LABEL_W }}>
+                {plot.model.lanes.map(lane => (
+                  <div
+                    key={lane.key}
+                    data-lane-label={lane.key}
+                    className="flex items-center gap-1.5 border-b border-foreground/[0.06] px-2 last:border-b-0"
+                    style={{ height: swimLaneHeight(lane.rows) }}
+                    title={lane.label}
+                  >
+                    <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: lane.color }} aria-hidden />
+                    <span className={cn("truncate text-[11px]", lane.kind === "root" ? "font-medium text-foreground/80" : "text-muted-foreground")}>
+                      {lane.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div
+                ref={scrollRef}
+                id={lanesScrollId}
+                data-timeline-scroll
+                className={cn(
+                  "relative min-w-0 flex-1 overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                  measuring && "cursor-crosshair",
+                )}
+                onScroll={onLanesScroll}
+              >
+                <div
+                  ref={trackRef}
+                  data-timeline-track
+                  className="relative select-none overflow-x-clip"
+                  style={{ width: `${zoom * 100}%`, minWidth: "100%" }}
+                  onClick={onTrackClick}
+                  onMouseMove={onTrackMove}
+                  onMouseLeave={onTrackLeave}
+                >
+                  {/* 网格线：独立一层（横向滚动只重画这一层，条子不重渲染） */}
+                  <div data-timeline-grid aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 top-0">
+                    {plot.axis.ticks.map(t => (
+                      <span key={t.pct} className="absolute inset-y-0 w-px bg-foreground/[0.05]" style={{ left: `${t.pct}%` }} />
+                    ))}
+                  </div>
+
+                  {/* 道（逐道 memo 子树；选中轮自己的那段在这里点亮） */}
+                  <TimelineLanes lanes={plot.model.lanes} selectionByLane={selectionByLane} onHover={onHover} />
+
+                  {/* 覆盖层：均不接事件 */}
+                  {/* 选中区间：选中轮的时间窗横贯所有道——这一轮期间别的成员在做什么 */}
+                  {selection && (
+                    <div
+                      data-playhead
+                      aria-hidden
+                      className="pointer-events-none absolute bottom-0 z-[3] rounded-[3px] bg-primary/[0.07] transition-[left,width] duration-200 ease-out motion-reduce:transition-none"
+                      style={{
+                        top: 0,
+                        left: `${selection.startPct}%`,
+                        width: `${selection.endPct - selection.startPct}%`,
+                        minWidth: MIN_SELECTION_PX,
+                        // 两侧半透明描边：窄到一颗小竖丸时也有「区间」的轮廓，而不是一根实色线
+                        boxShadow: SELECTION_EDGE_SHADOW,
+                      }}
+                    />
+                  )}
+                  {measure && (
+                    <div data-measure className="pointer-events-none absolute bottom-0 z-[4]" style={{ top: 0, left: 0, right: 0 }}>
+                      <span className="absolute inset-y-0 w-px bg-foreground" style={{ left: `${measure.a.pct}%` }} />
+                      {measure.b && (
+                        <>
+                          <span
+                            className="absolute inset-y-0 bg-foreground/[0.12]"
+                            style={{ left: `${Math.min(measure.a.pct, measure.b.pct)}%`, width: `${Math.abs(measure.b.pct - measure.a.pct)}%` }}
+                          />
+                          <span className="absolute inset-y-0 w-px bg-foreground" style={{ left: `${measure.b.pct}%` }} />
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div
+                    ref={hoverLineRef}
+                    aria-hidden
+                    data-measure-cursor
+                    className="pointer-events-none absolute bottom-0 z-[6] w-px bg-foreground/50 opacity-0"
+                    style={{ top: 0, left: 0 }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* 横向滚动条：吸底，放大后才出现——纵向翻到哪一屏它都在 */}
+            {zoom > MIN_ZOOM && (
+              <div className="sticky bottom-0 z-[8] flex bg-background py-1.5">
+                <div className="shrink-0" style={{ width: LABEL_W }} />
+                <TimelineHScroll ref={hScrollRef} source={hScrollSource} />
+              </div>
+            )}
           </div>
 
           {/* 图例 = 子代理类型过滤（无子代理时整行不出现） */}
@@ -623,6 +743,7 @@ export function RunTurnsTimeline({
           )}
         </div>
       )}
+
 
       {/* 悬停浮窗：挂在条子下方（时间线压顶，上方是应用头，朝上会被裁） */}
       {hover && tip && (

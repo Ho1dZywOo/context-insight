@@ -26,11 +26,20 @@ const lanesRenders = vi.hoisted(() => ({ count: 0 }));
 vi.mock('@/components/run/turns-timeline/TimelineLanes', async (importOriginal) => {
   const mod = await importOriginal<typeof import('@/components/run/turns-timeline/TimelineLanes')>();
   const { memo, createElement } = await import('react');
+  const CountingLane = memo(function CountingTimelineLane(props: ComponentProps<typeof mod.TimelineLane>) {
+    lanesRenders.count += 1;
+    return createElement(mod.TimelineLane, props);
+  });
+  // 外层只是把道逐个交给（被计数的）TimelineLane——与被测实现同一映射
   return {
     ...mod,
-    TimelineLanes: memo(function CountingTimelineLanes(props: ComponentProps<typeof mod.TimelineLanes>) {
-      lanesRenders.count += 1;
-      return createElement(mod.TimelineLanes, props);
+    TimelineLane: CountingLane,
+    TimelineLanes: memo(function CountingTimelineLanes({ lanes, selectionByLane, onHover }: ComponentProps<typeof mod.TimelineLanes>) {
+      return createElement(
+        'div',
+        { 'data-timeline-lanes': '' },
+        lanes.map(lane => createElement(CountingLane, { key: lane.key, lane, selection: selectionByLane.get(lane.key) ?? null, onHover })),
+      );
     }),
   };
 });
@@ -122,6 +131,11 @@ function clickAt(el: Element, x: number) {
   act(() => { el.dispatchEvent(ev); });
 }
 const sec = (s: number) => Math.round((s / 120) * 1000);
+/** 本机时区 HH:MM:SS */
+const hms = (ms: number) => { const d = new Date(ms); return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':'); };
+function pointerAt(el: Element, type: string, x: number) {
+  act(() => { el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x })); });
+}
 
 describe('RunTurnsTimeline — 道与工具条', () => {
   it('渲染 root 道 + 子代理槽道、图例与摘要（执行数 / 子代理数 / 并发）', () => {
@@ -232,7 +246,7 @@ describe('RunTurnsTimeline — ① 单击即跳', () => {
     clickAt(slot, sec(60));
     expect(onSelectTurn).toHaveBeenCalledTimes(3);
     // 轴上点击不动作
-    clickAt(q('[data-timeline-track]')!.firstElementChild!, sec(15));
+    clickAt(q('[data-timeline-axis]')!, sec(15));
     expect(onSelectTurn).toHaveBeenCalledTimes(3);
   });
 
@@ -248,38 +262,139 @@ describe('RunTurnsTimeline — ① 单击即跳', () => {
   });
 });
 
-describe('RunTurnsTimeline — ② 播放头跟随与性能契约', () => {
-  it('选中轮的播放头立在它的时间窗起点；换选只动播放头，道行子树不重渲染', () => {
-    const { rerender, onSelectTurn } = render({ selectedTurnId: 't2' });
-    const initial = lanesRenders.count;
-    expect(q('[data-playhead]')!.style.left).toBe('50%');
-    // 时刻牌 = 选中轮起点（本机时区 HH:MM:SS——放大后要能对到秒级落点）
-    const hm = (ms: number) => { const d = new Date(ms); return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':'); };
-    expect(q('[data-playhead-time]')!.textContent).toBe(hm(at(60)));
-    rerender({ selectedTurnId: 'sa1' });
-    expect(q('[data-playhead]')!.style.left).toBe(`${(20 / 120) * 100}%`);
-    expect(q('[data-playhead-time]')!.textContent).toBe(hm(at(20)));
+describe('RunTurnsTimeline — ② 选中区间跟随与性能契约', () => {
+  it('选中轮的时间窗横贯所有道（竖带 = 起点与宽度），自己的那段活跃条点亮、只点亮所在道；时刻牌挂在轴区起点', () => {
+    const { rerender } = render({ selectedTurnId: 't2' });
+    const band = q<HTMLElement>('[data-playhead]')!;
+    expect(band.style.left).toBe('50%');
+    expect(band.style.width).toBe(`${(30 / 120) * 100}%`);
+    // 点亮的落点只在 root 道（t2 是 root 的轮），位置与竖带同宽
+    const lit = qa('[data-selected-turn]');
+    expect(lit.map(e => `${e.closest('[data-lane]')!.getAttribute('data-lane')}@${(e as HTMLElement).style.left}`)).toEqual(['root@50%']);
+    expect(lit[0]!.closest('[data-lane]')!.getAttribute('data-lane')).toBe('root');
+    expect(lit[0]!.style.left).toBe('50%');
+    expect(lit[0]!.style.width).toBe(`${(30 / 120) * 100}%`);
+    // 时刻牌在轴区（吸顶行），不是道区里的一根线
+    const chip = q('[data-playhead-time]')!;
+    expect(chip.closest('[data-timeline-axis]')).toBeTruthy();
+    expect(chip.textContent).toBe(hms(at(60)));
+    expect(chip.className).toContain('translate-x-0');
+    // 选中的是子代理轮：竖带同宽，点亮落在槽道里该子代理的条子上
     rerender({ selectedTurnId: 'sb1' });
-    expect(q('[data-playhead]')!.style.left).toBe(`${(95 / 120) * 100}%`);
-    // 时间线上点击换选同样不碰道行
-    clickAt(laneEl('root'), sec(15));
-    expect(onSelectTurn).toHaveBeenLastCalledWith('t1');
-    expect(lanesRenders.count).toBe(initial);
-    // 未知轮 / 无选中 → 无播放头
-    rerender({ selectedTurnId: null });
+    expect(q<HTMLElement>('[data-playhead]')!.style.left).toBe(`${(95 / 120) * 100}%`);
+    expect(q<HTMLElement>('[data-playhead]')!.style.width).toBe(`${(15 / 120) * 100}%`);
+    const litSub = qa('[data-selected-turn]');
+    expect(litSub).toHaveLength(1);
+    expect(litSub[0]!.closest('[data-lane]')!.getAttribute('data-lane')).toBe('slot-1');
+    expect(litSub[0]!.style.left).toBe(`${(95 / 120) * 100}%`);
+    // 未知轮 / 无选中 → 无竖带、无点亮
+    rerender({ selectedTurnId: 'nope' });
     expect(q('[data-playhead]')).toBeNull();
-    expect(lanesRenders.count).toBe(initial);
+    expect(q('[data-selected-turn]')).toBeNull();
   });
 
-  it('道行子树只在模型变化时重渲染（图例过滤、阈值切换）', () => {
+  it('零宽的轮也看得见：竖带宽度为 0 但保底 6px；起点贴近右界时时刻牌改挂左侧', () => {
+    render({
+      selectedTurnId: 't0',
+      agents: [agent({ ...ROOT, activeIntervals: [...(ROOT.activeIntervals ?? []), { start: at(119), end: at(119), turnId: 't0' }] })],
+      bridges: [],
+    });
+    const band = q<HTMLElement>('[data-playhead]')!;
+    expect(band.style.left).toBe(`${(119 / 120) * 100}%`);
+    expect(band.style.width).toBe('0%');
+    expect(band.style.minWidth).toBe('6px');
+    // 所属条子上同样套环（宽度 0、保底 3px）——真实数据里零宽轮很常见
+    const lit = qa('[data-selected-turn]');
+    expect(lit).toHaveLength(1);
+    expect((lit[0] as HTMLElement).style.width).toBe('0%');
+    expect((lit[0] as HTMLElement).style.minWidth).toBe('3px');
+    expect(q('[data-playhead-time]')!.className).toContain('-translate-x-full');
+  });
+
+  it('换选只重渲染「上一选 / 当前选」两道：逐道 memo，其余道一根条子都不动', () => {
+    const { rerender, onSelectTurn } = render({ selectedTurnId: 't2' });
+    // 初始：root + slot-1 两道各渲染一次
+    expect(lanesRenders.count).toBe(2);
+    // t2（root）→ sa1（槽道）：root 道撤销点亮、slot-1 道点亮 = 恰好两道
+    rerender({ selectedTurnId: 'sa1' });
+    expect(lanesRenders.count).toBe(4);
+    // sa1 → sb1：都在 slot-1 道 → 只有一道
+    rerender({ selectedTurnId: 'sb1' });
+    expect(lanesRenders.count).toBe(5);
+    // 时间线上点击换选（onSelectTurn 是桩，选中不变）→ 零重渲染
+    clickAt(laneEl('root'), sec(15));
+    expect(onSelectTurn).toHaveBeenLastCalledWith('t1');
+    expect(lanesRenders.count).toBe(5);
+    // 撤销选中：只有当前被点亮的那一道
+    rerender({ selectedTurnId: null });
+    expect(lanesRenders.count).toBe(6);
+  });
+
+  it('道行子树只在模型变化时整体重渲染（图例过滤、阈值切换、车道表）', () => {
     const { rerender } = render();
-    const initial = lanesRenders.count;
+    expect(lanesRenders.count).toBe(2);
     clickAt(q('[data-legend-item="writer"]')!, 0);
-    expect(lanesRenders.count).toBe(initial + 1);
+    expect(lanesRenders.count).toBe(4);
     clickAt(q('[data-threshold="15m"]')!, 0);
-    expect(lanesRenders.count).toBe(initial + 2);
+    expect(lanesRenders.count).toBe(6);
     rerender({ lanes: ['base'] });
-    expect(lanesRenders.count).toBe(initial + 3);
+    expect(lanesRenders.count).toBe(8);
+  });
+});
+
+describe('RunTurnsTimeline — ④ 版面：道多的 run 包', () => {
+  it('名列与道同处一个纵向滚动容器，全部道都渲染不截断；轴行吸顶、横向滚动条吸底且只在放大后出现', () => {
+    const many = Array.from({ length: 30 }, (_, i) =>
+      agent({
+        executionId: `m${i}`, isSubagent: false, agentName: 'build',
+        span: { start: at(i), end: at(60 + i) },
+        member: { taskId: `ses-${i}`, label: `成员${i}`, isProxy: false },
+        activeIntervals: [{ start: at(i), end: at(60 + i), turnId: `t-${i}` }],
+      }),
+    );
+    render({ agents: many, bridges: [] });
+    const v = q('[data-timeline-vscroll]')!;
+    expect(qa('[data-lane]')).toHaveLength(30);
+    expect(qa('[data-lane-label]')).toHaveLength(30);
+    // 末道的名与道都在同一个滚动容器里——纵向翻到哪一屏都成对出现
+    expect(v.contains(q('[data-lane-label="ses-29"]'))).toBe(true);
+    expect(v.contains(q('[data-lane="ses-29"]'))).toBe(true);
+    expect(v.className).toContain('overflow-y-auto');
+    // 轴行是容器里的吸顶行（与道同一内容宽度——纵向滚动条出现也不错位）
+    const axis = q('[data-timeline-axis]')!;
+    expect(v.contains(axis)).toBe(true);
+    expect(axis.parentElement!.className).toContain('sticky');
+    expect(axis.parentElement!.className).toContain('top-0');
+    // 1× 没有横向溢出 → 不出滚动条
+    expect(q('[data-timeline-hscroll]')).toBeNull();
+    clickAt(q('button[aria-label="放大"]')!, 0);
+    const hs = q('[data-timeline-hscroll]')!;
+    expect(v.contains(hs)).toBe(true);
+    expect(hs.parentElement!.className).toContain('sticky');
+    expect(hs.parentElement!.className).toContain('bottom-0');
+    // 道区隐藏原生横向条（它在纵向容器里会被滚出视野），由吸底这一条代替
+    expect(q('[data-timeline-scroll]')!.className).toContain('[scrollbar-width:none]');
+  });
+
+  it('横向滚动位置只有一个来源：拖滚动条滑块 → 写道区 scrollLeft → 轴区镜像、滑块随动', () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(500);
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1000);
+    render();
+    clickAt(q('button[aria-label="放大"]')!, 0);
+    const lanes = q<HTMLElement>('[data-timeline-scroll]')!;
+    const axis = q<HTMLElement>('[data-timeline-axis]')!;
+    const thumb = q<HTMLElement>('[data-timeline-hscroll-thumb]')!;
+    // 可视 500 / 内容 1000 → 滑块占一半
+    expect(thumb.style.width).toBe('50%');
+    pointerAt(thumb, 'pointerdown', 0);
+    pointerAt(thumb, 'pointermove', 100);
+    pointerAt(thumb, 'pointerup', 100);
+    // 拖过轨道的 1/5 → 内容走 1/5
+    expect(lanes.scrollLeft).toBe(200);
+    act(() => { lanes.dispatchEvent(new Event('scroll')); });
+    expect(axis.scrollLeft).toBe(200);
+    expect(thumb.style.transform).toBe('translateX(100px)');
+    expect(q('[data-timeline-hscroll]')!.getAttribute('aria-valuenow')).toBe('40');
   });
 });
 
