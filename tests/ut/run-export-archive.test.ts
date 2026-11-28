@@ -10,6 +10,7 @@ import { parseAndIndex } from '@/lib/run/reader';
 import { saveRun } from '@/lib/run/run-store';
 import { prisma } from '@/lib/db';
 import { compressCaptureFile } from '@/lib/compression';
+import { planSessionArchive, buildSessionArchive } from '@/lib/observe/session-archive';
 import { GET as exportArchiveGET } from '@/app/api/observe/run/[runId]/export-archive/route';
 import { GET as exportArchivePlanGET } from '@/app/api/observe/run/[runId]/export-archive/plan/route';
 
@@ -278,6 +279,61 @@ describe('export-archive 端点：会话原始文件 → zip（有原件出原�
       }
     } finally {
       await prisma.session.deleteMany({ where: { taskId: { in: evil } } });
+    }
+  });
+
+  it('同 taskId 双记录（不同 framework）都走 db 载荷：暂存 db 各落各目录，两个 7z 各装各的行', async () => {
+    const TWIN = 'arc-twin-sid';
+    await prisma.session.createMany({
+      data: [
+        { taskId: TWIN, framework: 'claude-code', version: '2.1.278', label: 'twin-native', model: MODEL, sourcePath: null, totalTokens: 100, startTime: new Date('2026-10-13T02:00:00Z'), endTime: new Date('2026-10-13T02:10:00Z') },
+        { taskId: TWIN, framework: 'codex-proxy', version: '0.162.0-proxy', label: 'twin-proxy', model: MODEL, sourcePath: null, totalTokens: 200, startTime: new Date('2026-10-13T02:00:00Z'), endTime: new Date('2026-10-13T02:10:00Z') },
+      ],
+    });
+    const rows = await prisma.session.findMany({ where: { taskId: TWIN }, orderBy: { framework: 'asc' } });
+    expect(rows).toHaveLength(2);
+    // 两行各写一条可区分的轮次：验每个 7z 只装自己那一行的数据（暂存名撞车时
+    // 两个条目会装同一份、另一份被覆盖）
+    await prisma.turn.createMany({
+      data: rows.map((row, i) => ({
+        sessionId: row.id, turnIndex: 0, role: 'assistant', content: `twin-turn-${i}`,
+        createdAt_ts: new Date('2026-10-13T02:00:10Z'), model: MODEL, totalTokens: 10, latencyMs: 5,
+      })),
+    });
+    try {
+      const plan = await planSessionArchive('arc-twin-bundle', {
+        kind: 'run',
+        runId: 'arc-twin-bundle',
+        members: rows.map(r => ({ rowId: r.id, taskId: TWIN, framework: r.framework, label: null, structure: null })),
+      }, prisma);
+      expect(plan.dbs).toBe(2);
+      // 目录消歧：同一 taskId 双记录分落两个 sessions/<dir>（后到者带 @framework）
+      expect(new Set(plan.members.map(m => m.dir)).size).toBe(2);
+
+      const built = await buildSessionArchive(plan, prisma);
+      const dir = extract(fs.readFileSync(built.path));
+      fs.rmSync(built.path, { force: true });
+      const db7zs = walk(dir).filter(p => p.endsWith('.db.7z'));
+      expect(db7zs).toHaveLength(2);
+      expect(new Set(db7zs).size).toBe(2);
+
+      // 每个 7z 只含各自一行的导出件，两条轮次内容齐全且互不覆盖
+      const contents: string[] = [];
+      for (const rel of db7zs) {
+        const out = path.join(work, `twin-out-${contents.length}`);
+        fs.mkdirSync(out, { recursive: true });
+        expect(spawnSync(sevenzipBin.path7za, ['e', '-y', `-o${out}`, path.join(dir, rel)]).status).toBe(0);
+        const db = new Database(path.join(out, `context_session_${TWIN}.db`), { readonly: true });
+        try {
+          expect(db.prepare('SELECT taskId FROM "Session"').all()).toEqual([{ taskId: TWIN }]);
+          contents.push((db.prepare('SELECT content FROM "Turn"').get() as { content: string }).content);
+        } finally {
+          db.close();
+        }
+      }
+      expect(contents.sort()).toEqual(['twin-turn-0', 'twin-turn-1']);
+    } finally {
+      await prisma.session.deleteMany({ where: { taskId: TWIN } });
     }
   });
 

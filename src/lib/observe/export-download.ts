@@ -23,7 +23,10 @@ export const MARKDOWN_FILE: SaveFileKind = { description: "Markdown", accept: { 
 export const HTML_FILE: SaveFileKind = { description: "HTML", accept: { "text/html": [".html"] } };
 export const ZIP_FILE: SaveFileKind = { description: "Zip Archive", accept: { "application/zip": [".zip"] } };
 
-type SaveHandle = { createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }> };
+/** FileSystemWritableFileStream 的最小形态：本身是 WritableStream（可被
+ *  res.body.pipeTo 直灌、大文件不过内存），又带 write(Blob) 便捷写。 */
+type SaveWritable = WritableStream<Uint8Array> & { write: (data: Blob) => Promise<void> };
+type SaveHandle = { createWritable: () => Promise<SaveWritable> };
 
 export function fallbackDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -86,6 +89,28 @@ export async function fetchExportFile(
     throw new Error(err?.error ?? `HTTP ${res.status}`);
   }
   const filename = filenameFromDisposition(res.headers.get("Content-Disposition"), opts.fallbackName);
+
+  // 流式落盘：归档件可过 4GB，整包 arrayBuffer 进内存浏览器会 OOM——FS Access
+  // API 可用且响应带体时 res.body 直灌 writable；不可用 / 无 body / 对话框失败
+  // 才整包读回落 Blob 锚点
+  const picker = (window as unknown as {
+    showSaveFilePicker?: (o: { suggestedName: string; types: SaveFileKind[] }) => Promise<SaveHandle>;
+  }).showSaveFilePicker;
+  if (typeof picker === "function" && res.body) {
+    const total = Number(res.headers.get("Content-Length") ?? 0) || 0;
+    try {
+      const handle = await picker({ suggestedName: filename, types: [opts.kind] });
+      const writable = await handle.createWritable();
+      await res.body.pipeTo(writable);
+      return { filename, bytes: total };
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return { filename, bytes: 0 };
+      // 对话框外失败（安全限制等）→ 整包读回落锚点，不再重试 picker
+      const blob = new Blob([await res.arrayBuffer()], { type: opts.mime });
+      fallbackDownload(blob, filename);
+      return { filename, bytes: blob.size };
+    }
+  }
   const blob = new Blob([await res.arrayBuffer()], { type: opts.mime });
   saveBlob(blob, filename, opts.kind);
   return { filename, bytes: blob.size };

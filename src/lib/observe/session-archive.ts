@@ -239,7 +239,12 @@ export async function buildSessionArchive(plan: SessionArchivePlan, prisma?: Pri
       // db 载荷：导出该成员一行 → 7z。导出件先按归档内名（去掉 .7z）落到工作
       // 目录再压：7z 内的成员名即 db 文件名，解压即得可直接导入的导出件
       const archiveMember = member.files[0];
-      const dbPath = path.join(workDir, path.basename(archiveMember.path, '.7z'));
+      // 暂存名取归档内相对路径（含已消歧的目录段）：同 taskId 双记录都走 db
+      // 载荷时，basename 只到导出件主干（不含 @framework 后缀）会撞车、后写覆盖
+      // 先写，两个条目装同一份数据。按归档相对段落地让它们各落在自己的 <dirName>/ 下
+      const dbRel = archiveMember.path.replace(/\.7z$/, '');
+      const dbPath = path.join(workDir, ...dbRel.split('/'));
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
       await exportSessionRows([member.rowId], dbPath, prisma);
       const archive = compressCaptureFile(dbPath);
       const stat = fs.statSync(archive);
