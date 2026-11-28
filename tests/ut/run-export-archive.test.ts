@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import sevenzipBin from '7zip-bin';
 import Database from 'better-sqlite3';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -11,6 +10,7 @@ import { saveRun } from '@/lib/run/run-store';
 import { prisma } from '@/lib/db';
 import { compressCaptureFile } from '@/lib/compression';
 import { planSessionArchive, buildSessionArchive } from '@/lib/observe/session-archive';
+import { sevenZipBin } from '@/lib/seven-zip-bin';
 import { GET as exportArchiveGET } from '@/app/api/observe/run/[runId]/export-archive/route';
 import { GET as exportArchivePlanGET } from '@/app/api/observe/run/[runId]/export-archive/plan/route';
 
@@ -45,8 +45,9 @@ function extract(bytes: Buffer): string {
   const dir = `${zip}.d`;
   fs.mkdirSync(dir);
   fs.writeFileSync(zip, bytes);
-  const r = spawnSync(sevenzipBin.path7za, ['x', '-y', `-o${dir}`, zip], { stdio: ['ignore', 'pipe', 'pipe'] });
-  expect(r.status, `7za extract failed: ${r.stderr?.toString()}`).toBe(0);
+  const r = spawnSync(sevenZipBin(), ['x', '-y', `-o${dir}`, zip], { stdio: ['ignore', 'pipe', 'pipe'] });
+  // 拉不起来时 status / stderr 都是空，原因只在 error 里——一并写进断言消息
+  expect(r.status, `7za extract failed: ${r.error ?? r.stderr?.toString()}`).toBe(0);
   return dir;
 }
 
@@ -221,7 +222,7 @@ describe('export-archive 端点：会话原始文件 → zip（有原件出原�
     // db 载荷：7z 里是该成员自己的导出件（只含这一行会话及其轮次）
     const out = path.join(work, 'db-out');
     fs.mkdirSync(out, { recursive: true });
-    expect(spawnSync(sevenzipBin.path7za, ['e', '-y', `-o${out}`, path.join(dir, 'sessions/arc-m-b/context_session_arc-m-b.db.7z')]).status).toBe(0);
+    expect(spawnSync(sevenZipBin(), ['e', '-y', `-o${out}`, path.join(dir, 'sessions/arc-m-b/context_session_arc-m-b.db.7z')]).status).toBe(0);
     const db = new Database(path.join(out, 'context_session_arc-m-b.db'), { readonly: true });
     try {
       const sessions = db.prepare('SELECT taskId FROM "Session"').all();
@@ -322,7 +323,7 @@ describe('export-archive 端点：会话原始文件 → zip（有原件出原�
       for (const rel of db7zs) {
         const out = path.join(work, `twin-out-${contents.length}`);
         fs.mkdirSync(out, { recursive: true });
-        expect(spawnSync(sevenzipBin.path7za, ['e', '-y', `-o${out}`, path.join(dir, rel)]).status).toBe(0);
+        expect(spawnSync(sevenZipBin(), ['e', '-y', `-o${out}`, path.join(dir, rel)]).status).toBe(0);
         const db = new Database(path.join(out, `context_session_${TWIN}.db`), { readonly: true });
         try {
           expect(db.prepare('SELECT taskId FROM "Session"').all()).toEqual([{ taskId: TWIN }]);

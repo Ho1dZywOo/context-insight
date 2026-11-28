@@ -8,11 +8,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import sevenzipBin from "7zip-bin";
 import { expect, test, type Page } from "./fixtures";
 import { BASE_URL, CLAUDE_SAMPLE_SESSION_ID, E2E_RUN_ID, REPO_ROOT } from "./constants";
 import { RunWorkbenchPO } from "./support/pom/RunWorkbenchPO";
 import { stripFilePicker } from "./support/file-picker";
+// e2e 没有 @/ 别名：7za 的路径只能取自这唯一出处——发布包里的 7za 不带执行位，
+// 绕过它直接取 7zip-bin 的路径去拉进程，在全新安装的 CI 上必 EACCES
+import { sevenZipBin } from "../../src/lib/seven-zip-bin.ts";
 
 const SOLO_MAIN = `sessions/${CLAUDE_SAMPLE_SESSION_ID}/claude-sample.jsonl`;
 const SOLO_FIXTURE = path.join(REPO_ROOT, "tests/ut/data/e2e/claude-sample.jsonl");
@@ -53,8 +55,9 @@ async function downloadArchive(page: Page, run: RunWorkbenchPO): Promise<{ file:
 /** 7za 独立解包（不信任写入器自己的任何读回逻辑），返回包内文件相对路径（排序） */
 function extract(file: string): { dir: string; entries: string[] } {
   const dir = path.join(test.info().outputDir, `unzipped-${Math.random().toString(36).slice(2, 8)}`);
-  const r = spawnSync(sevenzipBin.path7za, ["x", "-y", `-o${dir}`, file], { stdio: ["ignore", "pipe", "pipe"] });
-  expect(r.status, `7za extract failed: ${r.stderr?.toString()}`).toBe(0);
+  const r = spawnSync(sevenZipBin(), ["x", "-y", `-o${dir}`, file], { stdio: ["ignore", "pipe", "pipe"] });
+  // 拉不起来时 status / stderr 都是空，原因只在 error 里
+  expect(r.status, `7za extract failed: ${r.error?.message ?? r.stderr?.toString()}`).toBe(0);
   const entries: string[] = [];
   const walk = (at: string, rel: string) => {
     for (const entry of fs.readdirSync(at, { withFileTypes: true })) {

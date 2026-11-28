@@ -177,6 +177,7 @@ proxy（cpx 捕获）是 insight 的扩展来源，不是核心管线的一部�
 - **`response_format: { type: "json_object" }`** required for AI analysis — no fallback
 - **AI input optimization**: Only root assistant/user/system turns, 30K chars budget, summaries 80 chars max
 - **Git hosted on gitcode.com** — never use `gh` CLI
+- **7za 的路径只有一个出处**: `src/lib/seven-zip-bin.ts`（`sevenZipBin()`）——应用（`compression.ts`）与测试一律经它取，禁止直接读 7zip-bin 的路径去 spawn（源码级锁 `tests/ut/seven-zip-bin.test.ts`）。原因：7zip-bin 发布包里的 7za 是 0644（上游打包就没带执行位，与镜像无关），全新 `npm install` 后直接 spawn 必 EACCES——`status = null`、`stderr` 为空，原因只在 `error` 里；本机 node_modules 早已被应用顺手 chmod 成 755，绕过出处的测试在本机绿、在全新安装的 CI 上必红。Release Dry Run 直接 `npm run e2e`（不经 pretest），任何靠环境残留才通过的测试在那里都会现形
 - **Path alias**: Always `@/lib/...` / `@/components/...`, never relative `../../`
 
 ## Testing

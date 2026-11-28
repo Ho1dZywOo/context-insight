@@ -11,8 +11,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import sevenzipBin from '7zip-bin';
 import { crc32, crc32Update, normalizeZipPath, buildZip, writeZip, zipMethodFor, type ZipEntry, type ZipSource } from '../../src/lib/zip-store.ts';
+import { sevenZipBin } from '@/lib/seven-zip-bin';
 
 function bytes(s: string): Uint8Array {
   return new TextEncoder().encode(s);
@@ -156,8 +156,9 @@ function countSignature(bytes: Uint8Array, sig: number): number {
 /** 用 7za 解包并返回 { 相对路径 → 字节 } */
 function extractWith7za(zip: string): Map<string, Buffer> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zip-store-7za-'));
-  const r = spawnSync(sevenzipBin.path7za, ['x', '-y', `-o${dir}`, zip], { stdio: ['ignore', 'pipe', 'pipe'] });
-  expect(r.status, r.stderr?.toString()).toBe(0);
+  const r = spawnSync(sevenZipBin(), ['x', '-y', `-o${dir}`, zip], { stdio: ['ignore', 'pipe', 'pipe'] });
+  // 拉不起来时 status / stderr 都是空，原因只在 error 里
+  expect(r.status, r.error?.message ?? r.stderr?.toString()).toBe(0);
   const out = new Map<string, Buffer>();
   const walk = (at: string, rel: string) => {
     for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
