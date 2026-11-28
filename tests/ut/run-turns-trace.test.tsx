@@ -295,9 +295,9 @@ beforeEach(() => {
     return this.hasAttribute('data-timeline-track') ? ({ ...rect, width: 1000, right: rect.left + 1000 } as DOMRect) : rect;
   });
 });
-/** 选中层左缘（相对轨道，px）：轨道 1000px 宽，百分比 × 10 */
+/** 选中段左缘（相对轨道，px；柔光以它为实心核）：轨道 1000px 宽，百分比 × 10 */
 function selectionX(root: ParentNode): number | null {
-  const el = root.querySelector<HTMLElement>('[data-selection-band]');
+  const el = root.querySelector<HTMLElement>('[data-selected-turn]');
   if (!el) return null;
   const m = /^translateX\(([-\d.e]+)px\)$/.exec(el.style.transform);
   return m ? Number(m[1]) : null;
@@ -354,7 +354,7 @@ describe('Run 详情 Turns/Trace tab（Run Player 架构）', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 20)) });
     // 选中态：占位文案消失（TurnDetail 播放器接管右侧）
     expect(turnsTab!.textContent).not.toContain('选择一轮开始走查');
-    // 选中层跟随选中轮：成员A首轮就在整段起点 → 柔光左缘在轨道 0px
+    // 选中层跟随选中轮：成员A首轮就在整段起点 → 选中段左缘在轨道 0px
     expect(selectionX(turnsTab!)).toBe(0);
     // 播放器壳契约：导航条标题 + 身份药丸 + 指标瓦片标签 + 分组卡语法（灰画布上的无边框圆角卡）
     const playerText = turnsTab!.textContent ?? '';

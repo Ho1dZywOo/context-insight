@@ -30,8 +30,8 @@
 // 性能契约：道行子树逐道 memo——换选只有「上一选 / 当前选」两道重渲染，其余
 // 动的只是覆盖层里的选中层，且只动 transform / width / opacity（见 globals.css
 // .turns-sel-slide）；悬停游标线与时刻牌直写 DOM，不触发渲染；刻度
-// 与网格线只为可视窗口生成（放大 1024× 时整段上有数千个刻度点，全画会卡），
-// 横向滚动只重画这一层，条子不重渲染；时刻 → 轮次是模型里的二分查找，不拉任何数据。
+// 只为可视窗口生成（放大 1024× 时整段上有数千个刻度点，全画会卡），横向滚动只
+// 重画轴这一层，条子不重渲染；道内不画竖向网格线，时间只看横坐标；时刻 → 轮次是模型里的二分查找，不拉任何数据。
 
 import {
   useCallback,
@@ -60,12 +60,11 @@ import {
 import { TimelineHScroll, type TimelineHScrollHandle, type TimelineHScrollSource } from "./TimelineHScroll";
 import {
   MIN_SEGMENT_PX,
-  MIN_SELECTION_PX,
   PILL_W,
-  bandGradient,
+  beamOf,
   glowOf,
-  tintOf,
   type SelectionGeometry,
+  type SelectionSegment,
 } from "./selection-geometry";
 import { TimelineLanes, type LaneSelection } from "./TimelineLanes";
 
@@ -279,8 +278,8 @@ export function RunTurnsTimeline({
   // 条横贯整段，任何轮都和它「交叠」，但只有它自己的轮才点亮
   const lit = useMemo(() => {
     const byLane = new Map<string, LaneSelection>();
-    if (!model || !selection) return { byLane, color: null as string | null };
-    let color: string | null = null;
+    if (!model || !selection) return { byLane, segment: null as SelectionSegment | null };
+    let segment: SelectionSegment | null = null;
     for (const lane of model.lanes) {
       for (const bar of lane.bars) {
         if (!bar.windows.some(w => w.turnId === selectedTurnId)) continue;
@@ -295,27 +294,26 @@ export function RunTurnsTimeline({
           w: Math.max(((to - from) / 100) * trackW, MIN_SEGMENT_PX),
           top: swimBarTop(lane.rows, bar.row),
         });
-        color = bar.color;
+        segment = byLane.get(lane.key) ?? null;
         break;
       }
     }
-    return { byLane, color };
+    return { byLane, segment };
   }, [model, selection, selectedTurnId, trackW]);
   const selectionByLane = lit.byLane;
-  // ② 选中层的像素几何：轴上的时刻胶囊（居中于起点、钳在轴内）+ 横贯所有道的柔光；
-  // 色取所属条子的本色——整个选中态只有一个色系
+  // ② 选中层的像素几何（以柔光为主）：选中段是柔光的实心核，柔光只向两侧渐隐——
+  // 两者必然重合；轴上的时刻胶囊居中于选中段起点、钳在轴内；色取所属条子的本色，
+  // 整个选中态只有一个色系
   const sel = useMemo<SelectionGeometry | null>(() => {
-    if (!selection || trackW <= 0 || !lit.color) return null;
-    const x = (selection.startPct / 100) * trackW;
-    const w = Math.max(((selection.endPct - selection.startPct) / 100) * trackW, MIN_SELECTION_PX);
+    const segment = lit.segment;
+    if (!segment || trackW <= 0) return null;
+    const beam = beamOf(segment);
     return {
-      color: lit.color,
-      pillX: clamp(x - PILL_W / 2, 0, Math.max(0, trackW - PILL_W)),
-      x,
-      w,
-      background: bandGradient(tintOf(lit.color), w),
+      color: segment.color,
+      pillX: clamp(segment.x - PILL_W / 2, 0, Math.max(0, trackW - PILL_W)),
+      ...beam,
     };
-  }, [selection, lit.color, trackW]);
+  }, [lit.segment, trackW]);
   const selectionStartPctRef = useRef<number | null>(null);
   useEffect(() => { selectionStartPctRef.current = selection?.startPct ?? null; }, [selection]);
 
@@ -706,18 +704,11 @@ export function RunTurnsTimeline({
                   onMouseMove={onTrackMove}
                   onMouseLeave={onTrackLeave}
                 >
-                  {/* 网格线：独立一层（横向滚动只重画这一层，条子不重渲染） */}
-                  <div data-timeline-grid aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 top-0">
-                    {plot.axis.ticks.map(t => (
-                      <span key={t.pct} className="absolute inset-y-0 w-px bg-foreground/[0.05]" style={{ left: `${t.pct}%` }} />
-                    ))}
-                  </div>
-
                   {/* 道（逐道 memo 子树；选中轮自己的那段在这里点亮） */}
                   <TimelineLanes lanes={plot.model.lanes} selectionByLane={selectionByLane} onHover={onHover} />
 
                   {/* 覆盖层：均不接事件 */}
-                  {/* 选中区间：选中轮的时间窗横贯所有道——一束同色柔光（两端渐隐、无描边），
+                  {/* 选中柔光（为主）：横贯所有道，实心核 = 选中段、两侧渐隐、无描边——
                       这一轮期间别的成员在做什么一目了然 */}
                   {sel && (
                     <div

@@ -6,26 +6,44 @@
 // See the License in the root of the software repository for the full text of the License.
 
 import { describe, expect, it } from 'vitest';
-import { MIN_SEGMENT_PX, MIN_SELECTION_PX, PILL_W, SELECTION_LIFT, bandGradient, glowOf, tintOf } from '@/components/run/turns-timeline/selection-geometry';
+import {
+  BEAM_FEATHER_PX,
+  MIN_SEGMENT_PX,
+  PILL_W,
+  SELECTION_LIFT,
+  beamOf,
+  glowOf,
+  tintOf,
+} from '@/components/run/turns-timeline/selection-geometry';
 
 describe('selection-geometry — Turns 时间线选中层的几何与配色', () => {
   it('柔光 / 柔影取条子本色的淡化色：整个选中态只有一个色系', () => {
-    expect(tintOf('#3b82f6')).toBe('color-mix(in oklab, #3b82f6 15%, transparent)');
+    expect(tintOf('#3b82f6')).toBe('color-mix(in oklab, #3b82f6 21%, transparent)');
     expect(glowOf('#3b82f6')).toBe('color-mix(in oklab, #3b82f6 45%, transparent)');
   });
 
-  it('柔光渐变：宽于两段渐隐时两端各渐隐 16px、中段平；窄时对称渐入渐出', () => {
-    const tint = tintOf('red');
-    const wide = bandGradient(tint, 300);
-    expect(wide).toBe(`linear-gradient(90deg, transparent 0, ${tint} 16px, ${tint} calc(100% - 16px), transparent 100%)`);
-    expect(bandGradient(tint, 32)).toBe(wide);
-    // 窄于 32px（含零宽轮的 24px 保底）：一束光
-    expect(bandGradient(tint, MIN_SELECTION_PX)).toBe(`linear-gradient(90deg, transparent, ${tint} 50%, transparent)`);
-    expect(bandGradient(tint, 31.9)).toBe(`linear-gradient(90deg, transparent, ${tint} 50%, transparent)`);
+  it('柔光包着选中段：实心核 = 选中段范围，两侧各渐隐 8px——两者必然重合', () => {
+    const tint = tintOf('#3b82f6');
+    const beam = beamOf({ color: '#3b82f6', x: 500, w: 250 });
+    expect(beam.x).toBe(500 - BEAM_FEATHER_PX / 2);
+    expect(beam.w).toBe(250 + BEAM_FEATHER_PX);
+    expect(beam.background).toBe(
+      `linear-gradient(90deg, transparent 0, ${tint} 8px, ${tint} calc(100% - 8px), transparent 100%)`,
+    );
+    // 实心核的左右缘 = 选中段的左右缘
+    expect(beam.x + BEAM_FEATHER_PX / 2).toBe(500);
+    expect(beam.x + beam.w - BEAM_FEATHER_PX / 2).toBe(750);
   });
 
-  it('尺寸常量彼此自洽：柔光保底宽于选中段保底，胶囊装得下 HH:MM:SS', () => {
-    expect(MIN_SELECTION_PX).toBeGreaterThan(MIN_SEGMENT_PX);
+  it('零宽轮（选中段保底 6px）：柔光同样以它为核，居中于起点而非偏向一侧', () => {
+    const beam = beamOf({ color: 'red', x: 991.67, w: MIN_SEGMENT_PX });
+    expect(beam.x).toBeCloseTo(991.67 - 8, 6);
+    expect(beam.w).toBe(MIN_SEGMENT_PX + BEAM_FEATHER_PX);
+    expect(beam.x + beam.w / 2).toBeCloseTo(991.67 + MIN_SEGMENT_PX / 2, 6);
+  });
+
+  it('尺寸常量彼此自洽：渐隐为偶数（两侧各半），胶囊装得下 HH:MM:SS', () => {
+    expect(BEAM_FEATHER_PX % 2).toBe(0);
     expect(PILL_W).toBeGreaterThan(8 * 6);
     expect(SELECTION_LIFT).toBe(1);
   });

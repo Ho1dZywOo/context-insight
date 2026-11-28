@@ -278,10 +278,11 @@ describe('RunTurnsTimeline — ① 单击即跳', () => {
 describe('RunTurnsTimeline — ② 选中区间跟随与性能契约', () => {
   it('选中层（iOS 风格）：柔光横贯所有道、所属条子上浮起同色胶囊、轴上居中于起点滑一枚实色时刻胶囊；位移走 transform', () => {
     const { rerender } = render({ selectedTurnId: 't2' });
-    // 轨道 1000px（getBoundingClientRect 桩）：t2 = 60–90s / 120s → 左缘 500px、宽 250px
+    // 轨道 1000px（getBoundingClientRect 桩）：t2 = 60–90s / 120s → 选中段左缘 500px、宽 250px
+    // 柔光以选中段为实心核：两侧各渐隐 8px
     const band = q<HTMLElement>('[data-selection-band]')!;
-    expect(tx(band)).toBe(500);
-    expect(wd(band)).toBe(250);
+    expect(tx(band)).toBe(492);
+    expect(wd(band)).toBe(266);
     // 柔光：横向渐变（两端渐隐）、无描边——只用填充
     expect(band.style.background).toContain('linear-gradient(90deg');
     expect(band.style.boxShadow).toBe('');
@@ -301,8 +302,8 @@ describe('RunTurnsTimeline — ② 选中区间跟随与性能契约', () => {
     expect(pill.style.backgroundColor).toBe(lit[0]!.style.backgroundColor);
     // 选中的是子代理轮：柔光同宽，浮起的胶囊落在槽道里该子代理的条子上
     rerender({ selectedTurnId: 'sb1' });
-    expect(tx(q<HTMLElement>('[data-selection-band]')!)).toBeCloseTo(((95 / 120) * 100) / 100 * 1000, 6);
-    expect(wd(q<HTMLElement>('[data-selection-band]')!)).toBeCloseTo(((15 / 120) * 100) / 100 * 1000, 6);
+    expect(tx(q<HTMLElement>('[data-selection-band]')!)).toBeCloseTo(((95 / 120) * 100) / 100 * 1000 - 8, 6);
+    expect(wd(q<HTMLElement>('[data-selection-band]')!)).toBeCloseTo(((15 / 120) * 100) / 100 * 1000 + 16, 6);
     const litSub = qa('[data-selected-turn]') as HTMLElement[];
     expect(litSub.map(e => e.closest('[data-lane]')!.getAttribute('data-lane'))).toEqual(['slot-1']);
     expect(tx(litSub[0]!)).toBeCloseTo(((95 / 120) * 100) / 100 * 1000, 6);
@@ -313,7 +314,7 @@ describe('RunTurnsTimeline — ② 选中区间跟随与性能契约', () => {
     expect(q('[data-selected-turn]')).toBeNull();
   });
 
-  it('零宽的轮也看得见：柔光保底 24px 的对称一束；时刻胶囊贴右界时钳在轴内，不出界', () => {
+  it('零宽的轮：选中段保底 6px，柔光以它为核居中于起点（不偏向一侧）；时刻胶囊贴右界时钳在轴内', () => {
     render({
       selectedTurnId: 't0',
       agents: [agent({ ...ROOT, activeIntervals: [...(ROOT.activeIntervals ?? []), { start: at(119), end: at(119), turnId: 't0' }] })],
@@ -321,13 +322,13 @@ describe('RunTurnsTimeline — ② 选中区间跟随与性能契约', () => {
     });
     const x = ((119 / 120) * 100) / 100 * 1000;
     const band = q<HTMLElement>('[data-selection-band]')!;
-    expect(tx(band)).toBeCloseTo(x, 6);
-    expect(wd(band)).toBe(24);
-    // 窄于两段渐隐 → 对称渐入渐出
-    expect(band.style.background).toBe(`linear-gradient(90deg, transparent, ${tintOf('#3b82f6')} 50%, transparent)`);
-    // 所属条子上同样浮起（保底 6px）
+    expect(tx(band)).toBeCloseTo(x - 8, 6);
+    expect(wd(band)).toBe(22);
+    // 渐隐落在选中段之外：实心核的两缘就是选中段的两缘
+    expect(band.style.background).toBe(`linear-gradient(90deg, transparent 0, ${tintOf('#3b82f6')} 8px, ${tintOf('#3b82f6')} calc(100% - 8px), transparent 100%)`);
     const lit = qa('[data-selected-turn]') as HTMLElement[];
     expect(lit).toHaveLength(1);
+    expect(tx(lit[0]!)).toBeCloseTo(x, 6);
     expect(wd(lit[0]!)).toBe(6);
     // 居中会出右界 → 钳到 1000 − 64
     expect(tx(q<HTMLElement>('[data-selection-pill]')!)).toBe(1000 - 64);

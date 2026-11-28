@@ -105,9 +105,11 @@ test.describe("Turns 面板交互", () => {
     await expect(track).toBeVisible();
     const band = timeline.locator("[data-selection-band]");
     const detail = page.locator("[data-turn-detail]");
-    const gridLines = timeline.locator("[data-timeline-grid] span");
+    const ticks = timeline.locator("[data-axis-tick]");
     // 一屏最多 6 格 + 窗口外扩一格（不足 3 格时降一档步长，最多约 8 格）：与 run 的时间跨度无关
-    expect(await gridLines.count()).toBeLessThanOrEqual(11);
+    expect(await ticks.count()).toBeLessThanOrEqual(11);
+    // 道内不画竖向网格线：时间只看横坐标
+    await expect(timeline.locator("[data-timeline-grid]")).toHaveCount(0);
 
     // 选列表中段的一轮 → 播放头立在它的起点（视野中部）
     const rows = page.locator("[data-turn-list] [data-turn-row]");
@@ -139,8 +141,8 @@ test.describe("Turns 面板交互", () => {
     const anchorAfter = (await band.boundingBox())!.x;
     expect(Math.abs(anchorAfter - anchorBefore)).toBeLessThan(8);
     // 刻度仍只为可视窗口生成（整段上有数千个刻度点，一个都不多画）
-    expect(await gridLines.count()).toBeLessThanOrEqual(11);
-    expect(await gridLines.count()).toBeGreaterThan(0);
+    expect(await ticks.count()).toBeLessThanOrEqual(11);
+    expect(await ticks.count()).toBeGreaterThan(0);
 
     // 单击即跳的期望值不靠猜：从 /executions 取回逐轮区间，按「像素 → 时刻 →
     // 轮次」独立算一遍（落在区间内取该轮；空档取最近一轮，等距取前一轮），
@@ -171,19 +173,20 @@ test.describe("Turns 面板交互", () => {
     expect(expected).toBeTruthy();
 
     await page.mouse.click(clickX, laneBox.y + laneBox.height / 2);
-    // 选中轮 = 独立算出的那一轮；播放头 = 所选轮起点（落点在空档时取最近一轮，
-    // 所以播放头可以在落点任一侧）——屏幕位置按轨道比例换算逐像素对上，且不出
-    // 视野（出视野即跟随滚动）
+    // 选中轮 = 独立算出的那一轮；选中段起点 = 所选轮起点（落点在空档时取最近一轮，
+    // 所以它可以在落点任一侧）——屏幕位置按轨道比例换算逐像素对上，且不出视野
+    // （出视野即跟随滚动）。量的是选中段而非柔光：柔光在段两侧还各多 8px 渐隐
+    const segment = timeline.locator("[data-selected-turn]");
     await expect(detail).toHaveAttribute("data-turn-detail", expected!, { timeout: 10_000 });
     const expectedStart = windows.find(w => w.turnId === expected)!.start;
     await expect
       .poll(async () => {
         const t = (await track.boundingBox())!;
-        const x = (await band.boundingBox())!.x;
+        const x = (await segment.boundingBox())!.x;
         return Math.abs(x - (t.x + ((expectedStart - startMs) / totalMs) * t.width));
       }, { timeout: 5_000 })
       .toBeLessThan(2);
-    const landed = (await band.boundingBox())!.x;
+    const landed = (await segment.boundingBox())!.x;
     expect(landed).toBeGreaterThanOrEqual(viewLeft - 1);
     expect(landed).toBeLessThanOrEqual(viewLeft + viewWidth + 1);
   });
@@ -218,6 +221,18 @@ test.describe("Turns 面板交互", () => {
     });
     // root 道 = 'root'（单成员）或成员 taskId（多成员 run）
     expect(ringLane.root || ringLane.key === "root").toBe(true);
+    // 等出现时的弹出动画走完再量几何（scale 进行中的包围盒不等于布局盒）
+    const settled = () =>
+      Promise.all([band, ring, chip].map(l => l.evaluate(el => el.getAnimations().every(a => a.playState !== "running"))))
+        .then(flags => flags.every(Boolean));
+    await expect.poll(settled).toBe(true);
+    // 以柔光为主：选中段是柔光的实心核——两者左缘差 8px（半段渐隐）、段宽 = 光宽 − 16px
+    {
+      const b = (await band.boundingBox())!;
+      const r = (await ring.boundingBox())!;
+      expect(Math.abs(r.x - (b.x + 8))).toBeLessThan(1.5);
+      expect(Math.abs(r.width - (b.width - 16))).toBeLessThan(1.5);
+    }
     // 时刻胶囊居中于区间起点（贴边时钳在轴内）——始终罩住起点
     await expect
       .poll(async () => {
@@ -234,11 +249,8 @@ test.describe("Turns 面板交互", () => {
     expect(await chip.evaluate(el => getComputedStyle(el).transitionProperty)).not.toContain("left");
     expect(await band.evaluate(el => getComputedStyle(el).backgroundImage)).toContain("linear-gradient");
     expect(await ring.evaluate(el => getComputedStyle(el).boxShadow)).not.toContain("0px 0px");
-    await expect
-      .poll(async () => Math.abs((await ring.boundingBox())!.x - (await band.boundingBox())!.x))
-      .toBeLessThan(1.5);
     // 竖带有可见宽度（所选轮的时长），不是一根线
-    expect((await band.boundingBox())!.width).toBeGreaterThanOrEqual(24);
+    expect((await band.boundingBox())!.width).toBeGreaterThanOrEqual(22);
     if (process.env.SHOT) {
       const tl = (await timeline.boundingBox())!;
       await page.screenshot({ path: "/tmp/opencode/v5-real.png", clip: { x: 0, y: tl.y - 4, width: 1440, height: Math.min(tl.height + 8, 420) } });
