@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- Run 工作台新增「导出原始文件 (zip)」：把 run 的原始文件按原格式打包（主文件与子代理文件一并带走，与盘上字节一致）；本机已无原文件的会话（含 opencode 共享库里的会话）改以 7z 压缩的 SQLite 导出件代替，包内 `export-manifest.json` 逐会话记明用的是哪种；菜单条目在点之前就写明几个会话按原文件、几个以导出 db 代替。CLI 对应 `ctxi export --archive`
+- Run 工作台新增「导出原始文件 (zip)」：把 run 的原始文件按原格式打包（主文件与子代理文件一并带走，与盘上字节一致）；本机已无原文件的会话（含 opencode 共享库里的会话）改以 7z 压缩的 SQLite 导出件代替，包内 `export-manifest.json` 逐会话记明用的是哪种。CLI 对应 `ctxi export --archive`
 - Run 工作台页头新增「导出 SQLite 数据库」：把 run 的全部成员会话（solo 会话即其自身）导出为一份独立 SQLite 文件，可经导入向导或 `ctxi import` 原样导回；文件名 solo 为 `context_session_<taskId>.db`、多成员 run 为 `context_session_run_<名称>.db`
 
 ### Changed

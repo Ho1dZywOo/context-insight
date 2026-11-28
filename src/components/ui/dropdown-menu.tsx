@@ -7,10 +7,23 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See the License in the root of the software repository for the full text of the License.
 
+// 下拉菜单（@base-ui/react Menu 封装，iOS 风格）：一枚轻悬浮的圆角面板，条目只有
+// 标题一行（必要时右侧挂一个尾随元素，如进行中的转圈），高亮是条目自身的圆角
+// 衬底。开合动效只动 transform 与 opacity（合成层属性，不触发布局与重绘），
+// 从触发角起手缩放 + 淡入，时长 150ms、缓动取 iOS 面板的收尾曲线；用过渡而非
+// 关键帧，快速反复开合时能从当前进度平滑折返。面板本体半透明 + 背景模糊
+// （面积小，代价可忽略），不加整页遮罩——菜单是轻量操作，不该压暗工作区。
+
 import * as React from "react"
 import { Menu as MenuPrimitive } from "@base-ui/react/menu"
 
 import { cn } from "@/lib/utils"
+
+/** 开合动效：只动 transform 与 opacity；缩放锚点取 Base UI 给的触发角 */
+const MOTION =
+  "origin-(--transform-origin) transition-[transform,opacity] duration-150 ease-[cubic-bezier(0.32,0.72,0,1)] " +
+  "data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 " +
+  "motion-reduce:transition-none"
 
 function DropdownMenu({ ...props }: MenuPrimitive.Root.Props) {
   return <MenuPrimitive.Root data-slot="dropdown-menu" {...props} />
@@ -43,7 +56,8 @@ function DropdownMenuContent({
         <MenuPrimitive.Popup
           data-slot="dropdown-menu-content"
           className={cn(
-            "min-w-60 origin-(--transform-origin) rounded-lg border border-foreground/10 bg-popover p-1 text-popover-foreground shadow-lg shadow-black/10 outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            "min-w-44 rounded-xl border border-black/[0.06] bg-popover/80 p-1 text-popover-foreground shadow-[0_1px_1px_rgba(0,0,0,0.04),0_8px_24px_-6px_rgba(0,0,0,0.14),0_24px_48px_-12px_rgba(0,0,0,0.12)] outline-none backdrop-blur-xl supports-backdrop-filter:bg-popover/75 dark:border-white/[0.08] dark:shadow-[0_1px_1px_rgba(0,0,0,0.3),0_12px_32px_-8px_rgba(0,0,0,0.6)]",
+            MOTION,
             className
           )}
           {...props}
@@ -55,26 +69,39 @@ function DropdownMenuContent({
 
 function DropdownMenuItem({
   className,
-  hint,
+  trailing,
   children,
   ...props
 }: MenuPrimitive.Item.Props & {
-  /** 条目副标题（一行事实说明，如「3 个会话按原文件，1 个以导出 db 代替」） */
-  hint?: React.ReactNode
+  /** 尾随元素（条目右端）：进行中的转圈、勾选标记一类，占位固定、不改行高 */
+  trailing?: React.ReactNode
 }) {
   return (
     <MenuPrimitive.Item
       data-slot="dropdown-menu-item"
       className={cn(
-        "flex cursor-default flex-col items-start gap-0.5 rounded-md px-2.5 py-1.5 text-xs outline-none data-highlighted:bg-foreground/[0.06] data-disabled:cursor-default data-disabled:opacity-45 dark:data-highlighted:bg-foreground/[0.12]",
+        "flex min-h-8 cursor-default items-center gap-6 rounded-lg px-3 py-1.5 text-[13px] leading-5 outline-none select-none transition-colors duration-100",
+        "data-[highlighted]:bg-foreground/[0.06] dark:data-[highlighted]:bg-foreground/[0.1]",
+        "data-[disabled]:cursor-default data-[disabled]:opacity-40",
         className
       )}
       {...props}
     >
-      {children}
-      {hint ? <span className="text-[11px] leading-4 text-muted-foreground">{hint}</span> : null}
+      <span className="flex-1 whitespace-nowrap">{children}</span>
+      {trailing ? <span className="-my-px flex shrink-0 items-center text-muted-foreground">{trailing}</span> : null}
     </MenuPrimitive.Item>
   )
 }
 
-export { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem }
+function DropdownMenuSeparator({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      data-slot="dropdown-menu-separator"
+      role="separator"
+      className={cn("-mx-1 my-1 h-px bg-foreground/[0.06] dark:bg-white/[0.08]", className)}
+      {...props}
+    />
+  )
+}
+
+export { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator }

@@ -7,9 +7,9 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See the License in the root of the software repository for the full text of the License.
 
-// 归档计划的对外形态与文案（纯函数、零 Node 依赖）：装配在 observe/session-archive
-// （服务端，带 sqlite / prisma），工作台页面是客户端组件——只能引本模块，不能引
-// 装配模块，否则 better-sqlite3 整条链进浏览器包。
+// 归档计划的对外形态（纯函数、零 Node 依赖）：装配在 observe/session-archive
+// （服务端，带 sqlite / prisma）。保持零 Node 依赖：本形态是 plan 端点的响应体，
+// 任何一侧（含客户端组件）都能引它的类型而不把装配链拖进浏览器包。
 
 import type { SessionFilesAbsentReason } from '@/lib/ingest/session-files';
 import type { SessionArchivePlan } from '@/lib/observe/session-archive';
@@ -52,21 +52,4 @@ export function summarizeSessionArchive(plan: SessionArchivePlan): SessionArchiv
       fileCount: member.files.length,
     })),
   };
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-/** 归档计划的一句话说明（导出菜单条目副标题的唯一文案源）：照实说有几个会话
- *  按原文件、几个以导出 db 代替。 */
-export function describeSessionArchive(plan: SessionArchivePlanSummary): string {
-  if (plan.dbs === 0) {
-    return `${plan.originals} 个会话的原文件 · 共 ${plan.fileCount} 个文件 · ${formatBytes(plan.bytes)}`;
-  }
-  if (plan.originals === 0) return `本机已无原文件 · ${plan.dbs} 个会话以导出 db（7z）代替`;
-  return `${plan.originals} 个会话按原文件，${plan.dbs} 个以导出 db（7z）代替`;
 }

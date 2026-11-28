@@ -12,7 +12,8 @@
 // Run 工作台页头右翼的内容（单行应用栏的右段）：同步态 chip + 图标动作组（刷新 /
 // 导出菜单）+ 上传主操作。导出是一个菜单、若干条目（SQLite 数据库 / 原始文件
 // zip / Markdown / 离线 HTML）——同一件事的四种产物收在一个入口里，页头只占
-// 一个图标钮的位置。动作在不在场由入参决定（null / 空数组 = 不渲染）：离线
+// 一个图标钮的位置。条目只有标题一行，不挂副标题（小字多了显得乱）；进行中
+// 的那一条标题转灰、右端挂转圈。动作在不在场由入参决定（null / 空数组 = 不渲染）：离线
 // 档案没有服务端协作动作，MD 导出 solo 专属——本组件不读宿主能力，只按入参摆。
 // 全空即整个右区不渲染，空间归 tab 导航。
 // 密度：本区挂在页头的 @container 里，页头宽度不足时逐级让位——先是文字：
@@ -23,7 +24,6 @@
 // 间距档在本文件 ICON_BUTTON / 组容器与页头两翼内边距同写 1100，改一并改。
 
 import { DownloadIcon, Loader2Icon, RefreshCwIcon, UploadIcon, WifiIcon } from "lucide-react";
-import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { HEADER_TEXT_SHOW, HEADER_UPLOAD_PADDING } from "@/components/run/header/RunWorkbenchHeader";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -37,8 +37,6 @@ export interface RunExportItem {
   /** 稳定锚点（data-run-export），测试与埋点用 */
   id: "sqlite" | "archive" | "markdown" | "html";
   label: string;
-  /** 条目副标题：一行事实说明（如「3 个会话按原文件，1 个以导出 db 代替」） */
-  hint?: ReactNode;
   pending: boolean;
   onExport: () => void;
 }
@@ -48,8 +46,6 @@ export interface RunHeaderActionsProps {
   refresh: { sync: RunSyncState; enabled: boolean; onRefresh: () => void } | null;
   /** 导出菜单条目（按传入顺序排列）；null / 空 = 不提供导出 */
   exports: RunExportItem[] | null;
-  /** 导出菜单开合回调（宿主借此在菜单打开时现查归档计划） */
-  onExportMenuOpenChange?: (open: boolean) => void;
   /** 上传数据仓主操作；null = 不提供 */
   upload: { label: string; disabled: boolean; onOpen: () => void } | null;
 }
@@ -57,7 +53,7 @@ export interface RunHeaderActionsProps {
 const ICON_BUTTON =
   "flex size-7 @max-[1100px]:size-6 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]";
 
-export function RunHeaderActions({ refresh, exports, onExportMenuOpenChange, upload }: RunHeaderActionsProps) {
+export function RunHeaderActions({ refresh, exports, upload }: RunHeaderActionsProps) {
   if (!refresh && !(exports && exports.length > 0) && !upload) return null;
   const sync = refresh?.sync ?? "idle";
   const exporting = exports?.some(item => item.pending) ?? false;
@@ -100,7 +96,7 @@ export function RunHeaderActions({ refresh, exports, onExportMenuOpenChange, upl
             </button>
           ) : null}
           {exports && exports.length > 0 ? (
-            <DropdownMenu onOpenChange={onExportMenuOpenChange}>
+            <DropdownMenu>
               <DropdownMenuTrigger
                 data-run-export-trigger
                 className={ICON_BUTTON}
@@ -117,12 +113,10 @@ export function RunHeaderActions({ refresh, exports, onExportMenuOpenChange, upl
                     data-run-export={item.id}
                     onClick={item.onExport}
                     disabled={item.pending}
+                    className={item.pending ? "data-[disabled]:opacity-100 [&>span:first-child]:text-muted-foreground" : undefined}
+                    trailing={item.pending ? <Loader2Icon className="size-3.5 animate-spin" /> : null}
                   >
-                    <span className="flex items-center gap-1.5">
-                      {item.pending ? <Loader2Icon className="size-3 animate-spin" /> : null}
-                      {item.label}
-                    </span>
-                    {item.hint}
+                    {item.label}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

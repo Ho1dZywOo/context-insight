@@ -760,27 +760,21 @@ describe('Run 详情页暗色工作台', () => {
     expect(exportItems().map(el => el.getAttribute('data-run-export'))).toEqual(['sqlite', 'archive', 'html'])
   })
 
-  it('页头「导出」菜单：打开即查归档计划，「原始文件」条目照实写明几个会话按原文件、几个以导出 db 代替', async () => {
-    const planFetch = vi.fn(async (_input: RequestInfo | URL) => ({
-      ok: true,
-      json: async () => ({ originals: 1, dbs: 2, fileCount: 5, bytes: 3 * 1024 * 1024, members: [] }),
-    }))
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
-      String(input).endsWith('/export-archive/plan')
-        ? planFetch(input)
-        : { ok: true, json: async () => responseBody } as unknown as Response
-    )))
+  it('页头「导出」菜单：条目只有标题一行（不挂副标题），打开菜单不额外发请求', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return { ok: true, json: async () => responseBody } as unknown as Response;
+    }));
     try {
-      await renderPage()
-      // 没点开菜单之前不查计划（盘上原件在不在随时会变，不做页面加载时预取）
-      expect(planFetch).not.toHaveBeenCalled()
-      await openExportMenu()
-      expect(planFetch.mock.calls.map(c => String(c[0]))).toEqual(['/api/observe/run/minidemo01/export-archive/plan'])
-      const archive = document.querySelector('[data-run-export="archive"]') as HTMLElement
-      expect(archive.textContent).toContain('原始文件 (zip)')
-      expect(archive.textContent).toContain('1 个会话按原文件，2 个以导出 db（7z）代替')
+      await renderPage();
+      calls.length = 0;
+      await openExportMenu();
+      // 菜单是静态入口：开合不触发任何取数（归档计划由服务端在导出时现算）
+      expect(calls).toEqual([]);
+      expect(exportItems().map(el => el.textContent)).toEqual(['SQLite 数据库', '原始文件 (zip)', '离线 HTML']);
     } finally {
-      vi.unstubAllGlobals()
+      vi.unstubAllGlobals();
     }
   })
 
@@ -816,11 +810,9 @@ describe('Run 详情页暗色工作台', () => {
 
       await act(async () => { release() })
       // run 级端点（runId 随 run 身份，不带成员 / taskId——全员由服务端 scope 决定）
-      // run 级端点（runId 随 run 身份，不带成员 / taskId——全员由服务端 scope 决定）；
-      // 菜单打开时先查一次归档计划
+      // run 级端点（runId 随 run 身份，不带成员 / taskId——全员由服务端 scope 决定）
       expect(exportFetch.mock.calls.map(c => String(c[0]))).toEqual([
         expect.stringContaining('/api/observe/run/minidemo01'),
-        '/api/observe/run/minidemo01/export-archive/plan',
         '/api/observe/run/minidemo01/export-db',
       ])
       expect(anchorClick).toHaveBeenCalledTimes(1)
