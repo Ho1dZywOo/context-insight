@@ -6,13 +6,16 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// SQLite 导出件文件名的单一源：export-db 端点（content-disposition）、工作台
-// 导出钮（下载落盘名的回落值）与 CLI `ctxi export`（缺省输出名）共用。
+// 会话导出件文件名的单一源：SQLite 导出（export-db 端点 content-disposition、
+// 工作台导出钮下载落盘名的回落值、CLI `ctxi export` 缺省输出名）与原始文件
+// 归档（export-archive 端点 / 工作台 / CLI `ctxi export --archive`）共用。
 // 前缀 context_session_ 是导入侧的前缀嗅探信号（adapters/registry 的
 // context-insight 源；cannbot 变体打包期整体翻转）——不随 run 形态变，变的只
 // 是主干：solo 用会话口径（taskId），bundle 用 run 身份（run_<name>）。主干做
 // 文件系统安全字符收敛；响应头另有 ASCII 折叠 + RFC 5987 的 filename*（中文
 // run 名进不了 ISO-8859-1 响应头）。
+// 归档件沿用同一主干与前缀、只换扩展名：与同一次导出的 db 件并排落地时
+// 一眼对得上是同一个 run。
 
 const UNSAFE_FILENAME_RE = /[\\/:*?"<>|\s]+/g;
 const NON_ASCII_RE = /[^\x20-\x7e]/g;
@@ -28,15 +31,32 @@ export interface DbExportNameInput {
   runName?: string | null;
 }
 
-export function dbExportFileName(opts: DbExportNameInput): string {
+/** 导出件主干（不含扩展名）：<前缀><solo: taskId | bundle: run_<name>> */
+export function exportStem(opts: DbExportNameInput): string {
   const nameBase = opts.solo ? opts.taskId ?? opts.runId : `run_${opts.runName ?? opts.runId}`;
-  return `${DB_EXPORT_PREFIX}${String(nameBase).replace(UNSAFE_FILENAME_RE, '_')}.db`;
+  return `${DB_EXPORT_PREFIX}${String(nameBase).replace(UNSAFE_FILENAME_RE, '_')}`;
+}
+
+export function dbExportFileName(opts: DbExportNameInput): string {
+  return `${exportStem(opts)}.db`;
+}
+
+/** 原始文件归档（zip）文件名 */
+export function archiveExportFileName(opts: DbExportNameInput): string {
+  return `${exportStem(opts)}.zip`;
 }
 
 /** attachment 响应头：filename= ASCII 折叠名（老客户端）+ filename*= UTF-8 原名
  *  （标准客户端优先取它）。 */
-export function dbExportContentDisposition(opts: DbExportNameInput): string {
-  const filename = dbExportFileName(opts);
+export function contentDisposition(filename: string): string {
   const ascii = filename.replace(NON_ASCII_RE, '_');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+export function dbExportContentDisposition(opts: DbExportNameInput): string {
+  return contentDisposition(dbExportFileName(opts));
+}
+
+export function archiveExportContentDisposition(opts: DbExportNameInput): string {
+  return contentDisposition(archiveExportFileName(opts));
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { InsightClient } from '@/cli/client';
 import { exportCommand } from '@/cli/commands/export';
-import { dbExportFileName } from '@/lib/observe/db-export-name';
+import { dbExportFileName } from '@/lib/observe/export-name';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -43,6 +43,24 @@ describe('exportCommand', () => {
     expect(options).toContain('--session');
     expect(options).toContain('--output');
     expect(options).toContain('--json');
+    expect(options).toContain('--archive');
+  });
+
+  it('exportSessionArchive GETs the run export-archive endpoint and streams the zip to disk', async () => {
+    const zipBytes = new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let fetchedUrl = '';
+    mockFetch.mockImplementationOnce((url: string) => {
+      fetchedUrl = url;
+      return Promise.resolve(new Response(zipBytes, { headers: { 'Content-Type': 'application/zip' } }));
+    });
+
+    const tmp = path.join(os.tmpdir(), `ctxi-export-${Date.now()}.zip`);
+    const result = await new InsightClient('http://localhost:21025', { retries: 0 }).exportSessionArchive('ses_arch_01', tmp);
+
+    expect(fetchedUrl).toBe('http://localhost:21025/api/observe/run/solo%3Ases_arch_01/export-archive');
+    expect(fs.readFileSync(tmp).equals(Buffer.from(zipBytes))).toBe(true);
+    expect(result.size).toBe(zipBytes.length);
+    fs.unlinkSync(tmp);
   });
 
   it('exportSession GETs the run member-scope export-db endpoint and writes the file byte-identical', async () => {
@@ -51,7 +69,7 @@ describe('exportCommand', () => {
     mockFetch.mockImplementationOnce((url: string, init: RequestInit) => {
       fetchedUrl = url;
       fetchedInit = init;
-      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(sqliteBody()) });
+      return Promise.resolve(new Response(sqliteBody()));
     });
 
     const tmp = path.join(os.tmpdir(), `ctxi-export-${Date.now()}.db`);
@@ -84,7 +102,7 @@ describe('exportCommand', () => {
     const cwd = process.cwd();
     const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxi-export-cwd-'));
     mockFetch.mockImplementationOnce(() =>
-      Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(sqliteBody()) }),
+      Promise.resolve(new Response(sqliteBody())),
     );
     process.chdir(tmpCwd);
     try {

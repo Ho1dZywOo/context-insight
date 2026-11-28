@@ -21,7 +21,7 @@ import { resolveRunScope } from '@/lib/run/observe/scope';
 import { readRun } from '@/lib/run/run-store';
 import { isSoloRunId } from '@/lib/run/identity';
 import { exportSessionRows } from '@/lib/ingest/export-service';
-import { dbExportContentDisposition } from '@/lib/observe/db-export-name';
+import { dbExportContentDisposition } from '@/lib/observe/export-name';
 import { logInfo } from '@/lib/logger';
 
 export const GET = withRouteLog<{ params: Promise<{ runId: string }> }>('observe/run/export-db', async (

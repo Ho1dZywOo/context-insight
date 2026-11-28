@@ -86,16 +86,28 @@ export class RunWorkbenchPO {
     return this.header().locator('a[href="/"]');
   }
 
-  /** 页头「导出 SQLite 数据库」钮（run 全员成员会话的独立导出件；在线宿主独有）。 */
-  exportSqliteButton(): Locator {
-    return this.page.getByTitle("导出 SQLite 数据库");
+  /** 页头「导出」菜单触发钮（在线宿主独有；离线档案无导出动作）。 */
+  exportTrigger(): Locator {
+    return this.page.getByRole("button", { name: "导出", exact: true });
   }
 
-  /** 点击「导出 SQLite 数据库」并捕获下载（须先 stripFilePicker 走锚点下载）。 */
-  async exportSqliteAndWaitDownload(): Promise<Download> {
+  /** 导出菜单的一个条目（data-run-export 锚点：sqlite / archive / markdown / html）。 */
+  exportMenuItem(id: "sqlite" | "archive" | "markdown" | "html"): Locator {
+    return this.page.locator(`[data-run-export="${id}"]`);
+  }
+
+  /** 打开导出菜单，等条目渲染出来。 */
+  async openExportMenu(): Promise<void> {
+    await this.exportTrigger().click();
+    await this.exportMenuItem("sqlite").waitFor({ state: "visible" });
+  }
+
+  /** 点一个导出条目并捕获下载（须先 stripFilePicker 走锚点下载）。 */
+  async exportAndWaitDownload(id: "sqlite" | "archive" | "markdown" | "html"): Promise<Download> {
+    await this.openExportMenu();
     const [download] = await Promise.all([
       this.page.waitForEvent("download"),
-      this.exportSqliteButton().click(),
+      this.exportMenuItem(id).click(),
     ]);
     return download;
   }

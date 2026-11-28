@@ -212,6 +212,23 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
+/** 打开页头「导出」菜单（base-ui Menu 的触发器按指针序列开合，jsdom 下把
+ *  一次真实点击的事件序列补齐），等条目渲染出来。 */
+async function openExportMenu(): Promise<void> {
+  const trigger = document.querySelector('button[title="导出"]') as HTMLButtonElement
+  await act(async () => {
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      trigger.dispatchEvent(type.startsWith('pointer')
+        ? new PointerEvent(type, { bubbles: true, button: 0, pointerType: 'mouse' })
+        : new MouseEvent(type, { bubbles: true, button: 0 }))
+    }
+    await new Promise(r => setTimeout(r, 0))
+  })
+}
+
+const exportItems = (): HTMLElement[] => [...document.querySelectorAll('[data-run-export]')] as HTMLElement[]
+const exportItem = (id: string): HTMLElement => document.querySelector(`[data-run-export="${id}"]`) as HTMLElement
+
 describe('Run 详情页暗色工作台', () => {
   it('Overview 默认 tab：总览头（身份 + Σ指标瓦片）+ 结构/导入卡；Graph 切换走 URL 镜像', async () => {
     await renderPage()
@@ -733,17 +750,41 @@ describe('Run 详情页暗色工作台', () => {
     expect(document.querySelector('button[title="立即刷新"]')).toBeTruthy()
     const upload = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('上传到'))
     expect(upload).toBeTruthy()
-    expect(document.querySelector('button[title="导出 Markdown"]')).toBeNull()
-    expect(document.querySelector('button[title="导出离线 HTML"]')).toBeTruthy()
-    const exportSqlite = document.querySelector('button[title="导出 SQLite 数据库"]') as HTMLButtonElement
-    expect(exportSqlite).toBeTruthy()
-    expect(exportSqlite.disabled).toBe(false)
-    // 导出簇内的次序：SQLite（完整数据）→ Markdown → 离线 HTML，三者同组
+    // 导出收成一个菜单（一个图标钮）：条目打开后才渲染——SQLite / 原始文件
+    // zip / 离线 HTML 全 run 可用，Markdown solo 专属不在场；次序即上面的次序
     const cluster = [...document.querySelectorAll('[data-run-header-actions] button')].map(b => b.getAttribute('title'))
-    expect(cluster.indexOf('导出 SQLite 数据库')).toBeLessThan(cluster.indexOf('导出离线 HTML'))
+    expect(cluster.filter(t => t?.startsWith('导出'))).toEqual(['导出'])
+    const exportTrigger = document.querySelector('button[title="导出"]') as HTMLButtonElement
+    expect(exportTrigger.disabled).toBe(false)
+    await openExportMenu()
+    expect(exportItems().map(el => el.getAttribute('data-run-export'))).toEqual(['sqlite', 'archive', 'html'])
   })
 
-  it('页头「导出 SQLite 数据库」：点击 → GET run 级 export-db → 按响应头文件名落盘，进行中禁用', async () => {
+  it('页头「导出」菜单：打开即查归档计划，「原始文件」条目照实写明几个会话按原文件、几个以导出 db 代替', async () => {
+    const planFetch = vi.fn(async (_input: RequestInfo | URL) => ({
+      ok: true,
+      json: async () => ({ originals: 1, dbs: 2, fileCount: 5, bytes: 3 * 1024 * 1024, members: [] }),
+    }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+      String(input).endsWith('/export-archive/plan')
+        ? planFetch(input)
+        : { ok: true, json: async () => responseBody } as unknown as Response
+    )))
+    try {
+      await renderPage()
+      // 没点开菜单之前不查计划（盘上原件在不在随时会变，不做页面加载时预取）
+      expect(planFetch).not.toHaveBeenCalled()
+      await openExportMenu()
+      expect(planFetch.mock.calls.map(c => String(c[0]))).toEqual(['/api/observe/run/minidemo01/export-archive/plan'])
+      const archive = document.querySelector('[data-run-export="archive"]') as HTMLElement
+      expect(archive.textContent).toContain('原始文件 (zip)')
+      expect(archive.textContent).toContain('1 个会话按原文件，2 个以导出 db（7z）代替')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('页头「导出」→「SQLite 数据库」：点击 → GET run 级 export-db → 按响应头文件名落盘，进行中禁用', async () => {
     const toastSuccess = vi.spyOn(toast, 'success')
     const notifyErrorSpy = vi.spyOn(NoticeHud, 'notifyError')
     let release!: () => void
@@ -765,17 +806,21 @@ describe('Run 详情页暗色工作台', () => {
     URL.revokeObjectURL = vi.fn() as never
     try {
       await renderPage()
-      const button = document.querySelector('button[title="导出 SQLite 数据库"]') as HTMLButtonElement
-      await act(async () => { button.click() })
-      // 取流期间：按钮禁用（防重复触发），尚未落盘、尚未提示
+      await openExportMenu()
+      const button = document.querySelector('button[title="导出"]') as HTMLButtonElement
+      await act(async () => { exportItem('sqlite').click() })
+      // 取流期间：导出钮禁用（防重复触发），尚未落盘、尚未提示
       expect(button.disabled).toBe(true)
       expect(anchorClick).not.toHaveBeenCalled()
       expect(toastSuccess).not.toHaveBeenCalled()
 
       await act(async () => { release() })
       // run 级端点（runId 随 run 身份，不带成员 / taskId——全员由服务端 scope 决定）
+      // run 级端点（runId 随 run 身份，不带成员 / taskId——全员由服务端 scope 决定）；
+      // 菜单打开时先查一次归档计划
       expect(exportFetch.mock.calls.map(c => String(c[0]))).toEqual([
         expect.stringContaining('/api/observe/run/minidemo01'),
+        '/api/observe/run/minidemo01/export-archive/plan',
         '/api/observe/run/minidemo01/export-db',
       ])
       expect(anchorClick).toHaveBeenCalledTimes(1)
@@ -792,7 +837,7 @@ describe('Run 详情页暗色工作台', () => {
     }
   })
 
-  it('页头「导出 SQLite 数据库」：服务端报错 → 报错确认卡带原因，不落盘、不提示成功', async () => {
+  it('页头「导出」→「SQLite 数据库」：服务端报错 → 报错确认卡带原因，不落盘、不提示成功', async () => {
     const toastSuccess = vi.spyOn(toast, 'success')
     const notifyErrorSpy = vi.spyOn(NoticeHud, 'notifyError')
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -804,8 +849,9 @@ describe('Run 详情页暗色工作台', () => {
     const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     try {
       await renderPage()
-      const button = document.querySelector('button[title="导出 SQLite 数据库"]') as HTMLButtonElement
-      await act(async () => { button.click() })
+      await openExportMenu()
+      const button = document.querySelector('button[title="导出"]') as HTMLButtonElement
+      await act(async () => { exportItem('sqlite').click() })
       await act(async () => { await new Promise(r => setTimeout(r, 0)) })
       expect(anchorClick).not.toHaveBeenCalled()
       expect(toastSuccess).not.toHaveBeenCalled()

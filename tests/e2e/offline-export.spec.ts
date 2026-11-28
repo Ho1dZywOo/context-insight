@@ -23,9 +23,10 @@ test.describe("离线 HTML 导出", () => {
     const run = new RunWorkbenchPO(page);
     await run.goto(`solo:${CLAUDE_SAMPLE_SESSION_ID}`);
 
+    await run.openExportMenu();
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      page.getByTitle("导出离线 HTML").click(),
+      run.exportMenuItem("html").click(),
     ]);
     expect(download.suggestedFilename()).toMatch(/\.html$/);
   });
@@ -35,9 +36,10 @@ test.describe("离线 HTML 导出", () => {
     const run = new RunWorkbenchPO(page);
     await run.goto(`solo:${CLAUDE_SAMPLE_SESSION_ID}`);
 
+    await run.openExportMenu();
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      page.getByTitle("导出离线 HTML").click(),
+      run.exportMenuItem("html").click(),
     ]);
     // download.path() 是无扩展名的 UUID 临时文件——Chromium 对 file:// 无扩展
     // 名文件不做 HTML 嗅探、整文件按纯文本渲染（#root 不存在）。saveAs 落到

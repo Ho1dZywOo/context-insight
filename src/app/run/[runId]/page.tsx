@@ -47,8 +47,9 @@ import { RunHeaderActions, type RunSyncState } from "@/components/run/header/Run
 import { UploadDialog } from "@/components/collection/UploadDialog";
 import { BAY_NAME, BRAND_NAME } from "@/lib/branding";
 import { assembleEmbeddedHtml, captureStylesheets, downloadHtml, gatherRunExportData } from "@/lib/observe/export-html";
-import { MARKDOWN_FILE, SQLITE_FILE, fetchExportFile } from "@/lib/observe/export-download";
-import { dbExportFileName } from "@/lib/observe/db-export-name";
+import { MARKDOWN_FILE, SQLITE_FILE, ZIP_FILE, fetchExportFile } from "@/lib/observe/export-download";
+import { archiveExportFileName, dbExportFileName } from "@/lib/observe/export-name";
+import { describeSessionArchive, type SessionArchivePlanSummary } from "@/lib/observe/archive-plan";
 import { useRunHostCaps } from "@/lib/run/host-caps";
 import { toast } from "sonner";
 import { notifyError } from "@/components/NoticeHud";
@@ -179,6 +180,10 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   const [exportingDb, setExportingDb] = useState(false);
   const [exportingMd, setExportingMd] = useState(false);
   const [exportingHtml, setExportingHtml] = useState(false);
+  const [exportingArchive, setExportingArchive] = useState(false);
+  // 归档计划（几个会话有原文件）：导出菜单打开时现查——盘上的原件在不在随时
+  // 会变，页面加载时预取会给出过期答案；"pending" = 正在查
+  const [archivePlan, setArchivePlan] = useState<SessionArchivePlanSummary | "pending" | null>(null);
   // tab/member 视图状态（state 权威 + URL 镜像，契约对齐离线降级路径）；
   // goBack/canBack 为条目栈出口——live 页面条目栈 = 浏览器历史（鼠标侧键/
   // 浏览器返回钮与本钮同一出口，popstate 恢复视图），离线导出降级内存栈
@@ -450,6 +455,37 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
     }
   }
 
+  async function handleExportArchive() {
+    if (exportingArchive) return;
+    setExportingArchive(true);
+    try {
+      const file = await fetchExportFile(`/api/observe/run/${encodeURIComponent(run.runId)}/export-archive`, {
+        mime: "application/zip",
+        kind: ZIP_FILE,
+        fallbackName: archiveExportFileName({
+          solo: run.kind === "solo", runId: run.runId, taskId: soloMember?.taskId ?? null, runName: run.name,
+        }),
+      });
+      toast.success("Archive exported", {
+        description: `${file.filename} — 原始文件按原格式打包，包内 export-manifest.json 记录每个会话的文件与来源`,
+      });
+    } catch (e) {
+      notifyError("Export archive failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setExportingArchive(false);
+    }
+  }
+
+  async function loadArchivePlan() {
+    setArchivePlan("pending");
+    try {
+      const res = await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}/export-archive/plan`);
+      setArchivePlan(res.ok ? (await res.json()) as SessionArchivePlanSummary : null);
+    } catch {
+      setArchivePlan(null);
+    }
+  }
+
   async function handleExportMd() {
     if (!soloMember || exportingMd) return;
     setExportingMd(true);
@@ -520,9 +556,21 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
                 enabled: refreshable,
                 onRefresh: () => { if (!refreshing && refreshable) void refreshMembers(refreshTargets, false) },
               }}
-              sqlite={offline ? null : { pending: exportingDb, onExport: () => { void handleExportDb(); } }}
-              markdown={!offline && soloMember ? { pending: exportingMd, onExport: () => { void handleExportMd(); } } : null}
-              html={offline ? null : { pending: exportingHtml, onExport: () => { void handleExportHtml(); } }}
+              exports={offline ? null : [
+                { id: "sqlite" as const, label: "SQLite 数据库", hint: "管线数据，可经导入向导原样导回", pending: exportingDb, onExport: () => { void handleExportDb(); } },
+                {
+                  id: "archive" as const,
+                  label: "原始文件 (zip)",
+                  hint: archivePlan === "pending" ? "正在检查本机原文件…" : archivePlan ? describeSessionArchive(archivePlan) : undefined,
+                  pending: exportingArchive,
+                  onExport: () => { void handleExportArchive(); },
+                },
+                ...(!soloMember ? [] : [{
+                  id: "markdown" as const, label: "Markdown", pending: exportingMd, onExport: () => { void handleExportMd(); },
+                }]),
+                { id: "html" as const, label: "离线 HTML", pending: exportingHtml, onExport: () => { void handleExportHtml(); } },
+              ]}
+              onExportMenuOpenChange={open => { if (open) void loadArchivePlan(); }}
               upload={offline ? null : {
                 label: run.kind === "solo" ? `上传会话到${BAY_NAME}` : `上传到${BAY_NAME}`,
                 disabled: run.kind === "solo" && !soloMember,

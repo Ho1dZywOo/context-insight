@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// 工作台「导出 SQLite 数据库」旅程（真实服务 + 真实库）：页头导出钮 →
+// 工作台「导出 → SQLite 数据库」旅程（真实服务 + 真实库）：页头导出菜单 →
 // run 级 export-db 端点 → 下载 context_session_*.db → 件内 = run 全员成员会话
 // （格式头 ExportMeta + Session 行 + Turn 派生行，与在线工作台同一份数据）→
 // 经真实导入端点原样导回（导入预览列全成员 + 导入幂等合并不产生重复行）。
@@ -34,7 +34,7 @@ async function openRun(page: Page, target: string): Promise<RunWorkbenchPO> {
 
 /** 页头导出 → 下载落到用例输出目录（文件名保留建议名——即用户看到的落盘名） */
 async function exportViaHeader(run: RunWorkbenchPO, target: string): Promise<{ file: string; suggested: string }> {
-  const download = await run.exportSqliteAndWaitDownload();
+  const download = await run.exportAndWaitDownload("sqlite");
   const suggested = download.suggestedFilename();
   const file = path.join(target, suggested);
   await download.saveAs(file);
@@ -57,7 +57,7 @@ async function postJson(urlPath: string, body: unknown): Promise<{ ok: boolean; 
 test.describe("工作台导出 SQLite 数据库", () => {
   test("solo：下载 context_session_<taskId>.db，件内会话行与轮次与在线工作台同一份数据", async ({ page }) => {
     const run = await openRun(page, `solo:${CLAUDE_SAMPLE_SESSION_ID}`);
-    await expect(run.exportSqliteButton()).toBeVisible();
+    await expect(run.exportTrigger()).toBeVisible();
 
     const { file, suggested } = await exportViaHeader(run, test.info().outputDir);
     expect(suggested).toBe(`context_session_${CLAUDE_SAMPLE_SESSION_ID}.db`);

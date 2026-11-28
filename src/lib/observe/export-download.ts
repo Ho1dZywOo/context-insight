@@ -21,6 +21,7 @@ export interface SaveFileKind {
 export const SQLITE_FILE: SaveFileKind = { description: "SQLite Database", accept: { "application/x-sqlite3": [".db"] } };
 export const MARKDOWN_FILE: SaveFileKind = { description: "Markdown", accept: { "text/markdown": [".md"] } };
 export const HTML_FILE: SaveFileKind = { description: "HTML", accept: { "text/html": [".html"] } };
+export const ZIP_FILE: SaveFileKind = { description: "Zip Archive", accept: { "application/zip": [".zip"] } };
 
 type SaveHandle = { createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }> };
 
