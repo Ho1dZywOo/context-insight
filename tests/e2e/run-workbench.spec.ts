@@ -36,15 +36,20 @@ test.describe("Run 工作台", () => {
     await run.goto(E2E_RUN_ID);
     await run.expectTabActive("overview");
 
-    // Turns：跨成员搜索胶囊常驻（Run 轨右端）
+    // Turns：跨成员搜索胶囊常驻（顶部时间线工具条右端）+ 时间线本体
     await run.switchTab("turns");
     await expect(run.turnsSearchInput()).toBeVisible();
 
     // 其余 tab：切到位即面板渲染（内容深度由 vitest IT 各自锁定；E2E 锁
     // 「切换后真有东西渲染」——含 Graph 的全宽特殊布局与 Score 末位）
+    await expect(page.locator("[data-turns-timeline] [data-timeline-track]")).toBeVisible();
+
     for (const tab of ["graph", "context", "audit", "perf", "skills", "files", "score"] as RunTabKey[]) {
       await run.switchTab(tab);
     }
+    // 执行时间线只在 Turns 顶部：Perf 页不再有时间线卡（已迁出）
+    await run.switchTab("perf");
+    await expect(page.locator('[data-run-tab="perf"] [data-bar]')).toHaveCount(0);
     // 回到 Overview 收尾（全矩阵往返无残留）
     await run.switchTab("overview");
   });
