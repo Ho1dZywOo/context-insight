@@ -83,7 +83,8 @@ test.describe("Run 工作台", () => {
 // 页头单行应用栏：返回 · 品牌 → tab 导航 → 动作簇同排（原两行 chrome 合并），
 // tab 导航居页头正中（左右两翼等权）。密度按页头自身宽度（容器查询）分三档
 // 让位，导航最后才让：①够宽——上传钮带文字；②较窄——上传钮 / 同步 chip 只留
-// 图标；③窄——品牌字标也收起；再窄 tab 条才横滚（活跃项自动滚入视野）。
+// 图标；③窄——品牌字标也收起、间距收一档（图标钮与两翼留白）；再窄 tab 条才
+// 横滚（活跃项自动滚入视野）。
 // 几何断言只能在真实浏览器量（happy-dom 无布局）。
 test.describe("页头单行应用栏", () => {
   const DEFAULT_TABS: RunTabKey[] = ["overview", "graph", "turns", "context", "audit", "perf", "skills", "files", "score"];
@@ -113,7 +114,7 @@ test.describe("页头单行应用栏", () => {
     { width: 1920, height: 1080, wordmark: true, uploadText: true, tabsUnclipped: true, centerTolerance: 1.5 },
     { width: 1536, height: 864, wordmark: true, uploadText: true, tabsUnclipped: true, centerTolerance: 1.5 },
     { width: 1440, height: 900, wordmark: true, uploadText: false, tabsUnclipped: true, centerTolerance: 1.5 },
-    { width: 1024, height: 768, wordmark: false, uploadText: false, tabsUnclipped: true, centerTolerance: 12 },
+    { width: 1024, height: 768, wordmark: false, uploadText: false, tabsUnclipped: true, centerTolerance: 24 },
     { width: 800, height: 600, wordmark: false, uploadText: false, tabsUnclipped: false, centerTolerance: 0 },
   ]) {
     test(`${width}×${height}：仍是单行，品牌字标${wordmark ? "在" : "收起"}，上传钮${uploadText ? "带文字" : "纯图标"}，tab ${tabsUnclipped ? "不裁切" : "横滚但活跃项可见"}`, async ({ page }) => {
@@ -181,7 +182,7 @@ test.describe("页头单行应用栏", () => {
     await expect(run.uploadButton()).toBeVisible();
     // 渐隐撤掉（节流旗标不复位的回归锁：首算之后的重算曾被全部吞掉）
     await expect.poll(() => run.trackMask()).toBe("none");
-    await run.expectTabsCentered(12);
+    await run.expectTabsCentered(24);
 
     // 收窄 → 溢出出渐隐；放宽 → 渐隐撤掉：连续两次尺寸变化都要重算
     await page.setViewportSize({ width: 900, height: 768 });

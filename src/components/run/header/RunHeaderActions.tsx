@@ -10,14 +10,17 @@
 "use client";
 
 // Run 工作台页头右翼的内容（单行应用栏的右段）：同步态 chip + 图标动作组（刷新 /
-// 导出 Markdown / 导出离线 HTML）+ 上传主操作。动作在不在场由入参决定（null =
+// 导出 SQLite / 导出 Markdown / 导出离线 HTML）+ 上传主操作。动作在不在场由入参决定（null =
 // 不渲染）：离线档案没有服务端协作动作，MD 导出 solo 专属——本组件不读宿主
 // 能力，只按入参摆。全空即整个右区不渲染，空间归 tab 导航。
-// 密度：本区挂在页头的 @container 里，页头宽度不足时文字先让位——chip 与上传
-// 钮收成纯图标（全称进 title / aria-label），空间让给同行导航；tab 导航是页头
-// 主职能，动作文字是次职能。阈值与类名单点在 RunWorkbenchHeader。
+// 密度：本区挂在页头的 @container 里，页头宽度不足时逐级让位——先是文字：
+// chip 与上传钮收成纯图标（全称进 title / aria-label）；再是间距：页头窄于
+// 1100px（与品牌字标收起同档）图标钮 28→24、组内边距与钮距收一档。两级
+// 都是给同行 tab 导航让路——导航是页头主职能，动作文字与间距是次职能。
+// 阈值是 Tailwind 类名字面量：文字档单点在 RunWorkbenchHeader（HEADER_*），
+// 间距档在本文件 ICON_BUTTON / 组容器与页头两翼内边距同写 1100，改一并改。
 
-import { FileTextIcon, GlobeIcon, Loader2Icon, RefreshCwIcon, UploadIcon, WifiIcon } from "lucide-react";
+import { DatabaseIcon, FileTextIcon, GlobeIcon, Loader2Icon, RefreshCwIcon, UploadIcon, WifiIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HEADER_TEXT_SHOW, HEADER_UPLOAD_PADDING } from "@/components/run/header/RunWorkbenchHeader";
 
@@ -28,6 +31,8 @@ export type RunSyncState = "idle" | "auto" | "syncing";
 export interface RunHeaderActionsProps {
   /** 刷新能力；null = 不提供（离线档案） */
   refresh: { sync: RunSyncState; enabled: boolean; onRefresh: () => void } | null;
+  /** 导出 SQLite 数据库（run 全员成员会话的独立导出件，可原样导回）；null = 不提供 */
+  sqlite: { pending: boolean; onExport: () => void } | null;
   /** 导出 Markdown；null = 不提供 */
   markdown: { pending: boolean; onExport: () => void } | null;
   /** 导出离线 HTML；null = 不提供 */
@@ -37,13 +42,13 @@ export interface RunHeaderActionsProps {
 }
 
 const ICON_BUTTON =
-  "flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]";
+  "flex size-7 @max-[1100px]:size-6 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-foreground/[0.06] disabled:cursor-default disabled:opacity-45 dark:hover:bg-foreground/[0.12]";
 
-export function RunHeaderActions({ refresh, markdown, html, upload }: RunHeaderActionsProps) {
-  if (!refresh && !markdown && !html && !upload) return null;
+export function RunHeaderActions({ refresh, sqlite, markdown, html, upload }: RunHeaderActionsProps) {
+  if (!refresh && !sqlite && !markdown && !html && !upload) return null;
   const sync = refresh?.sync ?? "idle";
   return (
-    <div data-run-header-actions className="flex shrink-0 items-center gap-1.5">
+    <div data-run-header-actions className="flex shrink-0 items-center gap-1.5 @max-[1100px]:gap-1">
       {sync !== "idle" ? (
         <span
           className={cn(
@@ -58,8 +63,8 @@ export function RunHeaderActions({ refresh, markdown, html, upload }: RunHeaderA
           <span className={HEADER_TEXT_SHOW}>{sync === "syncing" ? "同步中…" : "自动同步"}</span>
         </span>
       ) : null}
-      {refresh || markdown || html ? (
-        <div className="flex items-center gap-0.5 rounded-full bg-foreground/[0.04] p-1 dark:bg-foreground/[0.08]">
+      {refresh || sqlite || markdown || html ? (
+        <div className="flex items-center gap-0.5 rounded-full bg-foreground/[0.04] p-1 @max-[1100px]:p-0.5 dark:bg-foreground/[0.08]">
           {refresh ? (
             <button
               type="button"
@@ -78,6 +83,18 @@ export function RunHeaderActions({ refresh, markdown, html, upload }: RunHeaderA
               ) : (
                 <RefreshCwIcon className="size-3.5" />
               )}
+            </button>
+          ) : null}
+          {sqlite ? (
+            <button
+              type="button"
+              className={ICON_BUTTON}
+              data-run-export="sqlite"
+              onClick={sqlite.onExport}
+              disabled={sqlite.pending}
+              title="导出 SQLite 数据库"
+            >
+              {sqlite.pending ? <Loader2Icon className="size-3.5 animate-spin" /> : <DatabaseIcon className="size-3.5" />}
             </button>
           ) : null}
           {markdown ? (

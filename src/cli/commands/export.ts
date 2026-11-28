@@ -11,11 +11,13 @@ import { InsightClient } from '../client';
 import { formatHeader, formatDivider, formatSuccess, formatWarning, theme } from '../utils/colors';
 import fs from 'node:fs';
 import path from 'node:path';
+import { dbExportFileName } from '@/lib/observe/db-export-name';
+import { soloRunIdOf } from '@/lib/run/identity';
 
 export function exportCommand(): Command {
   const cmd = new Command('export');
   cmd
-    .description('Export session to a standalone SQLite database file')
+    .description('Export session to a standalone SQLite database file (re-importable)')
     .option('--session <taskId>', 'Session taskId to export')
     .option('--output <path>', 'Output file path (default: ./context_session_<taskId>.db)')
     .option('--json', 'Output result as JSON')
@@ -31,7 +33,8 @@ export function exportCommand(): Command {
       }
 
       const taskId = opts.session;
-      const outputPath = opts.output ?? path.join(process.cwd(), `context_session_${taskId}.db`);
+      // 缺省输出名与工作台导出钮同源（db-export-name 单一源）
+      const outputPath = opts.output ?? path.join(process.cwd(), dbExportFileName({ solo: true, runId: soloRunIdOf(taskId), taskId }));
 
       if (!opts.json) {
         console.log(formatHeader(`Export Session: ${taskId}`));

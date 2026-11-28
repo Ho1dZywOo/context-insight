@@ -34,6 +34,8 @@ import type { NodeInstance, RunView } from '@/lib/run/view-model';
 import { RunGraph } from '@/components/run/RunGraph';
 import { METRIC_EMPTY, RUN_COLORS, flowColor, statusColor } from '@/components/run/run-theme';
 import type { RunImportMeta } from '@/lib/run/run-store';
+import { toast } from 'sonner'
+import * as NoticeHud from '@/components/NoticeHud'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -184,6 +186,7 @@ async function renderOfflinePage() {
     const body = document.body.textContent ?? ''
     // 离线宿主：服务端协作动作全隐藏（刷新/导出/上传），工作台数据照常渲染
     expect(document.querySelector('button[title="立即刷新"]')).toBeNull()
+    expect(document.querySelector('button[title="导出 SQLite 数据库"]')).toBeNull()
     expect(document.querySelector('button[title="导出 Markdown"]')).toBeNull()
     expect(document.querySelector('button[title="导出离线 HTML"]')).toBeNull()
     expect([...document.querySelectorAll('button')].find(b => b.textContent?.includes('上传到'))).toBeUndefined()
@@ -724,13 +727,96 @@ describe('Run 详情页暗色工作台', () => {
     expect(h1!.getAttribute('title')).toContain('minidemo01')
     expect(body).toContain('工作流')
     expect(body).toContain('minidemo01')
-    // 动作簇：刷新图标钮（title=立即刷新）+ 上传实心药丸；bundle 形态 HTML
-    // 导出全 run 可用（工作台即离线查看器），MD 导出仍 solo 专属
+    // 动作簇：刷新图标钮（title=立即刷新）+ 上传实心药丸；bundle 形态 SQLite
+    // 与 HTML 导出全 run 可用（SQLite = run 全员成员的独立导出件，HTML = 工作
+    // 台即离线查看器），MD 导出仍 solo 专属
     expect(document.querySelector('button[title="立即刷新"]')).toBeTruthy()
     const upload = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('上传到'))
     expect(upload).toBeTruthy()
     expect(document.querySelector('button[title="导出 Markdown"]')).toBeNull()
     expect(document.querySelector('button[title="导出离线 HTML"]')).toBeTruthy()
+    const exportSqlite = document.querySelector('button[title="导出 SQLite 数据库"]') as HTMLButtonElement
+    expect(exportSqlite).toBeTruthy()
+    expect(exportSqlite.disabled).toBe(false)
+    // 导出簇内的次序：SQLite（完整数据）→ Markdown → 离线 HTML，三者同组
+    const cluster = [...document.querySelectorAll('[data-run-header-actions] button')].map(b => b.getAttribute('title'))
+    expect(cluster.indexOf('导出 SQLite 数据库')).toBeLessThan(cluster.indexOf('导出离线 HTML'))
+  })
+
+  it('页头「导出 SQLite 数据库」：点击 → GET run 级 export-db → 按响应头文件名落盘，进行中禁用', async () => {
+    const toastSuccess = vi.spyOn(toast, 'success')
+    const notifyErrorSpy = vi.spyOn(NoticeHud, 'notifyError')
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const exportFetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).endsWith('/export-db')) {
+        return { ok: true, json: async () => responseBody } as unknown as Response
+      }
+      await gate
+      return {
+        ok: true,
+        headers: { get: () => 'attachment; filename="context_session_run_mini-bundle.db"' },
+        arrayBuffer: async () => new ArrayBuffer(32),
+      } as unknown as Response
+    })
+    vi.stubGlobal('fetch', exportFetch)
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    URL.createObjectURL = vi.fn(() => 'blob:sqlite-export') as never
+    URL.revokeObjectURL = vi.fn() as never
+    try {
+      await renderPage()
+      const button = document.querySelector('button[title="导出 SQLite 数据库"]') as HTMLButtonElement
+      await act(async () => { button.click() })
+      // 取流期间：按钮禁用（防重复触发），尚未落盘、尚未提示
+      expect(button.disabled).toBe(true)
+      expect(anchorClick).not.toHaveBeenCalled()
+      expect(toastSuccess).not.toHaveBeenCalled()
+
+      await act(async () => { release() })
+      // run 级端点（runId 随 run 身份，不带成员 / taskId——全员由服务端 scope 决定）
+      expect(exportFetch.mock.calls.map(c => String(c[0]))).toEqual([
+        expect.stringContaining('/api/observe/run/minidemo01'),
+        '/api/observe/run/minidemo01/export-db',
+      ])
+      expect(anchorClick).toHaveBeenCalledTimes(1)
+      const anchor = anchorClick.mock.instances[0] as unknown as HTMLAnchorElement
+      expect(anchor.download).toBe('context_session_run_mini-bundle.db')
+      expect(button.disabled).toBe(false)
+      expect(toastSuccess).toHaveBeenCalledTimes(1)
+      expect(toastSuccess.mock.calls[0][0]).toBe('SQLite exported')
+      expect(notifyErrorSpy).not.toHaveBeenCalled()
+    } finally {
+      anchorClick.mockRestore()
+      toastSuccess.mockRestore()
+      notifyErrorSpy.mockRestore()
+    }
+  })
+
+  it('页头「导出 SQLite 数据库」：服务端报错 → 报错确认卡带原因，不落盘、不提示成功', async () => {
+    const toastSuccess = vi.spyOn(toast, 'success')
+    const notifyErrorSpy = vi.spyOn(NoticeHud, 'notifyError')
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).endsWith('/export-db')) {
+        return { ok: true, json: async () => responseBody } as unknown as Response
+      }
+      return { ok: false, status: 500, json: async () => ({ error: 'Session not found: 1 of 3 rows' }) } as unknown as Response
+    }))
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      await renderPage()
+      const button = document.querySelector('button[title="导出 SQLite 数据库"]') as HTMLButtonElement
+      await act(async () => { button.click() })
+      await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+      expect(anchorClick).not.toHaveBeenCalled()
+      expect(toastSuccess).not.toHaveBeenCalled()
+      expect(notifyErrorSpy).toHaveBeenCalledTimes(1)
+      expect(notifyErrorSpy.mock.calls[0]).toEqual(['Export SQLite failed', 'Session not found: 1 of 3 rows'])
+      expect(button.disabled).toBe(false)
+    } finally {
+      anchorClick.mockRestore()
+      toastSuccess.mockRestore()
+      notifyErrorSpy.mockRestore()
+    }
   })
 
   it('离线宿主（导出 HTML 形态）：服务端协作动作全隐藏，工作台经内核档案照常渲染', async () => {

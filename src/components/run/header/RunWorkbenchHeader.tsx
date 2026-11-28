@@ -18,8 +18,9 @@
 // 页面三个状态共用本组件，chrome 即时成型：加载态 = 返回 + 品牌 + tab 条
 // （pending：真身作骨架）+ 动作占位；错误态 = 仅品牌（错误卡自带返回 / 重试）；
 // 就绪态 = 全量。本组件是 @container：同排各件按页头自身宽度（而非视口）
-// 决定密度——先是动作文字、品牌字标让位（各自组件内的容器查询），最后才
-// 轮到 tab 条横滚。导航是页头主职能，让位顺序不可倒。
+// 决定密度，让位顺序 = 动作文字 → 品牌字标 + 紧凑间距（< 1100px：图标钮
+// 与两翼留白各收一档，1024 宽的 9 个 tab 才放得下）→ tab 条横滚。导航是
+// 页头主职能，让位顺序不可倒。
 
 import type { ReactNode } from "react";
 import { BrandLockup } from "@/components/BrandLockup";
@@ -56,7 +57,7 @@ export function RunWorkbenchHeader({ back, nav, actions, actionsPending = false 
     >
       {/* 两翼 flex: 1 1 0（平分剩余空间）、下限 = 自身内容宽（min-w-max）；中段
           按内容宽度、放不下才收缩（min-w-0）→ 轨道横滚 */}
-      <div data-run-header-zone="leading" className="flex min-w-max flex-1 items-center gap-1 pr-3">
+      <div data-run-header-zone="leading" className="flex min-w-max flex-1 items-center gap-1 pr-3 @max-[1100px]:pr-2">
         {back ? <RunBackButton canBack={back.canBack} onBack={back.onBack} /> : null}
         <BrandLockup responsive />
       </div>
@@ -67,7 +68,7 @@ export function RunWorkbenchHeader({ back, nav, actions, actionsPending = false 
       ) : null}
       <div
         data-run-header-zone="actions"
-        className="flex min-w-max flex-1 items-center justify-end gap-1.5 pl-3"
+        className="flex min-w-max flex-1 items-center justify-end gap-1.5 pl-3 @max-[1100px]:pl-2"
         aria-hidden={actionsPending || undefined}
       >
         {actionsPending ? (

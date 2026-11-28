@@ -2,8 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- Run 工作台页头新增「导出 SQLite 数据库」：把 run 的全部成员会话（solo 会话即其自身）导出为一份独立 SQLite 文件，可经导入向导或 `ctxi import` 原样导回；文件名 solo 为 `context_session_<taskId>.db`、多成员 run 为 `context_session_run_<名称>.db`
+
 ### Changed
-- Run 工作台页头合并为一行：返回、品牌、tab 导航（Overview … Score）与同步状态、上传等操作同排，tab 导航居中，内容区多出一行高度；窗口较窄时操作先收成图标、tab 条再横向滚动（当前 tab 始终可见）
+- Run 工作台页头合并为一行：返回、品牌、tab 导航（Overview … Score）与同步状态、上传等操作同排，tab 导航居中，内容区多出一行高度；窗口较窄时操作先收成图标、再收紧间距、tab 条最后才横向滚动（当前 tab 始终可见）
 
 ## [1.0.8] - 2026-11-26
 

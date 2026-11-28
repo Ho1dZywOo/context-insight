@@ -46,7 +46,9 @@ import { RunWorkbenchSkeleton } from "@/components/run/header/RunWorkbenchSkelet
 import { RunHeaderActions, type RunSyncState } from "@/components/run/header/RunHeaderActions";
 import { UploadDialog } from "@/components/collection/UploadDialog";
 import { BAY_NAME, BRAND_NAME } from "@/lib/branding";
-import { assembleEmbeddedHtml, captureStylesheets, downloadHtml, fallbackDownload, gatherRunExportData } from "@/lib/observe/export-html";
+import { assembleEmbeddedHtml, captureStylesheets, downloadHtml, gatherRunExportData } from "@/lib/observe/export-html";
+import { MARKDOWN_FILE, SQLITE_FILE, fetchExportFile } from "@/lib/observe/export-download";
+import { dbExportFileName } from "@/lib/observe/db-export-name";
 import { useRunHostCaps } from "@/lib/run/host-caps";
 import { toast } from "sonner";
 import { notifyError } from "@/components/NoticeHud";
@@ -174,6 +176,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   const [mode, setMode] = useState<"graph" | "trace" | "ledger">("graph");
   const [lens, setLens] = useState<LensKey>("status");
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [exportingDb, setExportingDb] = useState(false);
   const [exportingMd, setExportingMd] = useState(false);
   const [exportingHtml, setExportingHtml] = useState(false);
   // tab/member 视图状态（state 权威 + URL 镜像，契约对齐离线降级路径）；
@@ -426,21 +429,39 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   const refreshTargets = memberRows.filter(m => m.sourcePath);
   const refreshable = !offline && refreshTargets.length > 0;
 
+  async function handleExportDb() {
+    if (exportingDb) return;
+    setExportingDb(true);
+    try {
+      const file = await fetchExportFile(`/api/observe/run/${encodeURIComponent(run.runId)}/export-db`, {
+        mime: "application/x-sqlite3",
+        kind: SQLITE_FILE,
+        fallbackName: dbExportFileName({
+          solo: run.kind === "solo", runId: run.runId, taskId: soloMember?.taskId ?? null, runName: run.name,
+        }),
+      });
+      toast.success("SQLite exported", {
+        description: `${file.filename} — ${memberRows.length > 1 ? `含 ${memberRows.length} 个成员会话，` : ""}可经导入向导原样导回`,
+      });
+    } catch (e) {
+      notifyError("Export SQLite failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setExportingDb(false);
+    }
+  }
+
   async function handleExportMd() {
     if (!soloMember || exportingMd) return;
     setExportingMd(true);
     try {
-      const res = await fetch(`/api/observe/run/${encodeURIComponent(run.runId)}/export-md`);
-      if (!res.ok) {
-        const err = await res.json();
-        notifyError("Export Markdown failed", err.error ?? "Unknown error");
-        return;
-      }
-      const blob = new Blob([await res.text()], { type: "text/markdown" });
-      fallbackDownload(blob, `session_${soloMember.taskId}.md`);
-      toast.success("Markdown exported", { description: `session_${soloMember.taskId}.md` });
-    } catch {
-      notifyError("Export Markdown failed", "Network error");
+      const file = await fetchExportFile(`/api/observe/run/${encodeURIComponent(run.runId)}/export-md`, {
+        mime: "text/markdown",
+        kind: MARKDOWN_FILE,
+        fallbackName: `session_${soloMember.taskId}.md`,
+      });
+      toast.success("Markdown exported", { description: file.filename });
+    } catch (e) {
+      notifyError("Export Markdown failed", e instanceof Error ? e.message : "Unknown error");
     } finally {
       setExportingMd(false);
     }
@@ -499,6 +520,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
                 enabled: refreshable,
                 onRefresh: () => { if (!refreshing && refreshable) void refreshMembers(refreshTargets, false) },
               }}
+              sqlite={offline ? null : { pending: exportingDb, onExport: () => { void handleExportDb(); } }}
               markdown={!offline && soloMember ? { pending: exportingMd, onExport: () => { void handleExportMd(); } } : null}
               html={offline ? null : { pending: exportingHtml, onExport: () => { void handleExportHtml(); } }}
               upload={offline ? null : {

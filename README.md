@@ -83,7 +83,7 @@ Log file locations:
 - Codex: `~/.codex/sessions/` (rollout files; subagent sessions merge into their parent)
 - DSH: `~/.dsh/sessions/` (`session.v4.jsonl` / `.jsonl.zstd`; subagent sessions merge into their parent)
 
-The Web UI also supports exporting sessions to standalone SQLite or Markdown, plus a fully offline interactive HTML bundle (the real run workbench embedded — every run, solo or multi-member, exports it from the run page header; the offline view mirrors the live default tab surface). The LLM provider panel embeds a known-provider Base URL quick reference.
+The Web UI also supports exporting a run to a standalone, re-importable SQLite database (every member session of the run in one file — `context_session_<taskId>.db` for a solo session, `context_session_run_<name>.db` for a multi-member run; the same file the `ctxi export` command writes), exporting sessions to Markdown, plus a fully offline interactive HTML bundle (the real run workbench embedded — every run, solo or multi-member, exports it from the run page header; the offline view mirrors the live default tab surface). The LLM provider panel embeds a known-provider Base URL quick reference.
 
 ### Option 2: CLI Import + Web Analysis
 

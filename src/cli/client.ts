@@ -254,16 +254,15 @@ export class InsightClient {
     });
   }
 
+  // Exports a session to a standalone SQLite database. Same endpoint as the run
+  // workbench's "export SQLite" action (run member scope), so the file is
+  // byte-equivalent to what the web UI downloads and re-imports as-is.
   async exportSession(taskId: string, outputPath: string): Promise<{ size: number }> {
-    const url = new URL('/api/ingest/export-session', this.config.baseUrl);
+    const url = new URL(`/api/observe/run/${encodeURIComponent(soloRunIdOf(taskId))}/export-db`, this.config.baseUrl);
     const init: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.config.authToken ? { Authorization: `Bearer ${this.config.authToken}` } : {}),
-      },
-      body: JSON.stringify({ taskId }),
-      signal: AbortSignal.timeout(60000),
+      method: 'GET',
+      headers: this.config.authToken ? { Authorization: `Bearer ${this.config.authToken}` } : {},
+      signal: AbortSignal.timeout(120000),
     };
 
     const res = await fetch(url.toString(), init);
@@ -279,8 +278,7 @@ export class InsightClient {
       throw new ApiError(res.status, errorMessage, res.status >= 500);
     }
 
-    const arrayBuffer = await res.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const buffer = Buffer.from(await res.arrayBuffer());
     fs.writeFileSync(outputPath, buffer);
 
     return { size: buffer.length };

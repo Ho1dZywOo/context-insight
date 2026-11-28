@@ -81,7 +81,7 @@ context-insight            # 首次：自动 build + migrate（约 30s-2min）�
 - Codex: `~/.codex/sessions/`（rollout 文件；子代理会话自动并入主会话）
 - DSH: `~/.dsh/sessions/`（`session.v4.jsonl` / `.jsonl.zstd`；子代理会话自动并入主会话）
 
-Web UI 还支持：导出 session 为独立 SQLite 或 Markdown，以及从 run 工作台页头导出完全离线可交互的 HTML bundle（内嵌真实 run 工作台——solo 与多成员 run 均可导出）。LLM 接入面板内置常见提供商 Base URL 速查。
+Web UI 还支持：从 run 工作台页头把 run 导出为独立、可原样导回的 SQLite 文件（run 全员成员会话装进同一份文件——solo 会话为 `context_session_<taskId>.db`，多成员 run 为 `context_session_run_<name>.db`，与 `ctxi export` 命令产出同一份文件）、导出 session 为 Markdown，以及从 run 工作台页头导出完全离线可交互的 HTML bundle（内嵌真实 run 工作台——solo 与多成员 run 均可导出）。LLM 接入面板内置常见提供商 Base URL 速查。
 
 ### 方式二：CLI 导入 + Web 分析
 

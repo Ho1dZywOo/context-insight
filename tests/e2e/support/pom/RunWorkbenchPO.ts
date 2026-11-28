@@ -15,6 +15,7 @@
 // （data-run-tab=<key>）的既有契约。
 
 import { expect, type Locator, type Page } from "../../fixtures";
+import type { Download } from "@playwright/test";
 
 export const RUN_TAB_LABELS = {
   overview: "Overview",
@@ -83,6 +84,20 @@ export class RunWorkbenchPO {
   /** 品牌区（页头左段，回工作台首页的链接）。 */
   brandLockup(): Locator {
     return this.header().locator('a[href="/"]');
+  }
+
+  /** 页头「导出 SQLite 数据库」钮（run 全员成员会话的独立导出件；在线宿主独有）。 */
+  exportSqliteButton(): Locator {
+    return this.page.getByTitle("导出 SQLite 数据库");
+  }
+
+  /** 点击「导出 SQLite 数据库」并捕获下载（须先 stripFilePicker 走锚点下载）。 */
+  async exportSqliteAndWaitDownload(): Promise<Download> {
+    const [download] = await Promise.all([
+      this.page.waitForEvent("download"),
+      this.exportSqliteButton().click(),
+    ]);
+    return download;
   }
 
   /** 上传数据仓主操作（页头动作区；窄页头收成纯图标，title 恒为全称）。 */
