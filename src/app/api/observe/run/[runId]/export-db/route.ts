@@ -14,6 +14,7 @@
 // export` 同一端点——一份数据两个入口。
 
 import fs from 'node:fs';
+import stream from 'node:stream';
 import { NextRequest, NextResponse } from 'next/server';
 import { withRouteLog } from '@/lib/api-route';
 import { prisma } from '@/lib/db';
@@ -38,12 +39,18 @@ export const GET = withRouteLog<{ params: Promise<{ runId: string }> }>('observe
   const solo = isSoloRunId(runId);
   const stored = solo ? null : readRun(runId);
   const summary = await exportSessionRows(scope.members.map(m => m.rowId), undefined, prisma);
+  const bytes = fs.statSync(summary.path).size;
+  logInfo('route:observe/run/export-db', '会话已导出（db）', {
+    runId, sessions: summary.sessions, turns: summary.turns, bytes,
+  });
+
+  const file = fs.createReadStream(summary.path);
+  // 流关闭（读完 / 客户端中断）即删临时件；error 也走 close，不留残骸
+  file.on('close', () => {
+    try { fs.unlinkSync(summary.path); } catch { /* best-effort */ }
+  });
   try {
-    const fileBuffer = fs.readFileSync(summary.path);
-    logInfo('route:observe/run/export-db', '会话已导出（db）', {
-      runId, sessions: summary.sessions, turns: summary.turns, bytes: fileBuffer.length,
-    });
-    return new NextResponse(fileBuffer, {
+    return new NextResponse(stream.Readable.toWeb(file) as ReadableStream, {
       status: 200,
       headers: {
         'Content-Type': 'application/x-sqlite3',
@@ -53,10 +60,11 @@ export const GET = withRouteLog<{ params: Promise<{ runId: string }> }>('observe
           taskId: solo ? scope.members[0]?.taskId ?? null : null,
           runName: solo ? null : stored?.manifest.name ?? null,
         }),
-        'Content-Length': String(fileBuffer.length),
+        'Content-Length': String(bytes),
       },
     });
-  } finally {
-    try { fs.unlinkSync(summary.path); } catch { /* best-effort */ }
+  } catch (error) {
+    file.destroy();
+    throw error;
   }
 });

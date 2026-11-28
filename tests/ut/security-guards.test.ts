@@ -126,6 +126,8 @@ describe('taskId 白名单 — export-db 端点 / exportSession', () => {
     expect(res.headers.get('content-disposition')).toContain('context_session_ses_ok.db');
     // solo 合成作用域无 run-store 记录：不读 run-store
     expect(readRunMock).not.toHaveBeenCalled();
+    // 读完响应体（流关闭）后临时件即删：不留在 tmp
+    await res.arrayBuffer();
     expect(fs.existsSync(dummy)).toBe(false);
   });
 

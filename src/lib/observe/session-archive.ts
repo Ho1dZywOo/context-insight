@@ -16,7 +16,7 @@
 //   buildSessionArchive 落盘：原件逐文件流式入包（字节保真，已压缩形态原样
 //                       STORE）；没有原件的成员现场导出该会话的 db 并压成 7z。
 // 归档布局 = bundle 布局的会话段（sessions/<sid>/<sid>.jsonl + subagents/…）
-// 加一份根级 export-manifest.json（记每个会话用的哪种载荷、每个文件的原路径）。
+// 加一份根级 export-manifest.json（记每个会话用的哪种载荷、每个文件的归档内路径）。
 // 不做的事：不从库里的归一化数据反推 jsonl（有损）；不把 run 的 workflow.json
 // 带进包（成员目录已重新安家，原清单的 location 对不上——带了会让人误以为
 // 解压即可重导入）。
@@ -30,7 +30,7 @@ import { compressCaptureFile } from '@/lib/compression';
 import { isSoloRunId } from '@/lib/run/identity';
 import { readRun } from '@/lib/run/run-store';
 import type { ObserveScope } from '@/lib/observe/scope';
-import { exportStem, type DbExportNameInput } from '@/lib/observe/export-name';
+import { exportStem, sanitizeExportSegment, type DbExportNameInput } from '@/lib/observe/export-name';
 import { writeZip, zipMethodFor, type ZipSource } from '@/lib/zip-store';
 import type { SessionFileRole } from '@/lib/ingest/adapters/contract';
 import type { SessionArchiveKind } from '@/lib/observe/archive-plan';
@@ -95,7 +95,7 @@ interface SessionArchiveManifest {
     dir: string;
     kind: SessionArchiveKind;
     absentReason: SessionFilesAbsentReason | null;
-    files: SessionArchiveFile[];
+    files: Array<{ path: string; role: SessionFileRole; bytes: number }>;
   }>;
 }
 
@@ -135,8 +135,9 @@ export async function planSessionArchive(
     if (!row) throw new Error(`Session not found: "${ref.taskId}"`);
     // 同 sid 双记录（原生 + proxy 捕获共存）在一个 run 里是两行：目录名撞车时
     // 后到者带 framework 后缀，两份都保留
-    let dirName = row.taskId;
-    if (takenDirs.has(dirName)) dirName = `${row.taskId}@${row.framework ?? 'unknown'}`;
+    const baseDir = sanitizeExportSegment(row.taskId);
+    let dirName = baseDir;
+    if (takenDirs.has(dirName)) dirName = `${baseDir}@${sanitizeExportSegment(row.framework ?? 'unknown')}`;
     takenDirs.add(dirName);
     const dir = path.posix.join('sessions', dirName);
 
@@ -204,7 +205,9 @@ function manifestOf(plan: SessionArchivePlan): SessionArchiveManifest {
       dir: member.dir,
       kind: member.kind,
       absentReason: member.absentReason,
-      files: member.files,
+      // 清单随包分发：文件条目只留归档内路径 / 角色 / 字节数，不带盘上原路径
+      // （source 会泄露用户 home 与工程目录结构，且对解压 / 重导入无意义）
+      files: member.files.map(f => ({ path: f.path, role: f.role, bytes: f.bytes })),
     })),
   };
 }

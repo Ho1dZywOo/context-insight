@@ -164,12 +164,16 @@ describe('export-archive 端点：会话原始文件 → zip（有原件出原�
     expect(manifest.sessions).toEqual([expect.objectContaining({
       taskId: SID_CLAUDE, framework: 'claude-code', dir: `sessions/${SID_CLAUDE}`, kind: 'originals', absentReason: null,
       files: [
-        expect.objectContaining({ path: `sessions/${SID_CLAUDE}/${SID_CLAUDE}.jsonl.7z`, role: 'main', source: path.join(claudeDir, `${SID_CLAUDE}.jsonl.7z`) }),
+        expect.objectContaining({ path: `sessions/${SID_CLAUDE}/${SID_CLAUDE}.jsonl.7z`, role: 'main' }),
         expect.objectContaining({ path: `sessions/${SID_CLAUDE}/${SID_CLAUDE}.meta.json`, role: 'meta' }),
         expect.objectContaining({ path: `sessions/${SID_CLAUDE}/subagents/${SID_SUB}.jsonl.7z`, role: 'subagent' }),
         expect.objectContaining({ path: `sessions/${SID_CLAUDE}/subagents/${SID_SUB}.meta.json`, role: 'subagent-meta' }),
       ],
     })]);
+    // 清单随包分发：文件条目只留归档内路径 / 角色 / 字节数，不带盘上原路径
+    for (const file of manifest.sessions[0].files) {
+      expect(Object.keys(file).sort()).toEqual(['bytes', 'path', 'role']);
+    }
   });
 
   it('plan 端点：逐会话说明用的是哪种载荷；与实际归档一致', async () => {
@@ -248,6 +252,33 @@ describe('export-archive 端点：会话原始文件 → zip（有原件出原�
     const dir = extract(Buffer.from(await res.arrayBuffer()));
     expect(walk(dir)).toEqual(['export-manifest.json', `sessions/${SID_INSIGHT_DB}/context_session_insight.db`]);
     expect(fs.readFileSync(path.join(dir, `sessions/${SID_INSIGHT_DB}/context_session_insight.db`)).equals(fs.readFileSync(path.join(work, 'context_session_insight.db')))).toBe(true);
+  });
+
+  it('遍历形态 taskId：归档目录名收敛为安全段，不逃出 sessions/（zip-slip）', async () => {
+    // 直接落库（绕开摄取侧 taskId 白名单）：taskId 含 '/' 或恰为 '..' 时，
+    // 目录名必须与导出件文件名同源收敛，否则解压时条目逃出 sessions/ 根
+    const evil = ['traversal/../../slip', '..'];
+    await prisma.session.createMany({
+      data: evil.map((taskId, i) => ({
+        taskId, framework: 'claude-code', version: '2.1.278', label: `slip ${i}`,
+        model: MODEL, sourcePath: null, totalTokens: 100,
+        startTime: new Date('2026-10-13T02:00:00Z'), endTime: new Date('2026-10-13T02:10:00Z'),
+      })),
+    });
+    try {
+      for (const taskId of evil) {
+        const res = await call(exportArchiveGET, `solo:${taskId}`, '/export-archive');
+        expect(res.status, taskId).toBe(200);
+        const dir = extract(Buffer.from(await res.arrayBuffer()));
+        // 目录名 = taskId 收敛后的安全段（'/' 与 '..' 均不再作为路径分量）
+        const expected = taskId === '..'
+          ? ['export-manifest.json', 'sessions/_/context_session__.db.7z']
+          : ['export-manifest.json', 'sessions/traversal_.._.._slip/context_session_traversal_.._.._slip.db.7z'];
+        expect(walk(dir)).toEqual(expected);
+      }
+    } finally {
+      await prisma.session.deleteMany({ where: { taskId: { in: evil } } });
+    }
   });
 
   it('run 不存在 → 404（plan 与归档同一口径）', async () => {

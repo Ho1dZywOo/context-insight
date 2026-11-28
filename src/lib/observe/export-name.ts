@@ -22,6 +22,15 @@ const NON_ASCII_RE = /[^\x20-\x7e]/g;
 
 export const DB_EXPORT_PREFIX = 'context_session_';
 
+/** 把任意外部字符串收敛成单个文件系统安全段：路径分隔符 / 保留字 / 空白折叠成
+ *  '_'，'.' 与 '..' 这类会破坏相对路径的段吞成 '_'。导出件文件名主干与归档内
+ *  目录名共用——目录名直接来自 taskId，含 '/' 或 '..' 时拼进 zip 条目会在解压时
+ *  逃出根目录（zip-slip）。 */
+export function sanitizeExportSegment(value: string): string {
+  const folded = String(value).replace(UNSAFE_FILENAME_RE, '_');
+  return folded === '.' || folded === '..' ? '_' : folded;
+}
+
 export interface DbExportNameInput {
   solo: boolean;
   runId: string;
@@ -34,7 +43,7 @@ export interface DbExportNameInput {
 /** 导出件主干（不含扩展名）：<前缀><solo: taskId | bundle: run_<name>> */
 export function exportStem(opts: DbExportNameInput): string {
   const nameBase = opts.solo ? opts.taskId ?? opts.runId : `run_${opts.runName ?? opts.runId}`;
-  return `${DB_EXPORT_PREFIX}${String(nameBase).replace(UNSAFE_FILENAME_RE, '_')}`;
+  return `${DB_EXPORT_PREFIX}${sanitizeExportSegment(nameBase)}`;
 }
 
 export function dbExportFileName(opts: DbExportNameInput): string {
