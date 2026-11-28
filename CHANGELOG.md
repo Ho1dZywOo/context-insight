@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.9] - 2026-11-28
 
 ### Added
 - Run 工作台新增「导出原始文件 (zip)」：把 run 的原始文件按原格式打包（主文件与子代理文件一并带走，与盘上字节一致）；本机已无原文件的会话（含 opencode 共享库里的会话）改以 7z 压缩的 SQLite 导出件代替，包内 `export-manifest.json` 逐会话记明用的是哪种。CLI 对应 `ctxi export --archive`
